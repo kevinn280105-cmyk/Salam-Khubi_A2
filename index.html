@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Rooms Within - Reliable Mac Door Closing</title>
+  <title>Rooms Within - Independent Ambient Sound Breaks</title>
 
   <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
@@ -176,54 +176,468 @@
 
   <script>
     /* ============================================================
-       POSITIONAL SOUND UNLOCK
+       INDEPENDENT POSITIONAL AMBIENCE
 
-       Ambient audio now comes from locations inside the room.
-       Volume and left/right direction change as the listener moves
-       and turns, instead of every sound playing globally at once.
+       Each room sound has its own independent rhythm:
+
+       play -> fade out -> silence -> fade in -> play -> ...
+
+       The sounds are not synchronized, so the room gets breathing
+       space instead of four ambience loops constantly piling up.
+       Positional 3D hearing is preserved.
     ============================================================ */
-    function startSpatialEmitter(entity) {
-      const play = () => {
-        const component =
-          entity.components.sound;
 
-        if (!component) {
-          return false;
-        }
+    AFRAME.registerComponent(
+      'independent-ambient-cycle',
+      {
+        schema: {
+          targetVolume: {
+            default: 0.05
+          },
 
-        component.playSound();
-        return true;
-      };
+          playMin: {
+            default: 30
+          },
 
-      if (play()) {
-        return;
-      }
+          playMax: {
+            default: 60
+          },
 
-      const onComponentInitialised = (event) => {
-        if (
-          !event.detail ||
-          event.detail.name !== 'sound'
+          silenceMin: {
+            default: 8
+          },
+
+          silenceMax: {
+            default: 15
+          },
+
+          fadeIn: {
+            default: 2
+          },
+
+          fadeOut: {
+            default: 2
+          },
+
+          startDelay: {
+            default: 0
+          }
+        },
+
+        init: function () {
+          this.running = false;
+          this.timer = null;
+          this.fadeFrame = null;
+          this.currentVolume = 0;
+
+          /*
+            Keep the source silent until ENABLE SOUND is pressed.
+          */
+          this.setVolume(0);
+        },
+
+        randomBetween: function (
+          minimum,
+          maximum
         ) {
-          return;
+          if (maximum <= minimum) {
+            return minimum;
+          }
+
+          return (
+            minimum +
+            Math.random() *
+            (maximum - minimum)
+          );
+        },
+
+        getSoundComponent: function () {
+          return this.el.components.sound;
+        },
+
+        setVolume: function (volume) {
+          const safeVolume =
+            Math.max(
+              0,
+              Math.min(
+                volume,
+                this.data.targetVolume
+              )
+            );
+
+          this.currentVolume =
+            safeVolume;
+
+          /*
+            Updating the A-Frame sound component's volume preserves
+            its positional audio behaviour while changing loudness.
+          */
+          this.el.setAttribute(
+            'sound',
+            'volume',
+            safeVolume
+          );
+        },
+
+        clearTimer: function () {
+          if (this.timer) {
+            window.clearTimeout(
+              this.timer
+            );
+
+            this.timer = null;
+          }
+        },
+
+        clearFade: function () {
+          if (this.fadeFrame) {
+            window.cancelAnimationFrame(
+              this.fadeFrame
+            );
+
+            this.fadeFrame = null;
+          }
+        },
+
+        schedule: function (
+          callback,
+          seconds
+        ) {
+          this.clearTimer();
+
+          this.timer =
+            window.setTimeout(
+              callback,
+              Math.max(
+                0,
+                seconds * 1000
+              )
+            );
+        },
+
+        soundIsReady: function () {
+          const component =
+            this.getSoundComponent();
+
+          if (
+            !component ||
+            !component.pool
+          ) {
+            return false;
+          }
+
+          return component.pool.children
+            .some(
+              audio =>
+                Boolean(audio.buffer)
+            );
+        },
+
+        waitUntilReady: function (
+          callback
+        ) {
+          if (!this.running) {
+            return;
+          }
+
+          if (this.soundIsReady()) {
+            callback();
+            return;
+          }
+
+          /*
+            Audio files may still be loading when the user presses
+            ENABLE SOUND. Retry quietly instead of losing the source.
+          */
+          this.schedule(
+            () => {
+              this.waitUntilReady(
+                callback
+              );
+            },
+            0.25
+          );
+        },
+
+        playSound: function () {
+          const component =
+            this.getSoundComponent();
+
+          if (!component) {
+            return false;
+          }
+
+          try {
+            component.playSound();
+            return true;
+          } catch (error) {
+            console.warn(
+              `Could not start ${this.el.id}.`,
+              error
+            );
+
+            return false;
+          }
+        },
+
+        pauseSound: function () {
+          const component =
+            this.getSoundComponent();
+
+          if (!component) {
+            return;
+          }
+
+          try {
+            component.pauseSound();
+          } catch (error) {
+            console.warn(
+              `Could not pause ${this.el.id}.`,
+              error
+            );
+          }
+        },
+
+        fadeTo: function (
+          target,
+          seconds,
+          onComplete
+        ) {
+          this.clearFade();
+
+          const startVolume =
+            this.currentVolume;
+
+          const endVolume =
+            Math.max(
+              0,
+              Math.min(
+                target,
+                this.data.targetVolume
+              )
+            );
+
+          const duration =
+            Math.max(
+              0,
+              seconds * 1000
+            );
+
+          if (duration === 0) {
+            this.setVolume(
+              endVolume
+            );
+
+            if (onComplete) {
+              onComplete();
+            }
+
+            return;
+          }
+
+          const startTime =
+            performance.now();
+
+          const animate =
+            (now) => {
+              if (!this.running) {
+                return;
+              }
+
+              const progress =
+                Math.min(
+                  (now - startTime) /
+                  duration,
+                  1
+                );
+
+              /*
+                Smoothstep gives gentler fades than a straight line.
+              */
+              const eased =
+                progress *
+                progress *
+                (
+                  3 -
+                  2 * progress
+                );
+
+              const volume =
+                startVolume +
+                (
+                  endVolume -
+                  startVolume
+                ) *
+                eased;
+
+              this.setVolume(
+                volume
+              );
+
+              if (progress < 1) {
+                this.fadeFrame =
+                  window.requestAnimationFrame(
+                    animate
+                  );
+
+                return;
+              }
+
+              this.fadeFrame = null;
+
+              if (onComplete) {
+                onComplete();
+              }
+            };
+
+          this.fadeFrame =
+            window.requestAnimationFrame(
+              animate
+            );
+        },
+
+        beginAudiblePeriod: function () {
+          if (!this.running) {
+            return;
+          }
+
+          this.waitUntilReady(
+            () => {
+              if (!this.running) {
+                return;
+              }
+
+              /*
+                Start or resume at zero volume first, then fade in.
+              */
+              this.setVolume(0);
+              this.playSound();
+
+              this.fadeTo(
+                this.data.targetVolume,
+                this.data.fadeIn,
+                () => {
+                  if (!this.running) {
+                    return;
+                  }
+
+                  const playSeconds =
+                    this.randomBetween(
+                      this.data.playMin,
+                      this.data.playMax
+                    );
+
+                  console.log(
+                    `${this.el.id} audible for ${playSeconds.toFixed(1)} seconds.`
+                  );
+
+                  this.schedule(
+                    () => {
+                      this.beginSilentPeriod();
+                    },
+                    playSeconds
+                  );
+                }
+              );
+            }
+          );
+        },
+
+        beginSilentPeriod: function () {
+          if (!this.running) {
+            return;
+          }
+
+          this.fadeTo(
+            0,
+            this.data.fadeOut,
+            () => {
+              if (!this.running) {
+                return;
+              }
+
+              /*
+                The sound is actually paused after fading out.
+                It is not merely left playing silently.
+              */
+              this.pauseSound();
+
+              const silentSeconds =
+                this.randomBetween(
+                  this.data.silenceMin,
+                  this.data.silenceMax
+                );
+
+              console.log(
+                `${this.el.id} silent for ${silentSeconds.toFixed(1)} seconds.`
+              );
+
+              this.schedule(
+                () => {
+                  this.beginAudiblePeriod();
+                },
+                silentSeconds
+              );
+            }
+          );
+        },
+
+        startCycle: function () {
+          if (this.running) {
+            return;
+          }
+
+          this.running = true;
+
+          this.clearTimer();
+          this.clearFade();
+          this.setVolume(0);
+
+          const delay =
+            Math.max(
+              0,
+              this.data.startDelay
+            );
+
+          if (delay === 0) {
+            this.beginAudiblePeriod();
+            return;
+          }
+
+          console.log(
+            `${this.el.id} starts in ${delay.toFixed(1)} seconds.`
+          );
+
+          this.schedule(
+            () => {
+              this.beginAudiblePeriod();
+            },
+            delay
+          );
+        },
+
+        stopCycle: function () {
+          this.running = false;
+
+          this.clearTimer();
+          this.clearFade();
+
+          this.setVolume(0);
+          this.pauseSound();
+        },
+
+        remove: function () {
+          this.stopCycle();
         }
+      }
+    );
 
-        entity.removeEventListener(
-          'componentinitialized',
-          onComponentInitialised
-        );
-
-        play();
-      };
-
-      entity.addEventListener(
-        'componentinitialized',
-        onComponentInitialised
-      );
-    }
 
     async function primeFootstepAudio() {
       const footsteps =
-        document.querySelector('#footstepAudio');
+        document.querySelector(
+          '#footstepAudio'
+        );
 
       if (!footsteps) {
         return;
@@ -233,12 +647,16 @@
 
       try {
         footsteps.volume = 0;
+
         await footsteps.play();
+
         footsteps.pause();
         footsteps.currentTime = 0;
-        footsteps.volume = finalVolume;
+        footsteps.volume =
+          finalVolume;
       } catch (error) {
-        footsteps.volume = finalVolume;
+        footsteps.volume =
+          finalVolume;
 
         console.warn(
           'Footstep audio could not be primed yet.',
@@ -247,9 +665,12 @@
       }
     }
 
+
     async function enableSound() {
       const button =
-        document.querySelector('#soundButton');
+        document.querySelector(
+          '#soundButton'
+        );
 
       if (!button) {
         return;
@@ -266,7 +687,12 @@
 
         if (
           context &&
-          context.state === 'suspended'
+          (
+            context.state ===
+              'suspended' ||
+            context.state ===
+              'interrupted'
+          )
         ) {
           await context.resume();
         }
@@ -285,29 +711,46 @@
         );
 
       emitters.forEach(
-        startSpatialEmitter
+        (entity) => {
+          const cycle =
+            entity.components[
+              'independent-ambient-cycle'
+            ];
+
+          if (cycle) {
+            cycle.startCycle();
+          }
+        }
       );
 
       const scene =
-        document.querySelector('a-scene');
+        document.querySelector(
+          'a-scene'
+        );
 
       if (scene) {
-        scene.audioUnlocked = true;
+        scene.audioUnlocked =
+          true;
       }
 
       button.textContent =
         'SOUND ENABLED';
 
-      window.setTimeout(() => {
-        button.style.display = 'none';
-      }, 1200);
+      window.setTimeout(
+        () => {
+          button.style.display =
+            'none';
+        },
+        1200
+      );
 
       console.log(
-        `${emitters.length} positional ambience source(s) started.`
+        `${emitters.length} independent positional ambience cycles enabled.`
       );
     }
 
-    window.enableSound = enableSound;
+    window.enableSound =
+      enableSound;
 
 
     /* ============================================================
@@ -3398,12 +3841,21 @@
       id="fanSound"
       class="spatial-sound"
       position="-3.5 2.4 -1"
+      independent-ambient-cycle="
+        targetVolume: 0.075;
+        playMin: 40;
+        playMax: 70;
+        silenceMin: 8;
+        silenceMax: 15;
+        fadeIn: 2;
+        fadeOut: 2;
+        startDelay: 0"
       sound="
         src: url(sounds/73347__noisecollector__noisy_ceiling_fan.mp3);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0.075;
+        volume: 0;
         distanceModel: inverse;
         refDistance: 1.4;
         rolloffFactor: 1.8;
@@ -3414,12 +3866,21 @@
       id="bedroomRainSound"
       class="spatial-sound"
       position="-3.2 1.7 -3.8"
+      independent-ambient-cycle="
+        targetVolume: 0.06;
+        playMin: 70;
+        playMax: 120;
+        silenceMin: 12;
+        silenceMax: 25;
+        fadeIn: 2.5;
+        fadeOut: 2.5;
+        startDelay: 4"
       sound="
         src: url(sounds/bedroom-rain.wav);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0.06;
+        volume: 0;
         distanceModel: inverse;
         refDistance: 2.2;
         rolloffFactor: 1.25;
@@ -3430,12 +3891,21 @@
       id="fluorescentSound"
       class="spatial-sound"
       position="2.5 2.5 1.5"
+      independent-ambient-cycle="
+        targetVolume: 0.045;
+        playMin: 25;
+        playMax: 45;
+        silenceMin: 6;
+        silenceMax: 14;
+        fadeIn: 1.5;
+        fadeOut: 1.5;
+        startDelay: 9"
       sound="
         src: url(sounds/fluorescent-light.wav);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0.045;
+        volume: 0;
         distanceModel: inverse;
         refDistance: 1.2;
         rolloffFactor: 2;
@@ -3446,12 +3916,21 @@
       id="tvStaticSound"
       class="spatial-sound"
       position="2.2 1.15 -1.8"
+      independent-ambient-cycle="
+        targetVolume: 0.025;
+        playMin: 15;
+        playMax: 30;
+        silenceMin: 10;
+        silenceMax: 20;
+        fadeIn: 1.2;
+        fadeOut: 0.7;
+        startDelay: 15"
       sound="
         src: url(sounds/tv-static.mp3);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0.025;
+        volume: 0;
         distanceModel: inverse;
         refDistance: 1;
         rolloffFactor: 2.25;
