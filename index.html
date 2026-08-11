@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Rooms Within - Settings Menu + Sound Toggle + VR Exit</title>
+  <title>Rooms Within - Easier Mac Door Interaction</title>
 
   <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
@@ -2223,12 +2223,14 @@
         this.modelBox = null;
         this.widthAxis = 'x';
         this.closeTarget = null;
+        this.macOpenTargets = [];
 
         this.el.addEventListener(
           'model-loaded',
           () => {
             this.prepareDoorParts();
             this.createCloseTarget();
+            this.createMacOpenTargets();
           }
         );
 
@@ -2728,6 +2730,232 @@
         );
       },
 
+      createMacOpenTargets: function () {
+        /*
+          Remove old helpers if the model is reloaded.
+        */
+        this.macOpenTargets.forEach(
+          (entry) => {
+            if (
+              entry.entity &&
+              entry.entity.parentNode
+            ) {
+              entry.entity.parentNode.removeChild(
+                entry.entity
+              );
+            }
+          }
+        );
+
+        this.macOpenTargets = [];
+
+        if (
+          !this.parts ||
+          !this.parts.length
+        ) {
+          return;
+        }
+
+        this.parts.forEach(
+          (part, index) => {
+            const box =
+              this.getLocalBoundingBox(
+                part
+              );
+
+            if (box.isEmpty()) {
+              return;
+            }
+
+            const size =
+              new THREE.Vector3();
+
+            const center =
+              new THREE.Vector3();
+
+            box.getSize(size);
+            box.getCenter(center);
+
+            /*
+              Keep the helper inside the actual panel area.
+              This is intentionally much smaller than the old
+              full-doorway target that caused accidental opening.
+            */
+            const target =
+              document.createElement(
+                'a-box'
+              );
+
+            target.classList.add(
+              'mac-door-open-target'
+            );
+
+            target.setAttribute(
+              'data-door-part-index',
+              String(index)
+            );
+
+            target.setAttribute(
+              'position',
+              `${center.x} ${center.y} ${center.z}`
+            );
+
+            /*
+              About 72% of the panel width and 72% of its height.
+              Enough to make aiming comfortable, but still clearly
+              requires pointing at the door itself.
+            */
+            target.setAttribute(
+              'width',
+              Math.max(
+                size.x * 0.72,
+                0.20
+              )
+            );
+
+            target.setAttribute(
+              'height',
+              Math.max(
+                size.y * 0.72,
+                0.48
+              )
+            );
+
+            target.setAttribute(
+              'depth',
+              Math.max(
+                size.z * 0.72,
+                0.10
+              )
+            );
+
+            target.setAttribute(
+              'material',
+              'opacity: 0; transparent: true; depthWrite: false; side: double'
+            );
+
+            /*
+              These targets belong to the door entity, so their
+              coordinates match the model's local space.
+            */
+            this.el.appendChild(
+              target
+            );
+
+            target.addEventListener(
+              'click',
+              (event) => {
+                const scene =
+                  this.el.sceneEl;
+
+                const isRealHeadsetSession =
+                  Boolean(
+                    scene &&
+                    scene.renderer &&
+                    scene.renderer.xr &&
+                    scene.renderer.xr.isPresenting
+                  );
+
+                /*
+                  Mac/browser helper only.
+                */
+                if (isRealHeadsetSession) {
+                  return;
+                }
+
+                if (
+                  event &&
+                  event.stopPropagation
+                ) {
+                  event.stopPropagation();
+                }
+
+                const state =
+                  this.createState(
+                    part
+                  );
+
+                if (!state) {
+                  return;
+                }
+
+                /*
+                  This helper can OPEN only.
+                  If the door is already open, it does nothing.
+                */
+                if (state.isOpen) {
+                  return;
+                }
+
+                const now =
+                  performance.now();
+
+                if (
+                  now -
+                  this.lastActivation <
+                  250
+                ) {
+                  return;
+                }
+
+                this.lastActivation =
+                  now;
+
+                this.lastActiveState =
+                  state;
+
+                this.startDoorAnimation(
+                  state,
+                  true
+                );
+              }
+            );
+
+            this.macOpenTargets.push({
+              entity: target,
+              part
+            });
+          }
+        );
+
+        this.updateMacOpenTargets();
+      },
+
+      updateMacOpenTargets: function () {
+        if (
+          !this.macOpenTargets ||
+          !this.macOpenTargets.length
+        ) {
+          return;
+        }
+
+        this.macOpenTargets.forEach(
+          (entry) => {
+            const state =
+              this.partStates.get(
+                entry.part
+              );
+
+            const isOpen =
+              Boolean(
+                state &&
+                state.isOpen
+              );
+
+            /*
+              Visible=false makes the helper non-interactive once
+              its door has opened. It becomes active again after
+              the door is closed.
+            */
+            entry.entity.setAttribute(
+              'visible',
+              !isOpen
+            );
+          }
+        );
+      },
+
+
       createCloseTarget: function () {
         if (
           this.closeTarget ||
@@ -3076,6 +3304,7 @@
           shouldOpen;
 
         this.updateCloseTarget();
+        this.updateMacOpenTargets();
 
         state.startAngle =
           state.currentAngle;
@@ -4778,13 +5007,25 @@
           color="#ffffff"
           scale="0.7 0.7 0.7"
 
+          animation__hoverin="
+            property: scale;
+            to: 1 1 1;
+            startEvents: mouseenter;
+            dur: 90"
+
+          animation__hoverout="
+            property: scale;
+            to: 0.7 0.7 0.7;
+            startEvents: mouseleave;
+            dur: 90"
+
           cursor="
             rayOrigin: entity;
             fuse: false"
 
           raycaster="
-            objects: #door, #doorCloseTarget, .item;
-            far: 3;
+            objects: #door, #doorCloseTarget, .mac-door-open-target, .item;
+            far: 2.6;
             interval: 50">
         </a-cursor>
 
