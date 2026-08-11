@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>Rooms Within - Easier Mac Door Interaction</title>
+  <title>Rooms Within - Settings After Enter VR</title>
 
   <!-- A-Frame -->
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
@@ -58,148 +58,122 @@
     }
 
     /*
-      Compact screen settings control.
-      Bottom-left avoids A-Frame's own Enter VR button.
+      True screen-corner control for Mac/browser fullscreen.
+      It is a compact circular icon rather than a text panel.
     */
-    #screenSettings {
+    #screenExitButton {
       position: fixed;
-      left: max(12px, env(safe-area-inset-left));
-      bottom: max(12px, env(safe-area-inset-bottom));
-      z-index: 1010;
+      top: max(12px, env(safe-area-inset-top));
+      right: max(12px, env(safe-area-inset-right));
+      z-index: 1005;
 
-      font-family: Arial, sans-serif;
-      color: #ffffff;
-    }
-
-    #screenSettingsButton {
-      width: 38px;
-      height: 38px;
+      width: 36px;
+      height: 36px;
       padding: 0;
 
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: center;
 
-      border: 1px solid rgba(255, 255, 255, 0.22);
+      border: 1px solid rgba(255, 255, 255, 0.26);
       border-radius: 999px;
 
       color: #ffffff;
       background:
         linear-gradient(
           145deg,
-          rgba(31, 33, 37, 0.95),
-          rgba(10, 11, 13, 0.95)
+          rgba(32, 34, 38, 0.94),
+          rgba(11, 12, 14, 0.94)
         );
 
       box-shadow:
         0 5px 18px rgba(0, 0, 0, 0.42),
-        inset 0 1px 0 rgba(255, 255, 255, 0.10);
+        inset 0 1px 0 rgba(255, 255, 255, 0.11);
 
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
 
       cursor: pointer;
-      opacity: 0.9;
+      opacity: 0.88;
 
       transition:
         transform 120ms ease,
         opacity 120ms ease,
-        border-color 120ms ease;
+        border-color 120ms ease,
+        background 120ms ease;
     }
 
-    #screenSettingsButton:hover {
+    #screenExitButton.is-visible {
+      display: flex;
+    }
+
+    #screenExitButton:hover {
       opacity: 1;
-      transform: scale(1.06);
-      border-color: rgba(255, 255, 255, 0.48);
+      transform: scale(1.08);
+      border-color: rgba(255, 126, 126, 0.78);
+      background:
+        linear-gradient(
+          145deg,
+          rgba(64, 27, 31, 0.97),
+          rgba(18, 12, 14, 0.97)
+        );
     }
 
-    #screenSettingsButton:active {
+    #screenExitButton:active {
       transform: scale(0.95);
     }
 
-    #screenSettingsButton svg {
-      width: 20px;
-      height: 20px;
+    #screenExitButton svg {
+      width: 19px;
+      height: 19px;
       pointer-events: none;
     }
 
-    #screenSettingsMenu {
-      position: absolute;
-      left: 0;
-      bottom: 48px;
 
-      width: 178px;
-      padding: 7px;
-
+    #screenSettingsButton {
+      position: fixed;
+      top: max(12px, env(safe-area-inset-top));
+      left: max(12px, env(safe-area-inset-left));
+      z-index: 1006;
+      width: 36px;
+      height: 36px;
+      padding: 0;
       display: none;
-
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      border-radius: 12px;
-
-      background:
-        linear-gradient(
-          160deg,
-          rgba(25, 27, 31, 0.96),
-          rgba(8, 9, 11, 0.96)
-        );
-
-      box-shadow:
-        0 10px 28px rgba(0, 0, 0, 0.5);
-
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-    }
-
-    #screenSettingsMenu.open {
-      display: block;
-    }
-
-    .settingsOption {
-      width: 100%;
-      height: 38px;
-      padding: 0 11px;
-
-      display: flex;
       align-items: center;
-      gap: 9px;
-
-      border: 0;
-      border-radius: 8px;
-
-      color: #ffffff;
-      background: transparent;
-
-      font: 600 13px Arial, sans-serif;
-      text-align: left;
-
+      justify-content: center;
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 999px;
+      color: #fff;
+      background: rgba(18,20,24,.94);
+      box-shadow: 0 5px 18px rgba(0,0,0,.42);
       cursor: pointer;
-
-      transition:
-        background 110ms ease,
-        transform 110ms ease;
     }
 
-    .settingsOption:hover {
-      background: rgba(255, 255, 255, 0.09);
-    }
+    #screenSettingsButton.is-visible { display: flex; }
+    #screenSettingsButton svg { width: 20px; height: 20px; pointer-events: none; }
 
-    .settingsOption:active {
-      transform: scale(0.98);
+    #screenSettingsPanel {
+      position: fixed;
+      top: 58px;
+      left: 12px;
+      z-index: 1006;
+      display: none;
+      gap: 7px;
+      padding: 9px;
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 12px;
+      background: rgba(12,13,16,.92);
+      box-shadow: 0 8px 24px rgba(0,0,0,.42);
     }
-
-    .settingsOption + .settingsOption {
-      margin-top: 3px;
-    }
-
-    .settingsOption svg {
-      width: 17px;
-      height: 17px;
-      flex: 0 0 auto;
-      pointer-events: none;
-    }
-
-    #screenExitOption {
-      color: #ffd7d7;
+    #screenSettingsPanel.is-open { display: flex; }
+    .settingsMiniButton {
+      min-width: 34px;
+      height: 30px;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 8px;
+      color: #fff;
+      background: rgba(255,255,255,.07);
+      cursor: pointer;
     }
 
 
@@ -211,80 +185,49 @@
   <button id="soundButton" type="button" onclick="enableSound()">
     ENABLE SOUND
   </button>
-  <div id="screenSettings">
-    <div id="screenSettingsMenu" aria-hidden="true">
+  <button
+    id="screenExitButton"
+    type="button"
+    aria-label="Exit fullscreen or VR"
+    title="Exit fullscreen"
+    onclick="exitRoomsWithin()">
 
-      <button
-        id="screenSoundToggle"
-        class="settingsOption"
-        type="button"
-        onclick="toggleSound()">
+    <!-- Door-and-arrow icon -->
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.8"
+      stroke-linecap="round"
+      stroke-linejoin="round">
 
-        <svg
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round">
+      <path d="M10 5H6.8A1.8 1.8 0 0 0 5 6.8v10.4A1.8 1.8 0 0 0 6.8 19H10" />
+      <path d="M13 8l4 4-4 4" />
+      <path d="M9 12h8" />
+    </svg>
+  </button>
 
-          <path d="M4 9v6h4l5 4V5L8 9H4" />
-          <path d="M17 9.5a4 4 0 0 1 0 5" />
-        </svg>
+  <button
+    id="screenSettingsButton"
+    type="button"
+    aria-label="Settings"
+    title="Settings"
+    onclick="toggleRoomsSettings()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"
+         aria-hidden="true">
+      <circle cx="12" cy="12" r="3.2"></circle>
+      <circle cx="12" cy="12" r="7.1"></circle>
+      <path d="M12 2.8v2.2M12 19v2.2M2.8 12H5M19 12h2.2"></path>
+      <path d="M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6"></path>
+    </svg>
+  </button>
 
-        <span id="screenSoundText">
-          Sound: OFF
-        </span>
-      </button>
-
-      <button
-        id="screenExitOption"
-        class="settingsOption"
-        type="button"
-        onclick="exitRoomsWithin()">
-
-        <svg
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round">
-
-          <path d="M10 5H6.8A1.8 1.8 0 0 0 5 6.8v10.4A1.8 1.8 0 0 0 6.8 19H10" />
-          <path d="M13 8l4 4-4 4" />
-          <path d="M9 12h8" />
-        </svg>
-
-        <span id="screenExitText">
-          Exit Fullscreen
-        </span>
-      </button>
-    </div>
-
-    <button
-      id="screenSettingsButton"
-      type="button"
-      aria-label="Settings"
-      title="Settings"
-      onclick="toggleScreenSettings()">
-
-      <!-- Gear icon -->
-      <svg
-        viewBox="0 0 24 24"
-        aria-hidden="true"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.8"
-        stroke-linecap="round"
-        stroke-linejoin="round">
-
-        <circle cx="12" cy="12" r="3.2" />
-        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.87l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.36.3.7.6 1 .3.25.68.4 1.1.4h.1v4h-.1c-.42 0-.8.15-1.1.4-.3.3-.5.64-.6 1Z" />
-      </svg>
-    </button>
+  <div id="screenSettingsPanel">
+    <button class="settingsMiniButton" type="button" onclick="changeRoomsVolume(-0.1)">−</button>
+    <button class="settingsMiniButton" type="button" onclick="toggleRoomsMute()">♪</button>
+    <button class="settingsMiniButton" type="button" onclick="changeRoomsVolume(0.1)">+</button>
   </div>
 
   <!--
@@ -302,468 +245,54 @@
 
   <script>
     /* ============================================================
-       INDEPENDENT POSITIONAL AMBIENCE
+       POSITIONAL SOUND UNLOCK
 
-       Each room sound has its own independent rhythm:
-
-       play -> fade out -> silence -> fade in -> play -> ...
-
-       The sounds are not synchronized, so the room gets breathing
-       space instead of four ambience loops constantly piling up.
-       Positional 3D hearing is preserved.
+       Ambient audio now comes from locations inside the room.
+       Volume and left/right direction change as the listener moves
+       and turns, instead of every sound playing globally at once.
     ============================================================ */
-
-    AFRAME.registerComponent(
-      'independent-ambient-cycle',
-      {
-        schema: {
-          targetVolume: {
-            default: 0.05
-          },
-
-          playMin: {
-            default: 30
-          },
-
-          playMax: {
-            default: 60
-          },
-
-          silenceMin: {
-            default: 8
-          },
-
-          silenceMax: {
-            default: 15
-          },
-
-          fadeIn: {
-            default: 2
-          },
-
-          fadeOut: {
-            default: 2
-          },
-
-          startDelay: {
-            default: 0
-          }
-        },
-
-        init: function () {
-          this.running = false;
-          this.timer = null;
-          this.fadeFrame = null;
-          this.currentVolume = 0;
-
-          /*
-            Keep the source silent until ENABLE SOUND is pressed.
-          */
-          this.setVolume(0);
-        },
-
-        randomBetween: function (
-          minimum,
-          maximum
-        ) {
-          if (maximum <= minimum) {
-            return minimum;
-          }
-
-          return (
-            minimum +
-            Math.random() *
-            (maximum - minimum)
-          );
-        },
-
-        getSoundComponent: function () {
-          return this.el.components.sound;
-        },
-
-        setVolume: function (volume) {
-          const safeVolume =
-            Math.max(
-              0,
-              Math.min(
-                volume,
-                this.data.targetVolume
-              )
-            );
-
-          this.currentVolume =
-            safeVolume;
-
-          /*
-            Updating the A-Frame sound component's volume preserves
-            its positional audio behaviour while changing loudness.
-          */
-          this.el.setAttribute(
-            'sound',
-            'volume',
-            safeVolume
-          );
-        },
-
-        clearTimer: function () {
-          if (this.timer) {
-            window.clearTimeout(
-              this.timer
-            );
-
-            this.timer = null;
-          }
-        },
-
-        clearFade: function () {
-          if (this.fadeFrame) {
-            window.cancelAnimationFrame(
-              this.fadeFrame
-            );
-
-            this.fadeFrame = null;
-          }
-        },
-
-        schedule: function (
-          callback,
-          seconds
-        ) {
-          this.clearTimer();
-
-          this.timer =
-            window.setTimeout(
-              callback,
-              Math.max(
-                0,
-                seconds * 1000
-              )
-            );
-        },
-
-        soundIsReady: function () {
-          const component =
-            this.getSoundComponent();
-
-          if (
-            !component ||
-            !component.pool
-          ) {
-            return false;
-          }
-
-          return component.pool.children
-            .some(
-              audio =>
-                Boolean(audio.buffer)
-            );
-        },
-
-        waitUntilReady: function (
-          callback
-        ) {
-          if (!this.running) {
-            return;
-          }
-
-          if (this.soundIsReady()) {
-            callback();
-            return;
-          }
-
-          /*
-            Audio files may still be loading when the user presses
-            ENABLE SOUND. Retry quietly instead of losing the source.
-          */
-          this.schedule(
-            () => {
-              this.waitUntilReady(
-                callback
-              );
-            },
-            0.25
-          );
-        },
-
-        playSound: function () {
-          const component =
-            this.getSoundComponent();
-
-          if (!component) {
-            return false;
-          }
-
-          try {
-            component.playSound();
-            return true;
-          } catch (error) {
-            console.warn(
-              `Could not start ${this.el.id}.`,
-              error
-            );
-
-            return false;
-          }
-        },
-
-        pauseSound: function () {
-          const component =
-            this.getSoundComponent();
-
-          if (!component) {
-            return;
-          }
-
-          try {
-            component.pauseSound();
-          } catch (error) {
-            console.warn(
-              `Could not pause ${this.el.id}.`,
-              error
-            );
-          }
-        },
-
-        fadeTo: function (
-          target,
-          seconds,
-          onComplete
-        ) {
-          this.clearFade();
-
-          const startVolume =
-            this.currentVolume;
-
-          const endVolume =
-            Math.max(
-              0,
-              Math.min(
-                target,
-                this.data.targetVolume
-              )
-            );
-
-          const duration =
-            Math.max(
-              0,
-              seconds * 1000
-            );
-
-          if (duration === 0) {
-            this.setVolume(
-              endVolume
-            );
-
-            if (onComplete) {
-              onComplete();
-            }
-
-            return;
-          }
-
-          const startTime =
-            performance.now();
-
-          const animate =
-            (now) => {
-              if (!this.running) {
-                return;
-              }
-
-              const progress =
-                Math.min(
-                  (now - startTime) /
-                  duration,
-                  1
-                );
-
-              /*
-                Smoothstep gives gentler fades than a straight line.
-              */
-              const eased =
-                progress *
-                progress *
-                (
-                  3 -
-                  2 * progress
-                );
-
-              const volume =
-                startVolume +
-                (
-                  endVolume -
-                  startVolume
-                ) *
-                eased;
-
-              this.setVolume(
-                volume
-              );
-
-              if (progress < 1) {
-                this.fadeFrame =
-                  window.requestAnimationFrame(
-                    animate
-                  );
-
-                return;
-              }
-
-              this.fadeFrame = null;
-
-              if (onComplete) {
-                onComplete();
-              }
-            };
-
-          this.fadeFrame =
-            window.requestAnimationFrame(
-              animate
-            );
-        },
-
-        beginAudiblePeriod: function () {
-          if (!this.running) {
-            return;
-          }
-
-          this.waitUntilReady(
-            () => {
-              if (!this.running) {
-                return;
-              }
-
-              /*
-                Start or resume at zero volume first, then fade in.
-              */
-              this.setVolume(0);
-              this.playSound();
-
-              this.fadeTo(
-                this.data.targetVolume,
-                this.data.fadeIn,
-                () => {
-                  if (!this.running) {
-                    return;
-                  }
-
-                  const playSeconds =
-                    this.randomBetween(
-                      this.data.playMin,
-                      this.data.playMax
-                    );
-
-                  console.log(
-                    `${this.el.id} audible for ${playSeconds.toFixed(1)} seconds.`
-                  );
-
-                  this.schedule(
-                    () => {
-                      this.beginSilentPeriod();
-                    },
-                    playSeconds
-                  );
-                }
-              );
-            }
-          );
-        },
-
-        beginSilentPeriod: function () {
-          if (!this.running) {
-            return;
-          }
-
-          this.fadeTo(
-            0,
-            this.data.fadeOut,
-            () => {
-              if (!this.running) {
-                return;
-              }
-
-              /*
-                The sound is actually paused after fading out.
-                It is not merely left playing silently.
-              */
-              this.pauseSound();
-
-              const silentSeconds =
-                this.randomBetween(
-                  this.data.silenceMin,
-                  this.data.silenceMax
-                );
-
-              console.log(
-                `${this.el.id} silent for ${silentSeconds.toFixed(1)} seconds.`
-              );
-
-              this.schedule(
-                () => {
-                  this.beginAudiblePeriod();
-                },
-                silentSeconds
-              );
-            }
-          );
-        },
-
-        startCycle: function () {
-          if (this.running) {
-            return;
-          }
-
-          this.running = true;
-
-          this.clearTimer();
-          this.clearFade();
-          this.setVolume(0);
-
-          const delay =
-            Math.max(
-              0,
-              this.data.startDelay
-            );
-
-          if (delay === 0) {
-            this.beginAudiblePeriod();
-            return;
-          }
-
-          console.log(
-            `${this.el.id} starts in ${delay.toFixed(1)} seconds.`
-          );
-
-          this.schedule(
-            () => {
-              this.beginAudiblePeriod();
-            },
-            delay
-          );
-        },
-
-        stopCycle: function () {
-          this.running = false;
-
-          this.clearTimer();
-          this.clearFade();
-
-          this.setVolume(0);
-          this.pauseSound();
-        },
-
-        remove: function () {
-          this.stopCycle();
+    function startSpatialEmitter(entity) {
+      const play = () => {
+        const component =
+          entity.components.sound;
+
+        if (!component) {
+          return false;
         }
-      }
-    );
 
+        component.playSound();
+        return true;
+      };
+
+      if (play()) {
+        return;
+      }
+
+      const onComponentInitialised = (event) => {
+        if (
+          !event.detail ||
+          event.detail.name !== 'sound'
+        ) {
+          return;
+        }
+
+        entity.removeEventListener(
+          'componentinitialized',
+          onComponentInitialised
+        );
+
+        play();
+      };
+
+      entity.addEventListener(
+        'componentinitialized',
+        onComponentInitialised
+      );
+    }
 
     async function primeFootstepAudio() {
       const footsteps =
-        document.querySelector(
-          '#footstepAudio'
-        );
+        document.querySelector('#footstepAudio');
 
       if (!footsteps) {
         return;
@@ -773,16 +302,12 @@
 
       try {
         footsteps.volume = 0;
-
         await footsteps.play();
-
         footsteps.pause();
         footsteps.currentTime = 0;
-        footsteps.volume =
-          finalVolume;
+        footsteps.volume = finalVolume;
       } catch (error) {
-        footsteps.volume =
-          finalVolume;
+        footsteps.volume = finalVolume;
 
         console.warn(
           'Footstep audio could not be primed yet.',
@@ -791,99 +316,18 @@
       }
     }
 
+    async function enableSound() {
+      const button =
+        document.querySelector('#soundButton');
 
-    function updateSoundSettingLabels() {
-      const scene =
-        document.querySelector('a-scene');
-
-      const enabled =
-        Boolean(
-          scene &&
-          scene.soundEnabled
-        );
-
-      const screenText =
-        document.querySelector(
-          '#screenSoundText'
-        );
-
-      const vrText =
-        document.querySelector(
-          '#vrSoundText'
-        );
-
-      const label =
-        enabled
-          ? 'Sound: ON'
-          : 'Sound: OFF';
-
-      if (screenText) {
-        screenText.textContent =
-          label;
-      }
-
-      if (vrText) {
-        vrText.setAttribute(
-          'value',
-          enabled
-            ? 'SOUND  ON'
-            : 'SOUND  OFF'
-        );
-      }
-    }
-
-
-    async function setSoundEnabled(
-      shouldEnable
-    ) {
-      const scene =
-        document.querySelector(
-          'a-scene'
-        );
-
-      if (!scene) {
+      if (!button) {
         return;
       }
 
-      const emitters =
-        document.querySelectorAll(
-          '.spatial-sound'
-        );
+      button.textContent =
+        'STARTING SOUND...';
 
-      const footsteps =
-        document.querySelector(
-          '#footstepAudio'
-        );
-
-      if (!shouldEnable) {
-        scene.soundEnabled = false;
-
-        emitters.forEach(
-          (entity) => {
-            const cycle =
-              entity.components[
-                'independent-ambient-cycle'
-              ];
-
-            if (cycle) {
-              cycle.stopCycle();
-            }
-          }
-        );
-
-        if (footsteps) {
-          footsteps.pause();
-          footsteps.currentTime = 0;
-        }
-
-        updateSoundSettingLabels();
-
-        console.log(
-          'All project sound turned off.'
-        );
-
-        return;
-      }
+      button.disabled = true;
 
       try {
         const context =
@@ -891,12 +335,7 @@
 
         if (
           context &&
-          (
-            context.state ===
-              'suspended' ||
-            context.state ===
-              'interrupted'
-          )
+          context.state === 'suspended'
         ) {
           await context.resume();
         }
@@ -909,101 +348,95 @@
 
       await primeFootstepAudio();
 
-      scene.audioUnlocked = true;
-      scene.soundEnabled = true;
+      const emitters =
+        document.querySelectorAll(
+          '.spatial-sound'
+        );
 
       emitters.forEach(
-        (entity) => {
-          const cycle =
-            entity.components[
-              'independent-ambient-cycle'
-            ];
-
-          if (cycle) {
-            cycle.startCycle();
-          }
-        }
+        startSpatialEmitter
       );
 
-      const button =
-        document.querySelector(
-          '#soundButton'
-        );
+      const scene =
+        document.querySelector('a-scene');
 
-      if (button) {
-        button.textContent =
-          'SOUND ENABLED';
-
-        window.setTimeout(
-          () => {
-            button.style.display =
-              'none';
-          },
-          600
-        );
+      if (scene) {
+        scene.audioUnlocked = true;
       }
 
-      updateSoundSettingLabels();
+      button.textContent =
+        'SOUND ENABLED';
+
+      window.setTimeout(() => {
+        button.style.display = 'none';
+      }, 1200);
 
       console.log(
-        `${emitters.length} independent positional ambience cycles enabled.`
+        `${emitters.length} positional ambience source(s) started.`
       );
     }
 
-
-    async function toggleSound() {
-      const scene =
-        document.querySelector(
-          'a-scene'
-        );
-
-      const currentlyEnabled =
-        Boolean(
-          scene &&
-          scene.soundEnabled
-        );
-
-      await setSoundEnabled(
-        !currentlyEnabled
-      );
-    }
+    window.enableSound = enableSound;
 
 
-    async function enableSound() {
-      const button =
-        document.querySelector(
-          '#soundButton'
-        );
 
-      if (button) {
-        button.textContent =
-          'STARTING SOUND...';
+    let roomsVolumeMultiplier = 1;
+    let roomsMuted = false;
 
-        button.disabled = true;
+    function applyRoomsVolume() {
+      const multiplier = roomsMuted ? 0 : roomsVolumeMultiplier;
+
+      document.querySelectorAll('.spatial-sound').forEach((entity) => {
+        const component = entity.components && entity.components.sound;
+        if (!component) return;
+
+        if (!entity.dataset.baseVolume) {
+          entity.dataset.baseVolume = String(component.data.volume);
+        }
+
+        const base = Number(entity.dataset.baseVolume);
+        if (Number.isFinite(base)) {
+          entity.setAttribute('sound', 'volume', base * multiplier);
+        }
+      });
+
+      const footsteps = document.querySelector('#footstepAudio');
+      if (footsteps) {
+        footsteps.volume = Math.max(0, Math.min(1, 0.18 * multiplier));
       }
-
-      await setSoundEnabled(true);
     }
 
-    window.enableSound =
-      enableSound;
+    function changeRoomsVolume(delta) {
+      roomsMuted = false;
+      roomsVolumeMultiplier = Math.max(0.2, Math.min(1, roomsVolumeMultiplier + delta));
+      applyRoomsVolume();
+    }
 
-    window.toggleSound =
-      toggleSound;
+    function toggleRoomsMute() {
+      roomsMuted = !roomsMuted;
+      applyRoomsVolume();
+    }
 
-    window.setSoundEnabled =
-      setSoundEnabled;
+    function toggleRoomsSettings(force) {
+      const panel = document.querySelector('#screenSettingsPanel');
+      if (!panel) return;
+      const open = typeof force === 'boolean' ? force : !panel.classList.contains('is-open');
+      panel.classList.toggle('is-open', open);
+    }
 
+    window.changeRoomsVolume = changeRoomsVolume;
+    window.toggleRoomsMute = toggleRoomsMute;
+    window.toggleRoomsSettings = toggleRoomsSettings;
 
     /* ============================================================
-       SETTINGS + EXIT CONTROLS
+       EXIT CONTROLS
 
        Mac/browser:
-       A real HTML gear button stays in the bottom-left corner.
+       A real HTML button is fixed to the top-right screen corner.
 
        Quest/WebXR:
-       A small 3D gear button appears in the headset's bottom-left
-       corner and opens Sound / Exit VR options.
+       A small 3D icon is kept inside immersive VR, where normal
+       browser HTML may not be visible.
     ============================================================ */
     function isImmersiveXR(scene) {
       return Boolean(
@@ -1014,117 +447,61 @@
       );
     }
 
-
-    function toggleScreenSettings() {
-      const menu =
-        document.querySelector(
-          '#screenSettingsMenu'
-        );
-
-      if (!menu) {
-        return;
-      }
-
-      const opening =
-        !menu.classList.contains(
-          'open'
-        );
-
-      menu.classList.toggle(
-        'open',
-        opening
-      );
-
-      menu.setAttribute(
-        'aria-hidden',
-        opening
-          ? 'false'
-          : 'true'
-      );
-
-      updateSettingsUI();
-    }
-
-    window.toggleScreenSettings =
-      toggleScreenSettings;
-
-
-    function setVRSettingsOpen(
-      shouldOpen
-    ) {
-      const menu =
-        document.querySelector(
-          '#vrSettingsMenu'
-        );
-
-      if (!menu) {
-        return;
-      }
-
-      menu.setAttribute(
-        'visible',
-        shouldOpen
-      );
-
-      menu.dataset.open =
-        shouldOpen
-          ? 'true'
-          : 'false';
-
-      updateSettingsUI();
-    }
-
-
-    function toggleVRSettings() {
-      const menu =
-        document.querySelector(
-          '#vrSettingsMenu'
-        );
-
-      if (!menu) {
-        return;
-      }
-
-      const isOpen =
-        menu.dataset.open ===
-        'true';
-
-      setVRSettingsOpen(
-        !isOpen
-      );
-    }
-
-    window.toggleVRSettings =
-      toggleVRSettings;
-
-
-    function updateSettingsUI() {
+    function updateScreenExitButton() {
       const scene =
+        document.querySelector('a-scene');
+
+      const button =
         document.querySelector(
-          'a-scene'
+          '#screenExitButton'
         );
 
-      updateSoundSettingLabels();
+      if (!button) {
+        return;
+      }
 
-      const exitText =
-        document.querySelector(
-          '#screenExitText'
+      const browserFullscreen =
+        Boolean(
+          document.fullscreenElement ||
+          document.webkitFullscreenElement
         );
 
-      if (exitText) {
-        exitText.textContent =
-          isImmersiveXR(scene)
-            ? 'Exit VR'
-            : 'Exit Fullscreen';
+      const desktopVRMode =
+        Boolean(
+          scene &&
+          scene.is('vr-mode') &&
+          !isImmersiveXR(scene)
+        );
+
+      const showDesktopControls =
+        browserFullscreen ||
+        desktopVRMode;
+
+      button.classList.toggle(
+        'is-visible',
+        showDesktopControls
+      );
+
+      const settingsButton =
+        document.querySelector(
+          '#screenSettingsButton'
+        );
+
+      if (settingsButton) {
+        settingsButton.classList.toggle(
+          'is-visible',
+          showDesktopControls
+        );
+      }
+
+      if (!showDesktopControls) {
+        toggleRoomsSettings(false);
       }
     }
-
 
     async function exitRoomsWithin() {
       const scene =
-        document.querySelector(
-          'a-scene'
-        );
+        document.querySelector('a-scene');
 
       try {
         if (
@@ -1139,8 +516,7 @@
 
           if (
             result &&
-            typeof result.then ===
-              'function'
+            typeof result.then === 'function'
           ) {
             await result;
           }
@@ -1153,9 +529,7 @@
       }
 
       try {
-        if (
-          document.fullscreenElement
-        ) {
+        if (document.fullscreenElement) {
           await document.exitFullscreen();
         } else if (
           document.webkitFullscreenElement &&
@@ -1170,135 +544,69 @@
         );
       }
 
-      setVRSettingsOpen(false);
-
-      const screenMenu =
-        document.querySelector(
-          '#screenSettingsMenu'
-        );
-
-      if (screenMenu) {
-        screenMenu.classList.remove(
-          'open'
-        );
-
-        screenMenu.setAttribute(
-          'aria-hidden',
-          'true'
-        );
-      }
-
-      updateSettingsUI();
+      updateScreenExitButton();
     }
 
     window.exitRoomsWithin =
       exitRoomsWithin;
 
-
     document.addEventListener(
       'fullscreenchange',
-      updateSettingsUI
+      updateScreenExitButton
     );
 
     document.addEventListener(
       'webkitfullscreenchange',
-      updateSettingsUI
+      updateScreenExitButton
     );
 
-    document.addEventListener(
-      'pointerdown',
-      (event) => {
-        const settings =
-          document.querySelector(
-            '#screenSettings'
+
+    AFRAME.registerComponent('vr-only-ui', {
+      init: function () {
+        const scene =
+          this.el.sceneEl;
+
+        const updateVisibility = () => {
+          /*
+            The 3D icon is headset-only. Mac uses the true HTML
+            screen-corner button instead.
+          */
+          this.el.setAttribute(
+            'visible',
+            isImmersiveXR(scene)
           );
 
-        const menu =
-          document.querySelector(
-            '#screenSettingsMenu'
-          );
+          updateScreenExitButton();
+        };
 
-        if (
-          settings &&
-          menu &&
-          menu.classList.contains(
-            'open'
-          ) &&
-          !settings.contains(
-            event.target
-          )
-        ) {
-          menu.classList.remove(
-            'open'
-          );
+        scene.addEventListener(
+          'enter-vr',
+          () => {
+            window.setTimeout(
+              updateVisibility,
+              250
+            );
+          }
+        );
 
-          menu.setAttribute(
-            'aria-hidden',
-            'true'
-          );
-        }
+        scene.addEventListener(
+          'exit-vr',
+          updateVisibility
+        );
+
+        scene.addEventListener(
+          'renderstart',
+          updateVisibility
+        );
+
+        updateVisibility();
       }
-    );
-
-
-    AFRAME.registerComponent(
-      'vr-only-ui',
-      {
-        init: function () {
-          const scene =
-            this.el.sceneEl;
-
-          const updateVisibility =
-            () => {
-              const visible =
-                isImmersiveXR(
-                  scene
-                );
-
-              this.el.setAttribute(
-                'visible',
-                visible
-              );
-
-              if (!visible) {
-                setVRSettingsOpen(
-                  false
-                );
-              }
-
-              updateSettingsUI();
-            };
-
-          scene.addEventListener(
-            'enter-vr',
-            () => {
-              window.setTimeout(
-                updateVisibility,
-                250
-              );
-            }
-          );
-
-          scene.addEventListener(
-            'exit-vr',
-            updateVisibility
-          );
-
-          scene.addEventListener(
-            'renderstart',
-            updateVisibility
-          );
-
-          updateVisibility();
-        }
-      }
-    );
+    });
 
 
     /*
-      Camera-corner placement supports any corner. The settings
-      control uses bottom-left so it stays out of the player's
-      central view.
+      Dynamically positions the headset icon near the real visual
+      upper-right edge based on camera FOV and aspect ratio.
     */
     AFRAME.registerComponent(
       'camera-corner-ui',
@@ -1314,26 +622,12 @@
 
           verticalInset: {
             default: 0.14
-          },
-
-          horizontalSide: {
-            default: 'left',
-            oneOf: [
-              'left',
-              'right'
-            ]
-          },
-
-          verticalSide: {
-            default: 'bottom',
-            oneOf: [
-              'top',
-              'bottom'
-            ]
           }
         },
 
         init: function () {
+          this.lastWidth = 0;
+          this.lastHeight = 0;
           this.lastUpdate = 0;
         },
 
@@ -1347,20 +641,16 @@
           }
 
           if (
-            time -
-            this.lastUpdate <
+            time - this.lastUpdate <
             150
           ) {
             return;
           }
 
-          this.lastUpdate =
-            time;
+          this.lastUpdate = time;
 
           const cameraEl =
-            document.querySelector(
-              '#cam'
-            );
+            document.querySelector('#cam');
 
           const camera =
             cameraEl &&
@@ -1381,9 +671,7 @@
             );
 
           const halfHeight =
-            Math.tan(
-              fov / 2
-            ) *
+            Math.tan(fov / 2) *
             distance;
 
           const aspect =
@@ -1397,30 +685,15 @@
             );
 
           const halfWidth =
-            halfHeight *
-            aspect;
-
-          const xSign =
-            this.data.horizontalSide ===
-            'right'
-              ? 1
-              : -1;
-
-          const ySign =
-            this.data.verticalSide ===
-            'top'
-              ? 1
-              : -1;
+            halfHeight * aspect;
 
           this.el.object3D.position.set(
-            xSign *
-              halfWidth *
+            halfWidth *
               (
                 1 -
                 this.data.horizontalInset
               ),
-            ySign *
-              halfHeight *
+            halfHeight *
               (
                 1 -
                 this.data.verticalInset
@@ -1433,16 +706,26 @@
 
 
     AFRAME.registerComponent(
-      'settings-state',
+      'exit-experience',
       {
         init: function () {
-          this.el.audioUnlocked = false;
-          this.el.soundEnabled = false;
+          this.el.addEventListener(
+            'click',
+            (event) => {
+              if (
+                event &&
+                event.stopPropagation
+              ) {
+                event.stopPropagation();
+              }
 
-          window.setTimeout(
-            updateSettingsUI,
-            0
+              exitRoomsWithin();
+            }
           );
+        },
+
+        exitExperience: function () {
+          return exitRoomsWithin();
         }
       }
     );
@@ -2223,14 +1506,12 @@
         this.modelBox = null;
         this.widthAxis = 'x';
         this.closeTarget = null;
-        this.macOpenTargets = [];
 
         this.el.addEventListener(
           'model-loaded',
           () => {
             this.prepareDoorParts();
             this.createCloseTarget();
-            this.createMacOpenTargets();
           }
         );
 
@@ -2730,232 +2011,6 @@
         );
       },
 
-      createMacOpenTargets: function () {
-        /*
-          Remove old helpers if the model is reloaded.
-        */
-        this.macOpenTargets.forEach(
-          (entry) => {
-            if (
-              entry.entity &&
-              entry.entity.parentNode
-            ) {
-              entry.entity.parentNode.removeChild(
-                entry.entity
-              );
-            }
-          }
-        );
-
-        this.macOpenTargets = [];
-
-        if (
-          !this.parts ||
-          !this.parts.length
-        ) {
-          return;
-        }
-
-        this.parts.forEach(
-          (part, index) => {
-            const box =
-              this.getLocalBoundingBox(
-                part
-              );
-
-            if (box.isEmpty()) {
-              return;
-            }
-
-            const size =
-              new THREE.Vector3();
-
-            const center =
-              new THREE.Vector3();
-
-            box.getSize(size);
-            box.getCenter(center);
-
-            /*
-              Keep the helper inside the actual panel area.
-              This is intentionally much smaller than the old
-              full-doorway target that caused accidental opening.
-            */
-            const target =
-              document.createElement(
-                'a-box'
-              );
-
-            target.classList.add(
-              'mac-door-open-target'
-            );
-
-            target.setAttribute(
-              'data-door-part-index',
-              String(index)
-            );
-
-            target.setAttribute(
-              'position',
-              `${center.x} ${center.y} ${center.z}`
-            );
-
-            /*
-              About 72% of the panel width and 72% of its height.
-              Enough to make aiming comfortable, but still clearly
-              requires pointing at the door itself.
-            */
-            target.setAttribute(
-              'width',
-              Math.max(
-                size.x * 0.72,
-                0.20
-              )
-            );
-
-            target.setAttribute(
-              'height',
-              Math.max(
-                size.y * 0.72,
-                0.48
-              )
-            );
-
-            target.setAttribute(
-              'depth',
-              Math.max(
-                size.z * 0.72,
-                0.10
-              )
-            );
-
-            target.setAttribute(
-              'material',
-              'opacity: 0; transparent: true; depthWrite: false; side: double'
-            );
-
-            /*
-              These targets belong to the door entity, so their
-              coordinates match the model's local space.
-            */
-            this.el.appendChild(
-              target
-            );
-
-            target.addEventListener(
-              'click',
-              (event) => {
-                const scene =
-                  this.el.sceneEl;
-
-                const isRealHeadsetSession =
-                  Boolean(
-                    scene &&
-                    scene.renderer &&
-                    scene.renderer.xr &&
-                    scene.renderer.xr.isPresenting
-                  );
-
-                /*
-                  Mac/browser helper only.
-                */
-                if (isRealHeadsetSession) {
-                  return;
-                }
-
-                if (
-                  event &&
-                  event.stopPropagation
-                ) {
-                  event.stopPropagation();
-                }
-
-                const state =
-                  this.createState(
-                    part
-                  );
-
-                if (!state) {
-                  return;
-                }
-
-                /*
-                  This helper can OPEN only.
-                  If the door is already open, it does nothing.
-                */
-                if (state.isOpen) {
-                  return;
-                }
-
-                const now =
-                  performance.now();
-
-                if (
-                  now -
-                  this.lastActivation <
-                  250
-                ) {
-                  return;
-                }
-
-                this.lastActivation =
-                  now;
-
-                this.lastActiveState =
-                  state;
-
-                this.startDoorAnimation(
-                  state,
-                  true
-                );
-              }
-            );
-
-            this.macOpenTargets.push({
-              entity: target,
-              part
-            });
-          }
-        );
-
-        this.updateMacOpenTargets();
-      },
-
-      updateMacOpenTargets: function () {
-        if (
-          !this.macOpenTargets ||
-          !this.macOpenTargets.length
-        ) {
-          return;
-        }
-
-        this.macOpenTargets.forEach(
-          (entry) => {
-            const state =
-              this.partStates.get(
-                entry.part
-              );
-
-            const isOpen =
-              Boolean(
-                state &&
-                state.isOpen
-              );
-
-            /*
-              Visible=false makes the helper non-interactive once
-              its door has opened. It becomes active again after
-              the door is closed.
-            */
-            entry.entity.setAttribute(
-              'visible',
-              !isOpen
-            );
-          }
-        );
-      },
-
-
       createCloseTarget: function () {
         if (
           this.closeTarget ||
@@ -3304,7 +2359,6 @@
           shouldOpen;
 
         this.updateCloseTarget();
-        this.updateMacOpenTargets();
 
         state.startAngle =
           state.currentAngle;
@@ -4206,25 +3260,38 @@
         const raycaster =
           this.el.components.raycaster;
 
+        const exitButton =
+          document.querySelector(
+            '#exitVRButton'
+          );
+
         const settingsButton =
           document.querySelector(
-            '#vrSettingsButton'
+            '#settingsVRButton'
           );
 
-        const soundOption =
+        const settingsPanel =
           document.querySelector(
-            '#vrSoundToggle'
+            '#settingsVRPanel'
           );
 
-        const exitOption =
+        const settingsVolumeDown =
           document.querySelector(
-            '#vrExitOption'
+            '#settingsVolumeDown'
+          );
+
+        const settingsMuteButton =
+          document.querySelector(
+            '#settingsMuteButton'
+          );
+
+        const settingsVolumeUp =
+          document.querySelector(
+            '#settingsVolumeUp'
           );
 
         const door =
-          document.querySelector(
-            '#door'
-          );
+          document.querySelector('#door');
 
         const closeTarget =
           document.querySelector(
@@ -4235,61 +3302,80 @@
           return;
         }
 
-        if (
-          raycaster.refreshObjects
-        ) {
+        if (raycaster.refreshObjects) {
           raycaster.refreshObjects();
         }
 
-        /*
-          VR settings controls take priority over room interaction.
-        */
+        /* SETTINGS controls take priority over room objects. */
         const settingsHit =
-          settingsButton &&
-          raycaster.getIntersection
-            ? raycaster.getIntersection(
-                settingsButton
-              )
+          settingsButton && raycaster.getIntersection
+            ? raycaster.getIntersection(settingsButton)
             : null;
 
         if (settingsHit) {
-          toggleVRSettings();
+          if (settingsPanel) {
+            const open = Boolean(settingsPanel.getAttribute('visible'));
+            settingsPanel.setAttribute('visible', !open);
+          }
           return;
         }
 
-        const soundHit =
-          soundOption &&
-          raycaster.getIntersection
-            ? raycaster.getIntersection(
-                soundOption
-              )
-            : null;
+        if (settingsPanel && settingsPanel.getAttribute('visible')) {
+          const downHit =
+            settingsVolumeDown && raycaster.getIntersection
+              ? raycaster.getIntersection(settingsVolumeDown)
+              : null;
+          if (downHit) {
+            changeRoomsVolume(-0.1);
+            return;
+          }
 
-        if (soundHit) {
-          toggleSound();
-          return;
-        }
+          const muteHit =
+            settingsMuteButton && raycaster.getIntersection
+              ? raycaster.getIntersection(settingsMuteButton)
+              : null;
+          if (muteHit) {
+            toggleRoomsMute();
+            return;
+          }
 
-        const exitHit =
-          exitOption &&
-          raycaster.getIntersection
-            ? raycaster.getIntersection(
-                exitOption
-              )
-            : null;
-
-        if (exitHit) {
-          exitRoomsWithin();
-          return;
+          const upHit =
+            settingsVolumeUp && raycaster.getIntersection
+              ? raycaster.getIntersection(settingsVolumeUp)
+              : null;
+          if (upHit) {
+            changeRoomsVolume(0.1);
+            return;
+          }
         }
 
         /*
-          Door interaction remains the same on Quest.
+          EXIT VR takes priority, but only when its small visible
+          button is actually hit by the controller ray.
         */
+        const exitIntersection =
+          exitButton &&
+          raycaster.getIntersection
+            ? raycaster.getIntersection(
+                exitButton
+              )
+            : null;
+
+        if (exitIntersection) {
+          const exitComponent =
+            exitButton.components[
+              'exit-experience'
+            ];
+
+          if (exitComponent) {
+            exitComponent.exitExperience();
+          }
+
+          return;
+        }
+
         const doorComponent =
-          door.components[
-            'door-hinge'
-          ];
+          door.components['door-hinge'];
 
         if (!doorComponent) {
           return;
@@ -4310,15 +3396,19 @@
 
         const doorIntersection =
           raycaster.getIntersection
-            ? raycaster.getIntersection(
-                door
-              )
+            ? raycaster.getIntersection(door)
             : null;
 
+        /*
+          No visible-door or active close-target hit means no action.
+        */
         if (!doorIntersection) {
           return;
         }
 
+        /*
+          Use the exact panel that was pointed at.
+        */
         if (
           doorComponent.activatePart(
             doorIntersection.object
@@ -4327,6 +3417,10 @@
           return;
         }
 
+        /*
+          This fallback is allowed only after the visible door itself
+          was hit, preserving repeated open/close behavior.
+        */
         doorComponent.toggleLastDoor();
       }
     });
@@ -4391,14 +3485,9 @@
         const audioUnlocked =
           this.el.sceneEl.audioUnlocked;
 
-        const soundEnabled =
-          this.el.sceneEl.soundEnabled ===
-          true;
-
         if (
           isWalking &&
           audioUnlocked &&
-          soundEnabled &&
           !this.isPlaying
         ) {
           const playPromise =
@@ -4416,8 +3505,7 @@
           this.isPlaying = true;
         } else if (
           (!isWalking ||
-           !audioUnlocked ||
-           !soundEnabled) &&
+           !audioUnlocked) &&
           this.isPlaying
         ) {
           this.audio.pause();
@@ -4434,7 +3522,6 @@
 
 
   <a-scene
-    settings-state
 
     background="
       color: #020202"
@@ -4516,21 +3603,12 @@
       id="fanSound"
       class="spatial-sound"
       position="-3.5 2.4 -1"
-      independent-ambient-cycle="
-        targetVolume: 0.075;
-        playMin: 40;
-        playMax: 70;
-        silenceMin: 8;
-        silenceMax: 15;
-        fadeIn: 2;
-        fadeOut: 2;
-        startDelay: 0"
       sound="
         src: url(sounds/73347__noisecollector__noisy_ceiling_fan.mp3);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0;
+        volume: 0.075;
         distanceModel: inverse;
         refDistance: 1.4;
         rolloffFactor: 1.8;
@@ -4541,21 +3619,12 @@
       id="bedroomRainSound"
       class="spatial-sound"
       position="-3.2 1.7 -3.8"
-      independent-ambient-cycle="
-        targetVolume: 0.06;
-        playMin: 70;
-        playMax: 120;
-        silenceMin: 12;
-        silenceMax: 25;
-        fadeIn: 2.5;
-        fadeOut: 2.5;
-        startDelay: 4"
       sound="
         src: url(sounds/bedroom-rain.wav);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0;
+        volume: 0.06;
         distanceModel: inverse;
         refDistance: 2.2;
         rolloffFactor: 1.25;
@@ -4566,21 +3635,12 @@
       id="fluorescentSound"
       class="spatial-sound"
       position="2.5 2.5 1.5"
-      independent-ambient-cycle="
-        targetVolume: 0.045;
-        playMin: 25;
-        playMax: 45;
-        silenceMin: 6;
-        silenceMax: 14;
-        fadeIn: 1.5;
-        fadeOut: 1.5;
-        startDelay: 9"
       sound="
         src: url(sounds/fluorescent-light.wav);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0;
+        volume: 0.045;
         distanceModel: inverse;
         refDistance: 1.2;
         rolloffFactor: 2;
@@ -4591,21 +3651,12 @@
       id="tvStaticSound"
       class="spatial-sound"
       position="2.2 1.15 -1.8"
-      independent-ambient-cycle="
-        targetVolume: 0.025;
-        playMin: 15;
-        playMax: 30;
-        silenceMin: 10;
-        silenceMax: 20;
-        fadeIn: 1.2;
-        fadeOut: 0.7;
-        startDelay: 15"
       sound="
         src: url(sounds/tv-static.mp3);
         autoplay: false;
         loop: true;
         positional: true;
-        volume: 0;
+        volume: 0.025;
         distanceModel: inverse;
         refDistance: 1;
         rolloffFactor: 2.25;
@@ -4835,164 +3886,140 @@
           vrMultiplier: 0.3">
 
 
-        <!-- Headset-only bottom-left settings control -->
-        <a-entity
-          id="vrSettingsUI"
+        <!-- Headset SETTINGS gear: appears after entering immersive VR -->
+        <a-circle
+          id="settingsVRButton"
+          class="vr-ui"
+          vr-only-ui
+          visible="false"
+          position="-0.72 0.46 -1.8"
+          radius="0.044"
+          segments="40"
+          material="color: #17191c; opacity: 0.94; transparent: true; shader: flat; side: double">
+          <a-ring radius-inner="0.038" radius-outer="0.044" segments-theta="40"
+            position="0 0 0.002"
+            material="color: #69758d; shader: flat; side: double"></a-ring>
+          <a-ring radius-inner="0.010" radius-outer="0.017" segments-theta="24"
+            position="0 0 0.006"
+            material="color: #ffffff; shader: flat; side: double"></a-ring>
+          <a-plane width="0.036" height="0.004" position="0 0 0.007"
+            material="color: #ffffff; shader: flat; side: double"></a-plane>
+          <a-plane width="0.036" height="0.004" rotation="0 0 60" position="0 0 0.008"
+            material="color: #ffffff; shader: flat; side: double"></a-plane>
+          <a-plane width="0.036" height="0.004" rotation="0 0 120" position="0 0 0.009"
+            material="color: #ffffff; shader: flat; side: double"></a-plane>
+        </a-circle>
+
+        <a-entity id="settingsVRPanel" visible="false" position="-0.55 0.31 -1.8">
+          <a-plane width="0.30" height="0.10"
+            material="color: #111318; opacity: 0.94; transparent: true; shader: flat; side: double"></a-plane>
+          <a-circle id="settingsVolumeDown" radius="0.025" position="-0.085 0 0.008"
+            material="color: #333944; shader: flat; side: double">
+            <a-text value="-" align="center" width="0.45" position="0 0 0.004" color="#ffffff"></a-text>
+          </a-circle>
+          <a-circle id="settingsMuteButton" radius="0.025" position="0 0 0.008"
+            material="color: #333944; shader: flat; side: double">
+            <a-text value="M" align="center" width="0.36" position="0 0 0.004" color="#ffffff"></a-text>
+          </a-circle>
+          <a-circle id="settingsVolumeUp" radius="0.025" position="0.085 0 0.008"
+            material="color: #333944; shader: flat; side: double">
+            <a-text value="+" align="center" width="0.42" position="0 0 0.004" color="#ffffff"></a-text>
+          </a-circle>
+        </a-entity>
+
+        <!-- Headset-only compact corner exit icon -->
+        <a-circle
+          id="exitVRButton"
+          class="vr-ui"
           vr-only-ui
           camera-corner-ui="
             distance: 2;
-            horizontalInset: 0.11;
-            verticalInset: 0.13;
-            horizontalSide: left;
-            verticalSide: bottom"
-          visible="false">
+            horizontalInset: 0.14;
+            verticalInset: 0.17"
+          exit-experience
+          visible="false"
 
-          <!-- Gear button -->
-          <a-circle
-            id="vrSettingsButton"
-            radius="0.050"
-            segments="48"
+          radius="0.046"
+          segments="48"
 
+          material="
+            color: #17191c;
+            opacity: 0.94;
+            transparent: true;
+            shader: flat;
+            side: double"
+
+          animation__hoverin="
+            property: scale;
+            to: 1.12 1.12 1.12;
+            startEvents: mouseenter;
+            dur: 100"
+
+          animation__hoverout="
+            property: scale;
+            to: 1 1 1;
+            startEvents: mouseleave;
+            dur: 100">
+
+          <!-- Thin outer ring -->
+          <a-ring
+            radius-inner="0.041"
+            radius-outer="0.046"
+            segments-theta="48"
+            position="0 0 0.002"
             material="
-              color: #17191c;
-              opacity: 0.96;
+              color: #a64a4a;
+              opacity: 0.92;
               transparent: true;
               shader: flat;
               side: double">
+          </a-ring>
 
-            <a-ring
-              radius-inner="0.043"
-              radius-outer="0.050"
-              segments-theta="48"
-              position="0 0 0.002"
-              material="
-                color: #8b8f98;
-                opacity: 0.82;
-                transparent: true;
-                shader: flat;
-                side: double">
-            </a-ring>
+          <!-- Small doorway edge -->
+          <a-plane
+            width="0.004"
+            height="0.034"
+            position="-0.014 0 0.005"
+            material="
+              color: #ffffff;
+              shader: flat;
+              side: double">
+          </a-plane>
 
-            <!-- Simple gear-like icon -->
-            <a-ring
-              radius-inner="0.012"
-              radius-outer="0.022"
-              segments-theta="16"
-              position="0 0 0.005"
-              material="
-                color: #ffffff;
-                shader: flat;
-                side: double">
-            </a-ring>
+          <!-- Exit arrow shaft -->
+          <a-plane
+            width="0.032"
+            height="0.004"
+            position="0.003 0 0.006"
+            material="
+              color: #ffffff;
+              shader: flat;
+              side: double">
+          </a-plane>
 
-            <a-plane
-              width="0.007"
-              height="0.047"
-              position="0 0 0.006"
-              material="
-                color: #ffffff;
-                shader: flat;
-                side: double">
-            </a-plane>
+          <!-- Exit arrow head -->
+          <a-plane
+            width="0.017"
+            height="0.004"
+            rotation="0 0 45"
+            position="0.016 0.006 0.007"
+            material="
+              color: #ffffff;
+              shader: flat;
+              side: double">
+          </a-plane>
 
-            <a-plane
-              width="0.047"
-              height="0.007"
-              position="0 0 0.007"
-              material="
-                color: #ffffff;
-                shader: flat;
-                side: double">
-            </a-plane>
-
-            <a-plane
-              width="0.007"
-              height="0.044"
-              rotation="0 0 45"
-              position="0 0 0.008"
-              material="
-                color: #ffffff;
-                shader: flat;
-                side: double">
-            </a-plane>
-
-            <a-plane
-              width="0.007"
-              height="0.044"
-              rotation="0 0 -45"
-              position="0 0 0.009"
-              material="
-                color: #ffffff;
-                shader: flat;
-                side: double">
-            </a-plane>
-          </a-circle>
-
-
-          <!-- Menu opens upward/right from the corner -->
-          <a-entity
-            id="vrSettingsMenu"
-            visible="false"
-            data-open="false"
-            position="0.19 0.135 0">
-
-            <a-plane
-              width="0.31"
-              height="0.185"
-              material="
-                color: #111318;
-                opacity: 0.94;
-                transparent: true;
-                shader: flat;
-                side: double">
-            </a-plane>
-
-            <!-- Sound option -->
-            <a-plane
-              id="vrSoundToggle"
-              position="0 0.044 0.006"
-              width="0.275"
-              height="0.065"
-              material="
-                color: #292c32;
-                opacity: 0.98;
-                transparent: true;
-                shader: flat;
-                side: double">
-
-              <a-text
-                id="vrSoundText"
-                value="SOUND  OFF"
-                align="center"
-                color="#ffffff"
-                width="0.72"
-                position="0 0 0.004">
-              </a-text>
-            </a-plane>
-
-            <!-- Exit option -->
-            <a-plane
-              id="vrExitOption"
-              position="0 -0.044 0.006"
-              width="0.275"
-              height="0.065"
-              material="
-                color: #4b2024;
-                opacity: 0.98;
-                transparent: true;
-                shader: flat;
-                side: double">
-
-              <a-text
-                value="EXIT  VR"
-                align="center"
-                color="#ffdede"
-                width="0.72"
-                position="0 0 0.004">
-              </a-text>
-            </a-plane>
-          </a-entity>
-        </a-entity>
+          <a-plane
+            width="0.017"
+            height="0.004"
+            rotation="0 0 -45"
+            position="0.016 -0.006 0.008"
+            material="
+              color: #ffffff;
+              shader: flat;
+              side: double">
+          </a-plane>
+        </a-circle>
 
 
         <!-- Desktop object-holding point -->
@@ -5007,25 +4034,13 @@
           color="#ffffff"
           scale="0.7 0.7 0.7"
 
-          animation__hoverin="
-            property: scale;
-            to: 1 1 1;
-            startEvents: mouseenter;
-            dur: 90"
-
-          animation__hoverout="
-            property: scale;
-            to: 0.7 0.7 0.7;
-            startEvents: mouseleave;
-            dur: 90"
-
           cursor="
             rayOrigin: entity;
             fuse: false"
 
           raycaster="
-            objects: #door, #doorCloseTarget, .mac-door-open-target, .item;
-            far: 2.6;
+            objects: #door, #doorCloseTarget, .item;
+            far: 3;
             interval: 50">
         </a-cursor>
 
@@ -5061,7 +4076,7 @@
           hand: right"
 
         raycaster="
-          objects: #door, #doorCloseTarget, #vrSettingsButton, #vrSoundToggle, #vrExitOption;
+          objects: #door, #doorCloseTarget, #exitVRButton, #settingsVRButton, #settingsVolumeDown, #settingsMuteButton, #settingsVolumeUp;
           far: 3;
           interval: 50;
           showLine: true;
