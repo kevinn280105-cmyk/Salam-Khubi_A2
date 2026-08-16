@@ -1,6 +1,22 @@
 /* ============================================================
    engine-interactions.js
-   Door interaction + object grabbing
+
+   Handles:
+   - Doors
+   - Mac interaction
+   - Quest door interaction
+   - Interactive TV
+   - Quest TV interaction
+   - Object pickup / drop / throwing
+============================================================ */
+
+
+/* ============================================================
+   REAL IMMERSIVE VR CHECK
+
+   Mac fullscreen should still use mouse/trackpad interaction.
+
+   Only an actual WebXR headset session returns true here.
 ============================================================ */
 
 function isImmersiveXRScene(scene) {
@@ -12,48 +28,71 @@ function isImmersiveXRScene(scene) {
   );
 }
 
+
 /* ============================================================
    DOOR SYSTEM
 ============================================================ */
 
 AFRAME.registerComponent('door-hinge', {
   schema: {
-    openAngle: { default: 100 },
+    openAngle: {
+      default: 100
+    },
 
     hingeSide: {
       default: 'left',
-      oneOf: ['left', 'right']
+      oneOf: [
+        'left',
+        'right'
+      ]
     },
 
-    direction: { default: 1 },
+    direction: {
+      default: 1
+    },
 
-    duration: { default: 650 }
+    duration: {
+      default: 650
+    }
   },
 
-  init: function () {
-    this.root = null;
 
-    this.parts = [];
+  init: function () {
+    this.root =
+      null;
+
+    this.parts =
+      [];
 
     this.partStates =
       new Map();
 
-    this.lastActivation = 0;
+    this.lastActivation =
+      0;
 
-    this.lastActiveState = null;
+    this.lastActiveState =
+      null;
 
-    this.closeTarget = null;
+    this.closeTarget =
+      null;
 
+
+    /* --------------------------------------------------------
+       MODEL LOADED
+    -------------------------------------------------------- */
 
     this.el.addEventListener(
       'model-loaded',
       () => {
         this.prepareDoorParts();
-
         this.createCloseTarget();
       }
     );
 
+
+    /* --------------------------------------------------------
+       EXTERNAL ACTIVATION
+    -------------------------------------------------------- */
 
     this.el.addEventListener(
       'activate-object',
@@ -71,21 +110,14 @@ AFRAME.registerComponent('door-hinge', {
     );
 
 
-    /*
-      MAC / DESKTOP CLICK
+    /* --------------------------------------------------------
+       MAC / DESKTOP CLICK
 
-      Do NOT use:
+       Do NOT use scene.is('vr-mode') here.
 
-      scene.is('vr-mode')
+       Mac fullscreen must still be clickable.
+    -------------------------------------------------------- */
 
-      here.
-
-      A-Frame can consider desktop fullscreen
-      to be vr-mode too.
-
-      We only block mouse interaction during
-      an ACTUAL WebXR headset session.
-    */
     this.el.addEventListener(
       'click',
       (event) => {
@@ -114,10 +146,6 @@ AFRAME.registerComponent('door-hinge', {
             : null;
 
 
-        /*
-          If we clicked an actual individual
-          door part, toggle that exact part.
-        */
         if (
           hitObject &&
           this.activatePart(
@@ -129,10 +157,9 @@ AFRAME.registerComponent('door-hinge', {
 
 
         /*
-          If the door entity itself was clicked
-          but the exact internal mesh was not
-          identified, close an open door instead
-          of doing nothing.
+          If an open door has swung away,
+          clicking the doorway can close it
+          through #doorCloseTarget.
         */
         this.closeOpenDoor();
       }
@@ -141,62 +168,85 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     CHECK WHETHER AN OBJECT CONTAINS A MESH
+     DOES THIS OBJECT CONTAIN A MESH?
   ======================================================== */
 
-  hasMeshDescendant: function (
-    object
-  ) {
-    let found = false;
+  hasMeshDescendant:
+    function (object) {
+
+      let found =
+        false;
 
 
-    object.traverse(
-      (node) => {
-        if (node.isMesh) {
-          found = true;
+      object.traverse(
+        (node) => {
+          if (node.isMesh) {
+            found = true;
+          }
         }
-      }
-    );
-
-
-    return found;
-  },
-
-
-  /* ========================================================
-     FIND INDIVIDUAL DOOR PARTS INSIDE cua.glb
-
-     This preserves your original system.
-
-     If cua.glb contains two separate doors,
-     both can still be clicked separately.
-  ======================================================== */
-
-  prepareDoorParts: function () {
-    this.root =
-      this.el.getObject3D(
-        'mesh'
       );
 
 
-    if (!this.root) {
-      return;
-    }
+      return found;
+    },
 
 
-    let container =
-      this.root;
+  /* ========================================================
+     FIND INDIVIDUAL DOOR PARTS
+
+     Keeps support for separate doors inside cua.glb.
+  ======================================================== */
+
+  prepareDoorParts:
+    function () {
+
+      this.root =
+        this.el.getObject3D(
+          'mesh'
+        );
 
 
-    /*
-      Sometimes Blender GLBs contain several
-      wrapper groups.
+      if (!this.root) {
+        return;
+      }
 
-      Move down through single wrapper groups
-      until we find the useful children.
-    */
-    while (true) {
-      const meaningfulChildren =
+
+      let container =
+        this.root;
+
+
+      /*
+        Move through unnecessary wrapper groups.
+      */
+      while (true) {
+
+        const meaningfulChildren =
+          container.children.filter(
+            (child) =>
+              this.hasMeshDescendant(
+                child
+              )
+          );
+
+
+        if (
+          meaningfulChildren.length !== 1 ||
+          meaningfulChildren[0].isMesh
+        ) {
+          break;
+        }
+
+
+        container =
+          meaningfulChildren[0];
+      }
+
+
+      /*
+        Treat each meaningful child as an
+        independently selectable door part.
+      */
+      this.parts =
         container.children.filter(
           (child) =>
             this.hasMeshDescendant(
@@ -205,241 +255,187 @@ AFRAME.registerComponent('door-hinge', {
         );
 
 
-      if (
-        meaningfulChildren.length !== 1 ||
-        meaningfulChildren[0].isMesh
-      ) {
-        break;
+      /*
+        Fallback for a single-mesh door.
+      */
+      if (!this.parts.length) {
+        this.parts = [
+          container
+        ];
       }
 
 
-      container =
-        meaningfulChildren[0];
-    }
-
-
-    /*
-      Keep the individual Blender objects.
-
-      For example:
-
-      cua.glb
-        ├── LeftDoor
-        └── RightDoor
-
-      becomes two selectable parts.
-    */
-    this.parts =
-      container.children.filter(
-        (child) =>
-          this.hasMeshDescendant(
-            child
-          )
+      console.log(
+        `Door model contains ${this.parts.length} selectable part(s).`
       );
-
-
-    /*
-      If the GLB does not contain separate
-      child groups, treat the entire model
-      as one door.
-    */
-    if (!this.parts.length) {
-      this.parts = [
-        container
-      ];
-    }
-
-
-    console.log(
-      `Door model contains ${this.parts.length} selectable part(s).`
-    );
-  },
+    },
 
 
   /* ========================================================
      SMALL CLOSE-ONLY TARGET
 
-     This replaces the OLD giant invisible
-     .door-press-target.
+     Replaces the old giant invisible door target.
 
-     IMPORTANT:
+     It can close an open door.
 
-     This target does NOT open a door.
-
-     It only becomes active after a door
-     has already opened.
-
-     This allows Mac users to close a door
-     even after the physical panel has swung
-     away from the original doorway.
+     It cannot open a closed door.
   ======================================================== */
 
-  createCloseTarget: function () {
-    if (
-      this.closeTarget ||
-      !this.root
-    ) {
-      return;
-    }
+  createCloseTarget:
+    function () {
+
+      if (
+        this.closeTarget ||
+        !this.root
+      ) {
+        return;
+      }
 
 
-    this.root.updateMatrixWorld(
-      true
-    );
-
-
-    const box =
-      new THREE.Box3()
-        .setFromObject(
-          this.root
-        );
-
-
-    if (box.isEmpty()) {
-      return;
-    }
-
-
-    const size =
-      new THREE.Vector3();
-
-
-    const center =
-      new THREE.Vector3();
-
-
-    box.getSize(
-      size
-    );
-
-
-    box.getCenter(
-      center
-    );
-
-
-    const target =
-      document.createElement(
-        'a-box'
+      this.root.updateMatrixWorld(
+        true
       );
 
 
-    target.setAttribute(
-      'id',
-      'doorCloseTarget'
-    );
+      const box =
+        new THREE.Box3()
+          .setFromObject(
+            this.root
+          );
 
 
-    target.setAttribute(
-      'position',
-      `${center.x} ${center.y} ${center.z}`
-    );
-
-
-    /*
-      Much smaller than the old invisible
-      door target.
-
-      Old system used nearly 100% of the
-      door model.
-
-      This uses roughly 28% width and
-      30% height.
-    */
-    target.setAttribute(
-      'width',
-      Math.max(
-        size.x * 0.28,
-        0.18
-      )
-    );
-
-
-    target.setAttribute(
-      'height',
-      Math.max(
-        size.y * 0.30,
-        0.42
-      )
-    );
-
-
-    target.setAttribute(
-      'depth',
-      Math.max(
-        size.z * 0.28,
-        0.12
-      )
-    );
-
-
-    /*
-      Completely invisible.
-    */
-    target.setAttribute(
-      'material',
-      'opacity: 0; transparent: true; depthWrite: false; side: double'
-    );
-
-
-    /*
-      Starts disabled.
-
-      It becomes visible to the raycaster
-      only while a door is open.
-    */
-    target.setAttribute(
-      'visible',
-      false
-    );
-
-
-    /*
-      MAC CLICK
-
-      This area can ONLY close.
-      It cannot open a closed door.
-    */
-    target.addEventListener(
-      'click',
-      (event) => {
-        if (
-          isImmersiveXRScene(
-            this.el.sceneEl
-          )
-        ) {
-          return;
-        }
-
-
-        if (
-          event &&
-          event.stopPropagation
-        ) {
-          event.stopPropagation();
-        }
-
-
-        this.closeOpenDoor();
+      if (box.isEmpty()) {
+        return;
       }
-    );
 
 
-    this.el.sceneEl.appendChild(
-      target
-    );
+      const size =
+        new THREE.Vector3();
 
 
-    this.closeTarget =
-      target;
+      const center =
+        new THREE.Vector3();
 
 
-    this.updateCloseTarget();
-  },
+      box.getSize(
+        size
+      );
+
+
+      box.getCenter(
+        center
+      );
+
+
+      const target =
+        document.createElement(
+          'a-box'
+        );
+
+
+      target.setAttribute(
+        'id',
+        'doorCloseTarget'
+      );
+
+
+      target.setAttribute(
+        'position',
+        `${center.x} ${center.y} ${center.z}`
+      );
+
+
+      /*
+        Small interaction area in the
+        original doorway.
+      */
+      target.setAttribute(
+        'width',
+        Math.max(
+          size.x * 0.28,
+          0.18
+        )
+      );
+
+
+      target.setAttribute(
+        'height',
+        Math.max(
+          size.y * 0.30,
+          0.42
+        )
+      );
+
+
+      target.setAttribute(
+        'depth',
+        Math.max(
+          size.z * 0.28,
+          0.12
+        )
+      );
+
+
+      target.setAttribute(
+        'material',
+        'opacity: 0; transparent: true; depthWrite: false; side: double'
+      );
+
+
+      /*
+        Disabled when doors are closed.
+      */
+      target.setAttribute(
+        'visible',
+        false
+      );
+
+
+      /* ------------------------------------------------------
+         MAC CLOSE
+      ------------------------------------------------------ */
+
+      target.addEventListener(
+        'click',
+        (event) => {
+
+          if (
+            isImmersiveXRScene(
+              this.el.sceneEl
+            )
+          ) {
+            return;
+          }
+
+
+          if (
+            event &&
+            event.stopPropagation
+          ) {
+            event.stopPropagation();
+          }
+
+
+          this.closeOpenDoor();
+        }
+      );
+
+
+      this.el.sceneEl.appendChild(
+        target
+      );
+
+
+      this.closeTarget =
+        target;
+
+
+      this.updateCloseTarget();
+    },
 
 
   /* ========================================================
-     DEFAULT DOOR PART
+     DEFAULT DOOR
   ======================================================== */
 
   activateDefaultPart:
@@ -457,7 +453,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     FIND WHICH DOOR PART WAS CLICKED
+     FIND DOOR PART FROM RAYCAST HIT
   ======================================================== */
 
   findPartFromHit:
@@ -469,15 +465,12 @@ AFRAME.registerComponent('door-hinge', {
 
       while (current) {
 
-        /*
-          If this mesh already belongs to
-          a door state, return that door.
-        */
         if (
           current.userData &&
           current.userData
             .doorPartState
         ) {
+
           return current
             .userData
             .doorPartState
@@ -485,9 +478,6 @@ AFRAME.registerComponent('door-hinge', {
         }
 
 
-        /*
-          Exact door part.
-        */
         if (
           this.parts.includes(
             current
@@ -497,9 +487,6 @@ AFRAME.registerComponent('door-hinge', {
         }
 
 
-        /*
-          Stop once we reach the root GLB.
-        */
         if (
           current ===
           this.root
@@ -513,10 +500,6 @@ AFRAME.registerComponent('door-hinge', {
       }
 
 
-      /*
-        If there is only one door part,
-        safely use it.
-      */
       return (
         this.parts.length === 1
           ? this.parts[0]
@@ -526,7 +509,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     GET BOUNDING BOX OF ONE DOOR PART
+     LOCAL BOUNDING BOX
   ======================================================== */
 
   getLocalBoundingBox:
@@ -574,6 +557,7 @@ AFRAME.registerComponent('door-hinge', {
             !node.geometry
               .boundingBox
           ) {
+
             node.geometry
               .computeBoundingBox();
           }
@@ -616,21 +600,18 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     CREATE HINGE STATE FOR ONE DOOR
+     CREATE DOOR HINGE
   ======================================================== */
 
   createState:
     function (part) {
 
-      /*
-        If this door already has a hinge,
-        reuse it.
-      */
       if (
         this.partStates.has(
           part
         )
       ) {
+
         return this.partStates.get(
           part
         );
@@ -666,27 +647,23 @@ AFRAME.registerComponent('door-hinge', {
       );
 
 
-      /*
-        Work out whether the door is wider
-        across X or Z.
-      */
       const widthRunsAlongX =
-        size.x >= size.z;
+        size.x >=
+        size.z;
 
 
       const hingePosition =
         center.clone();
 
 
-      /*
-        Put hinge on selected side.
-      */
       if (widthRunsAlongX) {
 
         hingePosition.x =
           this.data.hingeSide ===
           'left'
+
             ? box.min.x
+
             : box.max.x;
 
       } else {
@@ -694,14 +671,13 @@ AFRAME.registerComponent('door-hinge', {
         hingePosition.z =
           this.data.hingeSide ===
           'left'
+
             ? box.min.z
+
             : box.max.z;
       }
 
 
-      /*
-        THREE.js pivot group.
-      */
       const pivot =
         new THREE.Group();
 
@@ -715,44 +691,43 @@ AFRAME.registerComponent('door-hinge', {
       );
 
 
-      /*
-        Add hinge to A-Frame door entity.
-      */
       this.el.object3D.add(
         pivot
       );
 
 
       /*
-        Reparent the actual door part under
-        the hinge while keeping its world
-        transform.
+        Reparent while preserving world transform.
       */
       pivot.attach(
         part
       );
 
 
-      /*
-        Every door part keeps its own
-        open/closed state.
-      */
       const state = {
-        part: part,
+        part:
+          part,
 
-        pivot: pivot,
+        pivot:
+          pivot,
 
-        isOpen: false,
+        isOpen:
+          false,
 
-        currentAngle: 0,
+        currentAngle:
+          0,
 
-        startAngle: 0,
+        startAngle:
+          0,
 
-        targetAngle: 0,
+        targetAngle:
+          0,
 
-        animationTime: 0,
+        animationTime:
+          0,
 
-        isAnimating: false
+        isAnimating:
+          false
       };
 
 
@@ -772,7 +747,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     START OPEN/CLOSE ANIMATION
+     START OPEN / CLOSE ANIMATION
   ======================================================== */
 
   startDoorAnimation:
@@ -781,10 +756,6 @@ AFRAME.registerComponent('door-hinge', {
       shouldOpen
     ) {
 
-      /*
-        Remember whether the door is
-        supposed to be open.
-      */
       state.isOpen =
         shouldOpen;
 
@@ -793,17 +764,12 @@ AFRAME.registerComponent('door-hinge', {
         state.currentAngle;
 
 
-      /*
-        Opening:
-          go to 100 degrees.
-
-        Closing:
-          go back to 0 degrees.
-      */
       const targetDegrees =
         shouldOpen
+
           ? this.data.openAngle *
             this.data.direction
+
           : 0;
 
 
@@ -814,23 +780,20 @@ AFRAME.registerComponent('door-hinge', {
           );
 
 
-      state.animationTime = 0;
+      state.animationTime =
+        0;
+
 
       state.isAnimating =
         true;
 
 
-      /*
-        Enable or disable the small
-        close target depending on
-        door state.
-      */
       this.updateCloseTarget();
     },
 
 
   /* ========================================================
-     CLICK / ACTIVATE A SPECIFIC DOOR
+     ACTIVATE SPECIFIC DOOR PART
   ======================================================== */
 
   activatePart:
@@ -841,8 +804,8 @@ AFRAME.registerComponent('door-hinge', {
 
 
       /*
-        Prevent accidental double activation
-        from one physical click.
+        Prevent one physical click/trigger
+        from activating twice.
       */
       if (
         now -
@@ -884,12 +847,10 @@ AFRAME.registerComponent('door-hinge', {
 
 
       /*
-        THIS IS THE REPEATED TOGGLE:
+        Repeating toggle:
 
         closed → open
         open → closed
-        closed → open
-        etc.
       */
       this.startDoorAnimation(
         state,
@@ -908,14 +869,12 @@ AFRAME.registerComponent('door-hinge', {
   getOpenState:
     function () {
 
-      /*
-        Prefer the most recently used door.
-      */
       if (
         this.lastActiveState &&
         this.lastActiveState
           .isOpen
       ) {
+
         return this.lastActiveState;
       }
 
@@ -924,9 +883,6 @@ AFRAME.registerComponent('door-hinge', {
         null;
 
 
-      /*
-        Otherwise find any open door.
-      */
       this.partStates.forEach(
         (state) => {
 
@@ -934,6 +890,7 @@ AFRAME.registerComponent('door-hinge', {
             !openState &&
             state.isOpen
           ) {
+
             openState =
               state;
           }
@@ -946,10 +903,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     RELIABLE CLOSE FUNCTION
-
-     Used by the small invisible
-     doorway target.
+     CLOSE OPEN DOOR
   ======================================================== */
 
   closeOpenDoor:
@@ -985,9 +939,6 @@ AFRAME.registerComponent('door-hinge', {
         state;
 
 
-      /*
-        Always close.
-      */
       this.startDoorAnimation(
         state,
         false
@@ -999,10 +950,9 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     TOGGLE MOST RECENT DOOR
+     TOGGLE LAST DOOR
 
-     Preserved for other systems such
-     as the story manager.
+     Kept for later story interaction.
   ======================================================== */
 
   toggleLastDoor:
@@ -1045,7 +995,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     SHOW CLOSE TARGET ONLY WHILE
+     SHOW SMALL CLOSE TARGET ONLY WHILE
      A DOOR IS OPEN
   ======================================================== */
 
@@ -1060,6 +1010,7 @@ AFRAME.registerComponent('door-hinge', {
       this.closeTarget
         .setAttribute(
           'visible',
+
           Boolean(
             this.getOpenState()
           )
@@ -1068,7 +1019,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     SMOOTH DOOR EASING
+     DOOR EASING
   ======================================================== */
 
   easeInOut:
@@ -1091,7 +1042,7 @@ AFRAME.registerComponent('door-hinge', {
 
 
   /* ========================================================
-     RUN DOOR ANIMATION
+     DOOR ANIMATION LOOP
   ======================================================== */
 
   tick:
@@ -1167,9 +1118,9 @@ AFRAME.registerComponent('door-hinge', {
 
 
 /* ============================================================
-   QUEST / VR DOOR INTERACTION
+   QUEST DOOR INTERACTION
 
-   Right trigger + controller ray.
+   Right-hand laser + trigger.
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1199,18 +1150,21 @@ AFRAME.registerComponent(
 
 
       this.pressTrigger =
-        this.pressTrigger
-          .bind(this);
+        this.pressTrigger.bind(
+          this
+        );
 
 
       this.releaseTrigger =
-        this.releaseTrigger
-          .bind(this);
+        this.releaseTrigger.bind(
+          this
+        );
 
 
       this.onTriggerChanged =
-        this.onTriggerChanged
-          .bind(this);
+        this.onTriggerChanged.bind(
+          this
+        );
 
 
       this.el.addEventListener(
@@ -1241,7 +1195,9 @@ AFRAME.registerComponent(
     pressTrigger:
       function (event) {
 
-        if (this.triggerHeld) {
+        if (
+          this.triggerHeld
+        ) {
           return;
         }
 
@@ -1250,6 +1206,7 @@ AFRAME.registerComponent(
           event &&
           event.stopPropagation
         ) {
+
           event.stopPropagation();
         }
 
@@ -1295,11 +1252,15 @@ AFRAME.registerComponent(
           event.detail &&
           typeof event.detail.value ===
             'number'
+
             ? event.detail.value
+
             : null;
 
 
-        if (value === null) {
+        if (
+          value === null
+        ) {
           return;
         }
 
@@ -1307,24 +1268,24 @@ AFRAME.registerComponent(
         if (
           value >=
             this.data.pressThreshold &&
+
           !this.triggerHeld
         ) {
 
           this.pressTrigger();
 
+
         } else if (
+
           value <=
-            this.data.releaseThreshold
+          this.data.releaseThreshold
+
         ) {
 
           this.releaseTrigger();
         }
       },
 
-
-    /* ======================================================
-       QUEST DOOR RAYCAST
-    ====================================================== */
 
     useDoor:
       function () {
@@ -1365,29 +1326,28 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          Refresh because doorCloseTarget is
-          dynamically added after the GLB loads.
-        */
         if (
           raycaster.refreshObjects
         ) {
+
           raycaster
             .refreshObjects();
         }
 
 
-        /*
-          FIRST:
-          check the close-only target.
-        */
+        /* --------------------------------------------------
+           CLOSE TARGET FIRST
+        -------------------------------------------------- */
+
         const closeIntersection =
           closeTarget &&
           raycaster.getIntersection
+
             ? raycaster
                 .getIntersection(
                   closeTarget
                 )
+
             : null;
 
 
@@ -1402,16 +1362,18 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          SECOND:
-          check actual visible door.
-        */
+        /* --------------------------------------------------
+           ACTUAL DOOR
+        -------------------------------------------------- */
+
         const doorIntersection =
           raycaster.getIntersection
+
             ? raycaster
                 .getIntersection(
                   door
                 )
+
             : null;
 
 
@@ -1422,26 +1384,21 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          Open/close the exact internal
-          door part hit by the laser.
-        */
         if (
           doorComponent
             .activatePart(
-              doorIntersection.object
+              doorIntersection
+                .object
             )
         ) {
+
           return;
         }
 
 
         /*
-          Fallback ONLY after the visible
-          door itself was genuinely hit.
-
-          Unlike the old code, looking beside
-          the door does not activate this.
+          Fallback only after the visible
+          door was actually hit.
         */
         doorComponent
           .activateDefaultPart();
@@ -1451,11 +1408,507 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
-   NATURAL GRAB SYSTEM
+   INTERACTIVE TV
 
-   teddy.glb
-   hairpin.glb
-   future clue objects
+   OFF:
+   - black screen
+   - no emissive glow
+   - room glow light off
+   - static audio off
+
+   ON:
+   - screen glows
+   - screen brightness flickers
+   - nearby room gets pale TV light
+   - TV static plays
+============================================================ */
+
+AFRAME.registerComponent(
+  'tv-toggle',
+  {
+
+    schema: {
+
+      glowLight: {
+        type: 'selector'
+      }
+    },
+
+
+    init: function () {
+
+      /*
+        TV begins OFF.
+      */
+      this.isOn =
+        false;
+
+
+      this.lastFlickerTime =
+        0;
+
+
+      /* ------------------------------------------------------
+         MAC / DESKTOP CLICK
+      ------------------------------------------------------ */
+
+      this.el.addEventListener(
+        'click',
+        (event) => {
+
+          /*
+            Quest uses vr-tv-interactor.
+
+            Mac fullscreen must still work.
+          */
+          if (
+            isImmersiveXRScene(
+              this.el.sceneEl
+            )
+          ) {
+            return;
+          }
+
+
+          if (
+            event &&
+            event.stopPropagation
+          ) {
+
+            event.stopPropagation();
+          }
+
+
+          this.toggle();
+        }
+      );
+
+
+      /*
+        Make sure screen starts black.
+      */
+      this.applyVisualState();
+    },
+
+
+    /* ======================================================
+       TOGGLE
+    ====================================================== */
+
+    toggle:
+      function () {
+
+        this.setState(
+          !this.isOn
+        );
+      },
+
+
+    /* ======================================================
+       SET EXACT TV STATE
+
+       This lets story.js control the TV later.
+
+       Example:
+
+       tv.components['tv-toggle']
+         .setState(true);
+
+       That can make the TV turn itself on
+       after the incense blackout.
+    ====================================================== */
+
+    setState:
+      function (
+        shouldBeOn
+      ) {
+
+        this.isOn =
+          Boolean(
+            shouldBeOn
+          );
+
+
+        this.applyVisualState();
+
+
+        /* --------------------------------------------------
+           AUDIO.JS
+
+           Start or stop the static.
+        -------------------------------------------------- */
+
+        if (
+          window.setRoomsTVState
+        ) {
+
+          window.setRoomsTVState(
+            this.isOn
+          );
+        }
+
+
+        /* --------------------------------------------------
+           CLEAN STORY EVENT
+
+           Other systems can listen for:
+
+           tv-state-changed
+        -------------------------------------------------- */
+
+        this.el.emit(
+          'tv-state-changed',
+
+          {
+            isOn:
+              this.isOn
+          },
+
+          false
+        );
+
+
+        console.log(
+          this.isOn
+
+            ? 'TV turned ON.'
+
+            : 'TV turned OFF.'
+        );
+      },
+
+
+    /* ======================================================
+       SCREEN + ROOM LIGHT
+    ====================================================== */
+
+    applyVisualState:
+      function () {
+
+        /* --------------------------------------------------
+           TV ON
+        -------------------------------------------------- */
+
+        if (this.isOn) {
+
+          /*
+            Screen itself becomes pale grey-blue.
+          */
+          this.el.setAttribute(
+            'material',
+            'color',
+            '#a9bdc8'
+          );
+
+
+          /*
+            Emissive makes the screen look
+            self-illuminated.
+          */
+          this.el.setAttribute(
+            'material',
+            'emissive',
+            '#d8efff'
+          );
+
+
+          this.el.setAttribute(
+            'material',
+            'emissiveIntensity',
+            2.2
+          );
+
+
+          /*
+            Actual point light lights nearby
+            walls/furniture.
+          */
+          if (
+            this.data.glowLight
+          ) {
+
+            this.data.glowLight
+              .setAttribute(
+                'light',
+                'intensity',
+                2.2
+              );
+          }
+
+
+        /* --------------------------------------------------
+           TV OFF
+        -------------------------------------------------- */
+
+        } else {
+
+          this.el.setAttribute(
+            'material',
+            'color',
+            '#050505'
+          );
+
+
+          this.el.setAttribute(
+            'material',
+            'emissive',
+            '#000000'
+          );
+
+
+          this.el.setAttribute(
+            'material',
+            'emissiveIntensity',
+            0
+          );
+
+
+          if (
+            this.data.glowLight
+          ) {
+
+            this.data.glowLight
+              .setAttribute(
+                'light',
+                'intensity',
+                0
+              );
+          }
+        }
+      },
+
+
+    /* ======================================================
+       OLD-TV SCREEN FLICKER
+
+       Only while TV is ON.
+    ====================================================== */
+
+    tick:
+      function (time) {
+
+        if (!this.isOn) {
+          return;
+        }
+
+
+        /*
+          Change roughly every 80ms instead
+          of every rendered frame.
+        */
+        if (
+          time -
+          this.lastFlickerTime <
+          80
+        ) {
+          return;
+        }
+
+
+        this.lastFlickerTime =
+          time;
+
+
+        /*
+          Random subtle screen brightness.
+        */
+        const screenBrightness =
+          1.7 +
+          Math.random() *
+          1.1;
+
+
+        this.el.setAttribute(
+          'material',
+          'emissiveIntensity',
+          screenBrightness
+        );
+
+
+        /*
+          The room illumination also changes
+          slightly with the TV screen.
+        */
+        if (
+          this.data.glowLight
+        ) {
+
+          const roomGlow =
+            1.6 +
+            Math.random() *
+            0.9;
+
+
+          this.data.glowLight
+            .setAttribute(
+              'light',
+              'intensity',
+              roomGlow
+            );
+        }
+      }
+  }
+);
+
+
+/* ============================================================
+   QUEST TV INTERACTION
+
+   Point the RIGHT controller laser at the TV.
+
+   Press trigger:
+
+   OFF → ON
+   ON → OFF
+============================================================ */
+
+AFRAME.registerComponent(
+  'vr-tv-interactor',
+  {
+
+    init: function () {
+
+      this.triggerHeld =
+        false;
+
+
+      this.onTriggerDown =
+        this.onTriggerDown.bind(
+          this
+        );
+
+
+      this.onTriggerUp =
+        this.onTriggerUp.bind(
+          this
+        );
+
+
+      this.el.addEventListener(
+        'triggerdown',
+        this.onTriggerDown
+      );
+
+
+      this.el.addEventListener(
+        'triggerup',
+        this.onTriggerUp
+      );
+
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.onTriggerUp
+      );
+    },
+
+
+    /* ======================================================
+       TRIGGER PRESSED
+    ====================================================== */
+
+    onTriggerDown:
+      function () {
+
+        /*
+          One physical press =
+          one TV toggle.
+        */
+        if (
+          this.triggerHeld
+        ) {
+          return;
+        }
+
+
+        this.triggerHeld =
+          true;
+
+
+        const raycaster =
+          this.el.components
+            .raycaster;
+
+
+        const screen =
+          document.querySelector(
+            '#tvScreen'
+          );
+
+
+        if (
+          !raycaster ||
+          !screen
+        ) {
+          return;
+        }
+
+
+        if (
+          raycaster.refreshObjects
+        ) {
+
+          raycaster
+            .refreshObjects();
+        }
+
+
+        /*
+          Is controller laser actually
+          touching the TV?
+        */
+        const intersection =
+          raycaster.getIntersection
+
+            ? raycaster
+                .getIntersection(
+                  screen
+                )
+
+            : null;
+
+
+        if (
+          !intersection
+        ) {
+          return;
+        }
+
+
+        const tv =
+          screen.components[
+            'tv-toggle'
+          ];
+
+
+        if (tv) {
+
+          tv.toggle();
+        }
+      },
+
+
+    /* ======================================================
+       TRIGGER RELEASED
+    ====================================================== */
+
+    onTriggerUp:
+      function () {
+
+        this.triggerHeld =
+          false;
+      }
+  }
+);
+
+
+/* ============================================================
+   NATURAL GRABBABLE OBJECT
+
+   Used by:
+   - teddy
+   - later incense
+   - future clue objects
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1516,19 +1969,18 @@ AFRAME.registerComponent(
         0;
 
 
-      /*
-        MAC CLICK PICKUP
+      /* ------------------------------------------------------
+         MAC PICKUP
+      ------------------------------------------------------ */
 
-        Again: block mouse interaction only
-        during a REAL immersive headset
-        session.
-
-        Mac fullscreen remains interactive.
-      */
       this.el.addEventListener(
         'click',
         () => {
 
+          /*
+            Don't run Mac pickup in actual
+            immersive Quest VR.
+          */
           if (
             isImmersiveXRScene(
               this.el.sceneEl
@@ -1549,21 +2001,22 @@ AFRAME.registerComponent(
           }
 
 
-          /*
-            Click held object again:
-            release it.
-
-            Click unheld object:
-            pick it up.
-          */
           if (this.heldBy) {
 
+            /*
+              Click held object again:
+              put it down.
+            */
             this.release(
               new THREE.Vector3()
             );
 
+
           } else {
 
+            /*
+              Pick it up.
+            */
             this.grab(
               desktopHold
             );
@@ -1573,9 +2026,9 @@ AFRAME.registerComponent(
     },
 
 
-  /* ========================================================
-     GET WORLD BOUNDING BOX
-  ======================================================== */
+    /* ======================================================
+       GET OBJECT BOUNDING BOX
+    ====================================================== */
 
     getWorldBox:
       function () {
@@ -1601,9 +2054,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     DISTANCE FROM HAND TO OBJECT
-  ======================================================== */
+    /* ======================================================
+       DISTANCE FROM HAND TO OBJECT
+    ====================================================== */
 
     distanceToPoint:
       function (
@@ -1628,18 +2081,16 @@ AFRAME.registerComponent(
             );
 
 
-        return (
-          closest.distanceTo(
+        return closest
+          .distanceTo(
             worldPoint
-          )
-        );
+          );
       },
 
 
-  /* ========================================================
-     MOVE OBJECT BETWEEN PARENTS
-     WITHOUT TELEPORTING IT
-  ======================================================== */
+    /* ======================================================
+       REPARENT WITHOUT MOVING OBJECT
+    ====================================================== */
 
     reparentPreserveWorld:
       function (
@@ -1658,9 +2109,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     GRAB
-  ======================================================== */
+    /* ======================================================
+       GRAB OBJECT
+    ====================================================== */
 
     grab:
       function (
@@ -1693,8 +2144,8 @@ AFRAME.registerComponent(
 
 
         /*
-          story.js listens for this state
-          when an object has class="clue".
+          story.js detects this state
+          on objects with class="clue".
         */
         this.el.addState(
           'grabbed'
@@ -1712,9 +2163,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     RELEASE / THROW
-  ======================================================== */
+    /* ======================================================
+       RELEASE / THROW
+    ====================================================== */
 
     release:
       function (
@@ -1730,9 +2181,6 @@ AFRAME.registerComponent(
           this.el.sceneEl;
 
 
-        /*
-          Return object to the main scene.
-        */
         this.reparentPreserveWorld(
           scene.object3D
         );
@@ -1753,24 +2201,21 @@ AFRAME.registerComponent(
         );
 
 
-        this.velocity.multiplyScalar(
-          this.data
-            .throwMultiplier
-        );
+        this.velocity
+          .multiplyScalar(
+            this.data
+              .throwMultiplier
+          );
 
 
-        this.velocity.clampLength(
-          0,
-          this.data
-            .maxThrowSpeed
-        );
+        this.velocity
+          .clampLength(
+            0,
+            this.data
+              .maxThrowSpeed
+          );
 
 
-        /*
-          Very slow release:
-          try settling it immediately
-          on nearby furniture/floor.
-        */
         if (
           this.velocity.length() <
           0.22
@@ -1790,12 +2235,21 @@ AFRAME.registerComponent(
           this.isMoving =
             true;
         }
+
+
+        console.log(
+          this.el.id,
+          'released at speed',
+          this.velocity
+            .length()
+            .toFixed(2)
+        );
       },
 
 
-  /* ========================================================
-     CACHE ROOM MESHES
-  ======================================================== */
+    /* ======================================================
+       GET ROOM SURFACE MESHES
+    ====================================================== */
 
     getRoomMeshes:
       function () {
@@ -1807,10 +2261,12 @@ AFRAME.registerComponent(
         if (
           this.cachedRoomMeshes
             .length &&
+
           now -
           this.roomMeshCacheTime <
           5000
         ) {
+
           return (
             this.cachedRoomMeshes
           );
@@ -1829,10 +2285,9 @@ AFRAME.registerComponent(
             (entity) => {
 
               const root =
-                entity
-                  .getObject3D(
-                    'mesh'
-                  );
+                entity.getObject3D(
+                  'mesh'
+                );
 
 
               if (!root) {
@@ -1851,6 +2306,7 @@ AFRAME.registerComponent(
                   if (
                     node.isMesh
                   ) {
+
                     meshes.push(
                       node
                     );
@@ -1875,9 +2331,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     PLACE DROPPED ITEM ON A NEARBY SURFACE
-  ======================================================== */
+    /* ======================================================
+       SETTLE OBJECT ON A SURFACE
+    ====================================================== */
 
     settleOnNearbySurface:
       function (
@@ -1913,10 +2369,6 @@ AFRAME.registerComponent(
         );
 
 
-        /*
-          Cast downward from slightly above
-          the bottom of the object's box.
-        */
         const origin =
           new THREE.Vector3(
             center.x,
@@ -1927,6 +2379,7 @@ AFRAME.registerComponent(
 
         this.dropRay.set(
           origin,
+
           new THREE.Vector3(
             0,
             -1,
@@ -1961,16 +2414,12 @@ AFRAME.registerComponent(
         if (
           gap < -0.03 ||
           gap >
-          maximumDistance
+            maximumDistance
         ) {
           return false;
         }
 
 
-        /*
-          Move object so its bottom sits
-          slightly above the surface.
-        */
         this.el.object3D
           .position.y +=
           hit.point.y -
@@ -1989,9 +2438,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     SIMPLE THROW / GRAVITY PHYSICS
-  ======================================================== */
+    /* ======================================================
+       GRAVITY / SIMPLE THROW PHYSICS
+    ====================================================== */
 
     tick:
       function (
@@ -2024,7 +2473,7 @@ AFRAME.registerComponent(
 
 
         /*
-          Movement.
+          Move object.
         */
         this.el.object3D
           .position
@@ -2062,9 +2511,10 @@ AFRAME.registerComponent(
           this.getWorldBox();
 
 
-        /*
-          Basic fallback floor.
-        */
+        /* --------------------------------------------------
+           FALLBACK FLOOR
+        -------------------------------------------------- */
+
         if (!box.isEmpty()) {
 
           const floorPenetration =
@@ -2083,12 +2533,13 @@ AFRAME.registerComponent(
 
 
             /*
-              Small bounce for stronger throws.
+              Small bounce after a stronger throw.
             */
             if (
               Math.abs(
                 this.velocity.y
-              ) > 0.8
+              ) >
+              0.8
             ) {
 
               this.velocity.y *=
@@ -2101,6 +2552,7 @@ AFRAME.registerComponent(
 
               this.velocity.z *=
                 0.72;
+
 
             } else {
 
@@ -2118,16 +2570,19 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          While falling, occasionally look
-          for furniture/surfaces.
-        */
+        /* --------------------------------------------------
+           FURNITURE / SURFACE SETTLING
+        -------------------------------------------------- */
+
         if (
           this.isMoving &&
-          this.velocity.y <= 0 &&
+
+          this.velocity.y <=
+            0 &&
+
           time -
-          this.lastSurfaceCheck >
-          120
+            this.lastSurfaceCheck >
+            120
         ) {
 
           this.lastSurfaceCheck =
@@ -2139,6 +2594,7 @@ AFRAME.registerComponent(
               0.12
             )
           ) {
+
             this.isMoving =
               false;
           }
@@ -2149,7 +2605,9 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
-   VR HAND GRABBING
+   QUEST NATURAL GRAB
+
+   Grip controller near teddy/clue/etc.
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -2207,23 +2665,27 @@ AFRAME.registerComponent(
 
 
       this.beginGrip =
-        this.beginGrip
-          .bind(this);
+        this.beginGrip.bind(
+          this
+        );
 
 
       this.endGrip =
-        this.endGrip
-          .bind(this);
+        this.endGrip.bind(
+          this
+        );
 
 
       this.onGripChanged =
-        this.onGripChanged
-          .bind(this);
+        this.onGripChanged.bind(
+          this
+        );
 
 
-      /*
-        Meta Quest grip events.
-      */
+      /* ------------------------------------------------------
+         QUEST GRIP EVENTS
+      ------------------------------------------------------ */
+
       this.el.addEventListener(
         'gripdown',
         this.beginGrip
@@ -2255,8 +2717,7 @@ AFRAME.registerComponent(
 
 
       /*
-        Additional controller buttons
-        as fallback pickup controls.
+        Controller-button fallbacks.
       */
       this.el.addEventListener(
         'abuttondown',
@@ -2289,9 +2750,9 @@ AFRAME.registerComponent(
     },
 
 
-  /* ========================================================
-     ANALOG GRIP
-  ======================================================== */
+    /* ======================================================
+       ANALOG GRIP
+    ====================================================== */
 
     onGripChanged:
       function (event) {
@@ -2315,7 +2776,9 @@ AFRAME.registerComponent(
               );
 
 
-        if (value === null) {
+        if (
+          value === null
+        ) {
           return;
         }
 
@@ -2337,9 +2800,12 @@ AFRAME.registerComponent(
 
           this.beginGrip();
 
+
         } else if (
+
           !isPressed &&
           this.analogGripHeld
+
         ) {
 
           this.analogGripHeld =
@@ -2351,14 +2817,16 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     START GRIP
-  ======================================================== */
+    /* ======================================================
+       BEGIN GRAB
+    ====================================================== */
 
     beginGrip:
       function () {
 
-        if (this.gripHeld) {
+        if (
+          this.gripHeld
+        ) {
           return;
         }
 
@@ -2371,9 +2839,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     RELEASE GRIP
-  ======================================================== */
+    /* ======================================================
+       END GRAB
+    ====================================================== */
 
     endGrip:
       function () {
@@ -2394,9 +2862,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     FIND NEAREST GRABBABLE OBJECT
-  ======================================================== */
+    /* ======================================================
+       FIND NEAREST GRABBABLE
+    ====================================================== */
 
     findNearest:
       function () {
@@ -2472,7 +2940,8 @@ AFRAME.registerComponent(
 
 
         return {
-          nearest: nearest,
+          nearest:
+            nearest,
 
           nearestEl:
             nearestEl,
@@ -2483,14 +2952,16 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     GRAB NEAREST
-  ======================================================== */
+    /* ======================================================
+       GRAB NEAREST
+    ====================================================== */
 
     grabNearest:
       function () {
 
-        if (this.heldItem) {
+        if (
+          this.heldItem
+        ) {
           return;
         }
 
@@ -2503,13 +2974,10 @@ AFRAME.registerComponent(
           this.findNearest();
 
 
-        /*
-          Nothing close enough.
-        */
         if (
           !nearest ||
           nearestDistance >
-          this.data.radius
+            this.data.radius
         ) {
 
           console.log(
@@ -2525,9 +2993,6 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          Successful grab.
-        */
         if (
           nearest.grab(
             this.el
@@ -2540,14 +3005,16 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     RELEASE HELD OBJECT
-  ======================================================== */
+    /* ======================================================
+       RELEASE HELD ITEM
+    ====================================================== */
 
     releaseHeld:
       function () {
 
-        if (!this.heldItem) {
+        if (
+          !this.heldItem
+        ) {
           return;
         }
 
@@ -2560,9 +3027,6 @@ AFRAME.registerComponent(
           null;
 
 
-        /*
-          Throw using smoothed hand velocity.
-        */
         released.release(
           this.smoothedVelocity
             .clone()
@@ -2570,9 +3034,9 @@ AFRAME.registerComponent(
       },
 
 
-  /* ========================================================
-     CALCULATE HAND VELOCITY
-  ======================================================== */
+    /* ======================================================
+       CALCULATE HAND VELOCITY FOR THROWING
+    ====================================================== */
 
     tick:
       function (
@@ -2591,9 +3055,6 @@ AFRAME.registerComponent(
           );
 
 
-        /*
-          First frame.
-        */
         if (
           !this.hasPreviousPosition
         ) {
@@ -2617,11 +3078,10 @@ AFRAME.registerComponent(
           1000;
 
 
-        if (seconds > 0) {
+        if (
+          seconds > 0
+        ) {
 
-          /*
-            Raw controller velocity.
-          */
           this.instantVelocity
             .subVectors(
               this.currentPosition,
@@ -2632,10 +3092,6 @@ AFRAME.registerComponent(
             );
 
 
-          /*
-            Smooth the velocity so throws
-            do not feel extremely jittery.
-          */
           this.smoothedVelocity
             .lerp(
               this.instantVelocity,
