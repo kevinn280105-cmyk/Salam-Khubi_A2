@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+
 <html lang="vi">
 
 <head>
@@ -9,7 +10,10 @@
     name="viewport"
     content="width=device-width, initial-scale=1" />
 
-  <title>Rooms Within</title>
+
+  <title>
+    VR Room - Mac and VR Door Support
+  </title>
 
 
   <!-- ======================================================
@@ -23,6 +27,10 @@
 
   <!-- ======================================================
        MOVEMENT CONTROLS
+
+       Keyboard
+       Touch
+       VR thumbsticks
   ======================================================= -->
 
   <script
@@ -46,236 +54,82 @@
   <style>
 
     body {
+
       margin: 0;
+
       overflow: hidden;
+
       background: #020202;
     }
 
 
-    /* ------------------------------------------------------
-       DARK EDGE / VIGNETTE
-    ------------------------------------------------------ */
-
     #vignette {
+
       position: fixed;
+
       inset: 0;
+
       z-index: 999;
+
       pointer-events: none;
 
+
       background:
+
         radial-gradient(
+
           ellipse at center,
+
           rgba(0, 0, 0, 0) 50%,
+
           rgba(5, 8, 5, 0.5) 100%
         );
     }
 
 
-    /* ------------------------------------------------------
-       ENABLE SOUND BUTTON
-    ------------------------------------------------------ */
-
     #soundButton {
+
       position: fixed;
+
       top: 16px;
+
       left: 16px;
+
       z-index: 1000;
 
+
       padding: 12px 18px;
+
 
       border:
         1px solid
         rgba(255, 255, 255, 0.75);
 
+
       border-radius: 8px;
 
+
       color: white;
+
 
       background:
         rgba(0, 0, 0, 0.82);
 
+
       font:
         600 15px Arial,
         sans-serif;
+
 
       cursor: pointer;
     }
 
 
     #soundButton:disabled {
+
       opacity: 0.7;
+
       cursor: default;
-    }
-
-
-    /* ======================================================
-       MAC VR / FULLSCREEN CONTROLS
-    ======================================================= */
-
-    .screen-vr-control {
-      position: fixed;
-
-      top:
-        max(
-          12px,
-          env(safe-area-inset-top)
-        );
-
-      z-index: 1005;
-
-      width: 36px;
-      height: 36px;
-
-      padding: 0;
-
-      display: none;
-
-      align-items: center;
-      justify-content: center;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.24);
-
-      border-radius: 999px;
-
-      color: #ffffff;
-
-      background:
-        rgba(17, 19, 23, 0.94);
-
-      box-shadow:
-        0 5px 18px
-        rgba(0, 0, 0, 0.42);
-
-      cursor: pointer;
-
-      opacity: 0.92;
-    }
-
-
-    .screen-vr-control.is-visible {
-      display: flex;
-    }
-
-
-    .screen-vr-control:hover {
-      opacity: 1;
-      transform: scale(1.06);
-    }
-
-
-    .screen-vr-control svg {
-      width: 19px;
-      height: 19px;
-
-      pointer-events: none;
-    }
-
-
-    #screenSettingsButton {
-      left:
-        max(
-          12px,
-          env(safe-area-inset-left)
-        );
-    }
-
-
-    #screenExitButton {
-      right:
-        max(
-          12px,
-          env(safe-area-inset-right)
-        );
-    }
-
-
-    /* ======================================================
-       MAC SETTINGS PANEL
-    ======================================================= */
-
-    #screenSettingsPanel {
-      position: fixed;
-
-      top:
-        max(
-          58px,
-          calc(
-            env(safe-area-inset-top)
-            + 58px
-          )
-        );
-
-      left:
-        max(
-          12px,
-          env(safe-area-inset-left)
-        );
-
-      z-index: 1005;
-
-      display: none;
-
-      align-items: center;
-
-      gap: 7px;
-
-      padding: 9px;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.16);
-
-      border-radius: 12px;
-
-      background:
-        rgba(12, 13, 16, 0.93);
-
-      box-shadow:
-        0 8px 24px
-        rgba(0, 0, 0, 0.44);
-    }
-
-
-    #screenSettingsPanel.is-open {
-      display: flex;
-    }
-
-
-    .settings-mini-button {
-      min-width: 34px;
-      height: 30px;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.16);
-
-      border-radius: 8px;
-
-      color: #ffffff;
-
-      background:
-        rgba(255, 255, 255, 0.07);
-
-      cursor: pointer;
-
-      font:
-        600 14px Arial,
-        sans-serif;
-    }
-
-
-    #screenVolumeLabel {
-      min-width: 42px;
-
-      color: #ffffff;
-
-      text-align: center;
-
-      font:
-        600 11px Arial,
-        sans-serif;
     }
 
   </style>
@@ -284,18 +138,33 @@
   <!-- ======================================================
        SPLIT JAVASCRIPT FILES
 
-       These are beside index.html in your repository.
+       These are all beside index.html
+       in your current folder.
   ======================================================= -->
 
-  <script src="engine-environment.js"></script>
+  <script
+    src="engine-environment.js">
+  </script>
 
-  <script src="engine-interactions.js"></script>
 
-  <script src="audio.js"></script>
+  <script
+    src="engine-interactions.js">
+  </script>
 
-  <script src="story.js"></script>
 
-  <script src="ui-scare.js"></script>
+  <script
+    src="audio.js">
+  </script>
+
+
+  <script
+    src="story.js">
+  </script>
+
+
+  <script
+    src="ui-scare.js">
+  </script>
 
 </head>
 
@@ -307,16 +176,21 @@
        VIGNETTE
   ======================================================= -->
 
-  <div id="vignette"></div>
+  <div
+    id="vignette">
+  </div>
 
 
   <!-- ======================================================
-       ENABLE SOUND
+       SOUND BUTTON
   ======================================================= -->
 
   <button
+
     id="soundButton"
+
     type="button"
+
     onclick="enableSound()">
 
     ENABLE SOUND
@@ -325,188 +199,82 @@
 
 
   <!-- ======================================================
-       MAC SETTINGS BUTTON
+       AUDIO
   ======================================================= -->
 
-  <button
-    id="screenSettingsButton"
-    class="screen-vr-control"
-    type="button"
 
-    aria-label="Settings"
-    title="Settings"
-
-    onclick="toggleRoomsSettings()">
-
-
-    <svg
-      viewBox="0 0 24 24"
-
-      fill="none"
-
-      stroke="currentColor"
-
-      stroke-width="1.7"
-
-      stroke-linecap="round"
-
-      stroke-linejoin="round"
-
-      aria-hidden="true">
-
-
-      <circle
-        cx="12"
-        cy="12"
-        r="3.2">
-      </circle>
-
-
-      <circle
-        cx="12"
-        cy="12"
-        r="7.1">
-      </circle>
-
-
-      <path
-        d="
-          M12 2.8v2.2
-          M12 19v2.2
-          M2.8 12H5
-          M19 12h2.2">
-      </path>
-
-
-      <path
-        d="
-          M5.5 5.5l1.6 1.6
-          M16.9 16.9l1.6 1.6
-          M18.5 5.5l-1.6 1.6
-          M7.1 16.9l-1.6 1.6">
-      </path>
-
-    </svg>
-
-  </button>
-
-
-  <!-- ======================================================
-       MAC SETTINGS PANEL
-  ======================================================= -->
-
-  <div id="screenSettingsPanel">
-
-
-    <button
-      class="settings-mini-button"
-      type="button"
-
-      aria-label="Lower volume"
-
-      onclick="changeRoomsVolume(-0.1)">
-
-      −
-
-    </button>
-
-
-    <span id="screenVolumeLabel">
-
-      100%
-
-    </span>
-
-
-    <button
-      class="settings-mini-button"
-      type="button"
-
-      aria-label="Mute or unmute"
-
-      onclick="toggleRoomsMute()">
-
-      ♪
-
-    </button>
-
-
-    <button
-      class="settings-mini-button"
-      type="button"
-
-      aria-label="Raise volume"
-
-      onclick="changeRoomsVolume(0.1)">
-
-      +
-
-    </button>
-
-  </div>
-
-
-  <!-- ======================================================
-       MAC EXIT BUTTON
-  ======================================================= -->
-
-  <button
-    id="screenExitButton"
-    class="screen-vr-control"
-    type="button"
-
-    aria-label="Exit VR or fullscreen"
-
-    title="Exit"
-
-    onclick="exitRoomsWithin()">
-
-
-    <svg
-      viewBox="0 0 24 24"
-
-      fill="none"
-
-      stroke="currentColor"
-
-      stroke-width="1.8"
-
-      stroke-linecap="round"
-
-      stroke-linejoin="round"
-
-      aria-hidden="true">
-
-
-      <path
-        d="
-          M10 5H6.8
-          A1.8 1.8 0 0 0 5 6.8
-          v10.4
-          A1.8 1.8 0 0 0 6.8 19
-          H10">
-      </path>
-
-
-      <path
-        d="M13 8l4 4-4 4">
-      </path>
-
-
-      <path
-        d="M9 12h8">
-      </path>
-
-    </svg>
-
-  </button>
-
-
-  <!-- ======================================================
-       PLAYER FOOTSTEPS
-  ======================================================= -->
+  <!-- Ceiling fan -->
 
   <audio
+
+    id="fanAudio"
+
+    src="sounds/73347__noisecollector__noisy_ceiling_fan.mp3"
+
+    preload="auto"
+
+    loop
+
+    playsinline>
+
+  </audio>
+
+
+  <!-- Bedroom rain -->
+
+  <audio
+
+    id="bedroomRainAudio"
+
+    src="sounds/bedroom-rain.wav"
+
+    preload="auto"
+
+    loop
+
+    playsinline>
+
+  </audio>
+
+
+  <!-- Fluorescent light -->
+
+  <audio
+
+    id="fluorescentAudio"
+
+    src="sounds/fluorescent-light.wav"
+
+    preload="auto"
+
+    loop
+
+    playsinline>
+
+  </audio>
+
+
+  <!-- TV static -->
+
+  <audio
+
+    id="tvStaticAudio"
+
+    src="sounds/tv-static.mp3"
+
+    preload="auto"
+
+    loop
+
+    playsinline>
+
+  </audio>
+
+
+  <!-- Player footsteps -->
+
+  <audio
+
     id="footstepAudio"
 
     src="sounds/842186__aardsreal__footstep-floor.wav"
@@ -516,21 +284,7 @@
     loop
 
     playsinline>
-  </audio>
 
-
-  <!-- ======================================================
-       SEPARATE SCARE FOOTSTEPS
-  ======================================================= -->
-
-  <audio
-    id="scareFootstepAudio"
-
-    src="sounds/842186__aardsreal__footstep-floor.wav"
-
-    preload="auto"
-
-    playsinline>
   </audio>
 
 
@@ -539,10 +293,6 @@
   ======================================================= -->
 
   <a-scene
-
-    ui-flow-manager
-
-    spatial-audio-manager
 
 
     background="
@@ -635,8 +385,11 @@
 
 
     <!-- ====================================================
-         WALL + GROUND
+         SPLIT ROOM MODELS
     ===================================================== -->
+
+
+    <!-- WALL + GROUND -->
 
     <a-entity
 
@@ -656,9 +409,8 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         LIVING ROOM
-    ===================================================== -->
+
+    <!-- LIVING ROOM -->
 
     <a-entity
 
@@ -678,9 +430,8 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         KITCHEN
-    ===================================================== -->
+
+    <!-- KITCHEN -->
 
     <a-entity
 
@@ -700,9 +451,8 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         BEDROOM
-    ===================================================== -->
+
+    <!-- BEDROOM -->
 
     <a-entity
 
@@ -722,9 +472,8 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         TOILET
-    ===================================================== -->
+
+    <!-- TOILET -->
 
     <a-entity
 
@@ -744,9 +493,8 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         BAN THO / OFFERING TABLE
-    ===================================================== -->
+
+    <!-- BAN THO -->
 
     <a-entity
 
@@ -762,80 +510,6 @@
 
       model-status="
         name: Ban tho">
-
-    </a-entity>
-
-
-    <!-- ====================================================
-         INTERACTIVE TV
-
-         This is a temporary plane over the TV screen
-         inside livingasset.glb.
-
-         IMPORTANT:
-         position / rotation / size will probably need
-         adjustment once you look at it in the room.
-    ===================================================== -->
-
-    <a-plane
-
-      id="tvScreen"
-
-      class="tv-interactable"
-
-
-      position="2.2 1.15 -1.79"
-
-
-      rotation="0 0 0"
-
-
-      width="0.85"
-
-      height="0.48"
-
-
-      material="
-        shader: standard;
-        color: #050505;
-        roughness: 0.35;
-        metalness: 0;
-        emissive: #000000;
-        emissiveIntensity: 0"
-
-
-      tv-toggle="
-        glowLight: #tvGlowLight">
-
-    </a-plane>
-
-
-    <!-- ====================================================
-         TV ROOM GLOW
-
-         OFF:
-         intensity = 0
-
-         ON:
-         engine-interactions.js raises intensity
-         and flickers it slightly.
-    ===================================================== -->
-
-    <a-entity
-
-      id="tvGlowLight"
-
-
-      position="2.2 1.15 -1.55"
-
-
-      light="
-        type: point;
-        color: #c7e7ff;
-        intensity: 0;
-        distance: 3;
-        decay: 2;
-        castShadow: false">
 
     </a-entity>
 
@@ -944,7 +618,49 @@
 
 
     <!-- ====================================================
-         STORY MANAGER
+         INTERACTIVE HAIRPIN
+
+         Keep this only when hairpin.glb exists.
+    ===================================================== -->
+
+    <a-entity
+
+      id="hairpin"
+
+      class="item interactable"
+
+
+      gltf-model="url(hairpin.glb)"
+
+
+      position="0 0 0"
+
+
+      natural-grabbable
+
+
+      model-status="
+        name: Hairpin"
+
+
+      animation__hoverin="
+        property: scale;
+        to: 1.2 1.2 1.2;
+        startEvents: mouseenter;
+        dur: 200"
+
+
+      animation__hoverout="
+        property: scale;
+        to: 1 1 1;
+        startEvents: mouseleave;
+        dur: 200">
+
+    </a-entity>
+
+
+    <!-- ====================================================
+         STORY / SCARE SYSTEM
     ===================================================== -->
 
     <a-entity
@@ -956,20 +672,20 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         JUMPSCARE CONTROLLER
-    ===================================================== -->
 
     <a-entity
+
       jumpscare-controller>
+
     </a-entity>
 
 
-    <!-- Placeholder until scare model exists -->
 
     <a-entity
 
       id="scare-character"
+
+      gltf-model="url(scare.glb)"
 
       position="0 0 0"
 
@@ -1037,414 +753,7 @@
 
 
         <!-- ================================================
-             QUEST SETTINGS BUTTON
-        ================================================= -->
-
-        <a-circle
-
-          id="vrSettingsButton"
-
-          class="vr-control"
-
-          visible="false"
-
-
-          camera-corner-ui="
-            side: left;
-            distance: 2;
-            horizontalInset: 0.13;
-            verticalInset: 0.16"
-
-
-          radius="0.044"
-
-          segments="40"
-
-
-          material="
-            color: #17191c;
-            opacity: 0.94;
-            transparent: true;
-            shader: flat;
-            side: double">
-
-
-          <a-ring
-
-            radius-inner="0.038"
-
-            radius-outer="0.044"
-
-            segments-theta="40"
-
-            position="0 0 0.002"
-
-
-            material="
-              color: #69758d;
-              shader: flat;
-              side: double">
-
-          </a-ring>
-
-
-          <a-ring
-
-            radius-inner="0.010"
-
-            radius-outer="0.017"
-
-            segments-theta="24"
-
-            position="0 0 0.006"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-ring>
-
-
-          <a-plane
-
-            width="0.036"
-
-            height="0.004"
-
-            position="0 0 0.007"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.036"
-
-            height="0.004"
-
-            rotation="0 0 60"
-
-            position="0 0 0.008"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.036"
-
-            height="0.004"
-
-            rotation="0 0 120"
-
-            position="0 0 0.009"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-        </a-circle>
-
-
-        <!-- ================================================
-             QUEST EXIT BUTTON
-        ================================================= -->
-
-        <a-circle
-
-          id="vrExitButton"
-
-          class="vr-control"
-
-          visible="false"
-
-
-          camera-corner-ui="
-            side: right;
-            distance: 2;
-            horizontalInset: 0.13;
-            verticalInset: 0.16"
-
-
-          radius="0.044"
-
-          segments="40"
-
-
-          material="
-            color: #17191c;
-            opacity: 0.94;
-            transparent: true;
-            shader: flat;
-            side: double">
-
-
-          <a-ring
-
-            radius-inner="0.038"
-
-            radius-outer="0.044"
-
-            segments-theta="40"
-
-            position="0 0 0.002"
-
-
-            material="
-              color: #a64a4a;
-              shader: flat;
-              side: double">
-
-          </a-ring>
-
-
-          <a-plane
-
-            width="0.004"
-
-            height="0.032"
-
-            position="-0.014 0 0.006"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.031"
-
-            height="0.004"
-
-            position="0.003 0 0.007"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.016"
-
-            height="0.004"
-
-            rotation="0 0 45"
-
-            position="0.016 0.006 0.008"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.016"
-
-            height="0.004"
-
-            rotation="0 0 -45"
-
-            position="0.016 -0.006 0.009"
-
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-        </a-circle>
-
-
-        <!-- ================================================
-             QUEST SETTINGS PANEL
-        ================================================= -->
-
-        <a-entity
-
-          id="vrSettingsPanel"
-
-          visible="false"
-
-          position="-0.48 0.27 -1.8">
-
-
-          <a-plane
-
-            width="0.34"
-
-            height="0.115"
-
-
-            material="
-              color: #111318;
-              opacity: 0.94;
-              transparent: true;
-              shader: flat;
-              side: double">
-
-          </a-plane>
-
-
-          <a-circle
-
-            id="vrVolumeDown"
-
-            class="vr-control"
-
-            radius="0.026"
-
-            position="-0.10 0 0.008"
-
-
-            material="
-              color: #333944;
-              shader: flat;
-              side: double">
-
-
-            <a-text
-
-              value="-"
-
-              align="center"
-
-              width="0.46"
-
-              position="0 0 0.004"
-
-              color="#ffffff">
-
-            </a-text>
-
-          </a-circle>
-
-
-          <a-text
-
-            id="vrVolumeLabel"
-
-            value="100%"
-
-            align="center"
-
-            width="0.42"
-
-            position="0 0 0.008"
-
-            color="#ffffff">
-
-          </a-text>
-
-
-          <a-circle
-
-            id="vrMuteButton"
-
-            class="vr-control"
-
-            radius="0.026"
-
-            position="0.10 0 0.008"
-
-
-            material="
-              color: #333944;
-              shader: flat;
-              side: double">
-
-
-            <a-text
-
-              id="vrMuteLabel"
-
-              value="M"
-
-              align="center"
-
-              width="0.35"
-
-              position="0 0 0.004"
-
-              color="#ffffff">
-
-            </a-text>
-
-          </a-circle>
-
-
-          <a-circle
-
-            id="vrVolumeUp"
-
-            class="vr-control"
-
-            radius="0.026"
-
-            position="0.15 0 0.008"
-
-
-            material="
-              color: #333944;
-              shader: flat;
-              side: double">
-
-
-            <a-text
-
-              value="+"
-
-              align="center"
-
-              width="0.42"
-
-              position="0 0 0.004"
-
-              color="#ffffff">
-
-            </a-text>
-
-          </a-circle>
-
-        </a-entity>
-
-
-        <!-- ================================================
-             DESKTOP HOLD POINT
+             DESKTOP HOLD POSITION
         ================================================= -->
 
         <a-entity
@@ -1457,14 +766,13 @@
 
 
         <!-- ================================================
-             MAC / DESKTOP CROSSHAIR
-
-             TV has now been added to the raycaster.
+             DESKTOP CROSSHAIR
         ================================================= -->
 
         <a-cursor
 
           color="#ffffff"
+
 
           scale="0.7 0.7 0.7"
 
@@ -1477,10 +785,9 @@
           raycaster="
             objects:
               #door,
-              #doorCloseTarget,
-              .item,
-              .tv-interactable;
-            far: 3;
+              .door-press-target,
+              .item;
+            far: 6;
             interval: 50">
 
         </a-cursor>
@@ -1517,65 +824,4 @@
           radius: 0.4;
           velocitySmoothing: 0.35">
 
-      </a-entity>
-
-
-      <!-- ==================================================
-           RIGHT QUEST CONTROLLER
-
-           Trigger:
-           - door
-           - TV
-           - VR menu
-
-           Grip:
-           - pickup objects
-      =================================================== -->
-
-      <a-entity
-
-        id="rightHand"
-
-
-        hand-controls="
-          hand: right"
-
-
-        raycaster="
-          objects:
-            #door,
-            #doorCloseTarget,
-            .tv-interactable,
-            .vr-control;
-          far: 3;
-          interval: 50;
-          showLine: true;
-          lineColor: #ffffff;
-          lineOpacity: 0.8"
-
-
-        natural-grab-hand="
-          radius: 0.4;
-          velocitySmoothing: 0.35"
-
-
-        vr-door-interactor
-
-
-        vr-tv-interactor
-
-
-        vr-ui-interactor>
-
-      </a-entity>
-
-
-    </a-entity>
-
-
-  </a-scene>
-
-
-</body>
-
-</html>
+ 
