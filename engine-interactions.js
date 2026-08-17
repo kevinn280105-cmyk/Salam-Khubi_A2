@@ -1,1175 +1,1613 @@
 /* ============================================================
    engine-interactions.js
-   Door interaction + object grabbing
+   ROOMS WITHIN
+
+   Handles:
+   - Real immersive VR detection
+   - Door interaction
+   - Mac door interaction
+   - Quest door interaction
+   - REAL CRT television inside livingasset.glb
+   - TV glow
+   - TV static connection
+   - Mac object grabbing
+   - Quest object grabbing / throwing
+
+   IMPORTANT:
+
+   The TV does NOT use a fake a-plane.
+
+   It uses the real surface inside livingasset.glb.
+============================================================ */
+
+
+/* ============================================================
+   REAL IMMERSIVE XR CHECK
+
+   Mac fullscreen is NOT treated as Quest VR.
 ============================================================ */
 
 function isImmersiveXRScene(scene) {
+
   return Boolean(
+
     scene &&
+
     scene.renderer &&
+
     scene.renderer.xr &&
+
     scene.renderer.xr.isPresenting
+
   );
+
 }
+
+
+/* ============================================================
+   THREE.JS / A-FRAME HELPER
+
+   Checks whether a raycast object belongs to a particular
+   A-Frame entity's GLB/model.
+============================================================ */
+
+function objectBelongsToEntity(
+  hitObject,
+  entity
+) {
+
+  if (
+    !hitObject ||
+    !entity
+  ) {
+
+    return false;
+
+  }
+
+
+  const root =
+    entity.getObject3D(
+      'mesh'
+    );
+
+
+  if (!root) {
+
+    return false;
+
+  }
+
+
+  let current =
+    hitObject;
+
+
+  while (current) {
+
+    if (
+      current === root
+    ) {
+
+      return true;
+
+    }
+
+
+    current =
+      current.parent;
+
+  }
+
+
+  return false;
+
+}
+
+
+/* ============================================================
+   ADD SELECTOR TO EXISTING RAYCASTER
+
+   This allows TV interaction to add #living without rewriting
+   the raycaster settings from index.html.
+============================================================ */
+
+function appendRaycasterObjectSelector(
+  entity,
+  selector
+) {
+
+  if (
+    !entity ||
+    !selector
+  ) {
+
+    return;
+
+  }
+
+
+  const rayData =
+    entity.getAttribute(
+      'raycaster'
+    ) || {};
+
+
+  const current =
+    String(
+      rayData.objects || ''
+    ).trim();
+
+
+  const selectors =
+    current
+
+      ? current
+          .split(',')
+          .map(
+            value =>
+              value.trim()
+          )
+          .filter(Boolean)
+
+      : [];
+
+
+  if (
+    !selectors.includes(
+      selector
+    )
+  ) {
+
+    selectors.push(
+      selector
+    );
+
+  }
+
+
+  entity.setAttribute(
+    'raycaster',
+    'objects',
+    selectors.join(', ')
+  );
+
+
+  const raycaster =
+    entity.components
+      .raycaster;
+
+
+  if (
+    raycaster &&
+    raycaster.refreshObjects
+  ) {
+
+    raycaster
+      .refreshObjects();
+
+  }
+
+}
+
+
+/* ============================================================
+   MATERIAL SLOT HIT BY RAYCAST
+
+   Some GLB meshes use multiple materials.
+
+   This lets us modify ONLY the material under the cursor,
+   rather than changing the whole television.
+============================================================ */
+
+function getIntersectionMaterialIndex(
+  intersection
+) {
+
+  if (
+
+    intersection &&
+
+    intersection.face &&
+
+    typeof
+      intersection.face.materialIndex ===
+      'number'
+
+  ) {
+
+    return (
+      intersection.face
+        .materialIndex
+    );
+
+  }
+
+
+  return 0;
+
+}
+
 
 /* ============================================================
    DOOR SYSTEM
 ============================================================ */
 
-AFRAME.registerComponent('door-hinge', {
-  schema: {
-    openAngle: { default: 100 },
+AFRAME.registerComponent(
+  'door-hinge',
+  {
 
-    hingeSide: {
-      default: 'left',
-      oneOf: ['left', 'right']
-    },
+    schema: {
 
-    direction: { default: 1 },
-
-    duration: { default: 650 }
-  },
-
-  init: function () {
-    this.root = null;
-
-    this.parts = [];
-
-    this.partStates =
-      new Map();
-
-    this.lastActivation = 0;
-
-    this.lastActiveState = null;
-
-    this.closeTarget = null;
+      openAngle: {
+        default: 100
+      },
 
 
-    this.el.addEventListener(
-      'model-loaded',
-      () => {
-        this.prepareDoorParts();
+      hingeSide: {
 
-        this.createCloseTarget();
-      }
-    );
+        default:
+          'left',
 
+        oneOf: [
+          'left',
+          'right'
+        ]
 
-    this.el.addEventListener(
-      'activate-object',
-      (event) => {
-        const hitObject =
-          event.detail &&
-          event.detail.object
-            ? event.detail.object
-            : null;
-
-        this.activatePart(
-          hitObject
-        );
-      }
-    );
+      },
 
 
-    /*
-      MAC / DESKTOP CLICK
-
-      Do NOT use:
-
-      scene.is('vr-mode')
-
-      here.
-
-      A-Frame can consider desktop fullscreen
-      to be vr-mode too.
-
-      We only block mouse interaction during
-      an ACTUAL WebXR headset session.
-    */
-    this.el.addEventListener(
-      'click',
-      (event) => {
-        if (
-          isImmersiveXRScene(
-            this.el.sceneEl
-          )
-        ) {
-          return;
-        }
+      direction: {
+        default: 1
+      },
 
 
-        if (
-          event &&
-          event.stopPropagation
-        ) {
-          event.stopPropagation();
-        }
-
-
-        const hitObject =
-          event &&
-          event.detail &&
-          event.detail.intersection
-            ? event.detail.intersection.object
-            : null;
-
-
-        /*
-          If we clicked an actual individual
-          door part, toggle that exact part.
-        */
-        if (
-          hitObject &&
-          this.activatePart(
-            hitObject
-          )
-        ) {
-          return;
-        }
-
-
-        /*
-          If the door entity itself was clicked
-          but the exact internal mesh was not
-          identified, close an open door instead
-          of doing nothing.
-        */
-        this.closeOpenDoor();
-      }
-    );
-  },
-
-
-  /* ========================================================
-     CHECK WHETHER AN OBJECT CONTAINS A MESH
-  ======================================================== */
-
-  hasMeshDescendant: function (
-    object
-  ) {
-    let found = false;
-
-
-    object.traverse(
-      (node) => {
-        if (node.isMesh) {
-          found = true;
-        }
-      }
-    );
-
-
-    return found;
-  },
-
-
-  /* ========================================================
-     FIND INDIVIDUAL DOOR PARTS INSIDE cua.glb
-
-     This preserves your original system.
-
-     If cua.glb contains two separate doors,
-     both can still be clicked separately.
-  ======================================================== */
-
-  prepareDoorParts: function () {
-    this.root =
-      this.el.getObject3D(
-        'mesh'
-      );
-
-
-    if (!this.root) {
-      return;
-    }
-
-
-    let container =
-      this.root;
-
-
-    /*
-      Sometimes Blender GLBs contain several
-      wrapper groups.
-
-      Move down through single wrapper groups
-      until we find the useful children.
-    */
-    while (true) {
-      const meaningfulChildren =
-        container.children.filter(
-          (child) =>
-            this.hasMeshDescendant(
-              child
-            )
-        );
-
-
-      if (
-        meaningfulChildren.length !== 1 ||
-        meaningfulChildren[0].isMesh
-      ) {
-        break;
+      duration: {
+        default: 650
       }
 
-
-      container =
-        meaningfulChildren[0];
-    }
-
-
-    /*
-      Keep the individual Blender objects.
-
-      For example:
-
-      cua.glb
-        ├── LeftDoor
-        └── RightDoor
-
-      becomes two selectable parts.
-    */
-    this.parts =
-      container.children.filter(
-        (child) =>
-          this.hasMeshDescendant(
-            child
-          )
-      );
-
-
-    /*
-      If the GLB does not contain separate
-      child groups, treat the entire model
-      as one door.
-    */
-    if (!this.parts.length) {
-      this.parts = [
-        container
-      ];
-    }
-
-
-    console.log(
-      `Door model contains ${this.parts.length} selectable part(s).`
-    );
-  },
-
-
-  /* ========================================================
-     SMALL CLOSE-ONLY TARGET
-
-     This replaces the OLD giant invisible
-     .door-press-target.
-
-     IMPORTANT:
-
-     This target does NOT open a door.
-
-     It only becomes active after a door
-     has already opened.
-
-     This allows Mac users to close a door
-     even after the physical panel has swung
-     away from the original doorway.
-  ======================================================== */
-
-  createCloseTarget: function () {
-    if (
-      this.closeTarget ||
-      !this.root
-    ) {
-      return;
-    }
-
-
-    this.root.updateMatrixWorld(
-      true
-    );
-
-
-    const box =
-      new THREE.Box3()
-        .setFromObject(
-          this.root
-        );
-
-
-    if (box.isEmpty()) {
-      return;
-    }
-
-
-    const size =
-      new THREE.Vector3();
-
-
-    const center =
-      new THREE.Vector3();
-
-
-    box.getSize(
-      size
-    );
-
-
-    box.getCenter(
-      center
-    );
-
-
-    const target =
-      document.createElement(
-        'a-box'
-      );
-
-
-    target.setAttribute(
-      'id',
-      'doorCloseTarget'
-    );
-
-
-    target.setAttribute(
-      'position',
-      `${center.x} ${center.y} ${center.z}`
-    );
-
-
-    /*
-      Much smaller than the old invisible
-      door target.
-
-      Old system used nearly 100% of the
-      door model.
-
-      This uses roughly 28% width and
-      30% height.
-    */
-    target.setAttribute(
-      'width',
-      Math.max(
-        size.x * 0.28,
-        0.18
-      )
-    );
-
-
-    target.setAttribute(
-      'height',
-      Math.max(
-        size.y * 0.30,
-        0.42
-      )
-    );
-
-
-    target.setAttribute(
-      'depth',
-      Math.max(
-        size.z * 0.28,
-        0.12
-      )
-    );
-
-
-    /*
-      Completely invisible.
-    */
-    target.setAttribute(
-      'material',
-      'opacity: 0; transparent: true; depthWrite: false; side: double'
-    );
-
-
-    /*
-      Starts disabled.
-
-      It becomes visible to the raycaster
-      only while a door is open.
-    */
-    target.setAttribute(
-      'visible',
-      false
-    );
-
-
-    /*
-      MAC CLICK
-
-      This area can ONLY close.
-      It cannot open a closed door.
-    */
-    target.addEventListener(
-      'click',
-      (event) => {
-        if (
-          isImmersiveXRScene(
-            this.el.sceneEl
-          )
-        ) {
-          return;
-        }
-
-
-        if (
-          event &&
-          event.stopPropagation
-        ) {
-          event.stopPropagation();
-        }
-
-
-        this.closeOpenDoor();
-      }
-    );
-
-
-    this.el.sceneEl.appendChild(
-      target
-    );
-
-
-    this.closeTarget =
-      target;
-
-
-    this.updateCloseTarget();
-  },
-
-
-  /* ========================================================
-     DEFAULT DOOR PART
-  ======================================================== */
-
-  activateDefaultPart:
-    function () {
-
-      if (!this.parts.length) {
-        return false;
-      }
-
-
-      return this.activatePart(
-        this.parts[0]
-      );
     },
 
 
-  /* ========================================================
-     FIND WHICH DOOR PART WAS CLICKED
-  ======================================================== */
+    init:
+      function () {
 
-  findPartFromHit:
-    function (hitObject) {
+        this.root =
+          null;
 
-      let current =
-        hitObject;
 
+        this.parts =
+          [];
 
-      while (current) {
 
-        /*
-          If this mesh already belongs to
-          a door state, return that door.
-        */
-        if (
-          current.userData &&
-          current.userData
-            .doorPartState
-        ) {
-          return current
-            .userData
-            .doorPartState
-            .part;
-        }
+        this.partStates =
+          new Map();
 
 
-        /*
-          Exact door part.
-        */
-        if (
-          this.parts.includes(
-            current
-          )
-        ) {
-          return current;
-        }
+        this.lastActivation =
+          0;
 
 
-        /*
-          Stop once we reach the root GLB.
-        */
-        if (
-          current ===
-          this.root
-        ) {
-          break;
-        }
+        this.lastActiveState =
+          null;
 
 
-        current =
-          current.parent;
-      }
+        this.closeTarget =
+          null;
 
 
-      /*
-        If there is only one door part,
-        safely use it.
-      */
-      return (
-        this.parts.length === 1
-          ? this.parts[0]
-          : null
-      );
-    },
+        /* --------------------------------------------------
+           MODEL LOADED
+        -------------------------------------------------- */
 
+        this.el
+          .addEventListener(
 
-  /* ========================================================
-     GET BOUNDING BOX OF ONE DOOR PART
-  ======================================================== */
+            'model-loaded',
 
-  getLocalBoundingBox:
-    function (part) {
+            () => {
 
-      const box =
-        new THREE.Box3();
-
-
-      box.makeEmpty();
+              this.prepareDoorParts();
 
+              this.createCloseTarget();
 
-      this.el.object3D
-        .updateMatrixWorld(
-          true
-        );
+            }
 
-
-      part.updateMatrixWorld(
-        true
-      );
-
-
-      const inverseEntityWorld =
-        new THREE.Matrix4()
-          .copy(
-            this.el.object3D
-              .matrixWorld
-          )
-          .invert();
-
-
-      part.traverse(
-        (node) => {
-
-          if (
-            !node.isMesh ||
-            !node.geometry
-          ) {
-            return;
-          }
-
-
-          if (
-            !node.geometry
-              .boundingBox
-          ) {
-            node.geometry
-              .computeBoundingBox();
-          }
-
-
-          if (
-            !node.geometry
-              .boundingBox
-          ) {
-            return;
-          }
-
-
-          const nodeToEntity =
-            new THREE.Matrix4()
-              .multiplyMatrices(
-                inverseEntityWorld,
-                node.matrixWorld
-              );
-
-
-          const nodeBox =
-            node.geometry
-              .boundingBox
-              .clone()
-              .applyMatrix4(
-                nodeToEntity
-              );
-
-
-          box.union(
-            nodeBox
-          );
-        }
-      );
-
-
-      return box;
-    },
-
-
-  /* ========================================================
-     CREATE HINGE STATE FOR ONE DOOR
-  ======================================================== */
-
-  createState:
-    function (part) {
-
-      /*
-        If this door already has a hinge,
-        reuse it.
-      */
-      if (
-        this.partStates.has(
-          part
-        )
-      ) {
-        return this.partStates.get(
-          part
-        );
-      }
-
-
-      const box =
-        this.getLocalBoundingBox(
-          part
-        );
-
-
-      if (box.isEmpty()) {
-        return null;
-      }
-
-
-      const size =
-        new THREE.Vector3();
-
-
-      const center =
-        new THREE.Vector3();
-
-
-      box.getSize(
-        size
-      );
-
-
-      box.getCenter(
-        center
-      );
-
-
-      /*
-        Work out whether the door is wider
-        across X or Z.
-      */
-      const widthRunsAlongX =
-        size.x >= size.z;
-
-
-      const hingePosition =
-        center.clone();
-
-
-      /*
-        Put hinge on selected side.
-      */
-      if (widthRunsAlongX) {
-
-        hingePosition.x =
-          this.data.hingeSide ===
-          'left'
-            ? box.min.x
-            : box.max.x;
-
-      } else {
-
-        hingePosition.z =
-          this.data.hingeSide ===
-          'left'
-            ? box.min.z
-            : box.max.z;
-      }
-
-
-      /*
-        THREE.js pivot group.
-      */
-      const pivot =
-        new THREE.Group();
-
-
-      pivot.name =
-        'individual-door-hinge';
-
-
-      pivot.position.copy(
-        hingePosition
-      );
-
-
-      /*
-        Add hinge to A-Frame door entity.
-      */
-      this.el.object3D.add(
-        pivot
-      );
-
-
-      /*
-        Reparent the actual door part under
-        the hinge while keeping its world
-        transform.
-      */
-      pivot.attach(
-        part
-      );
-
-
-      /*
-        Every door part keeps its own
-        open/closed state.
-      */
-      const state = {
-        part: part,
-
-        pivot: pivot,
-
-        isOpen: false,
-
-        currentAngle: 0,
-
-        startAngle: 0,
-
-        targetAngle: 0,
-
-        animationTime: 0,
-
-        isAnimating: false
-      };
-
-
-      part.userData
-        .doorPartState =
-        state;
-
-
-      this.partStates.set(
-        part,
-        state
-      );
-
-
-      return state;
-    },
-
-
-  /* ========================================================
-     START OPEN/CLOSE ANIMATION
-  ======================================================== */
-
-  startDoorAnimation:
-    function (
-      state,
-      shouldOpen
-    ) {
-
-      /*
-        Remember whether the door is
-        supposed to be open.
-      */
-      state.isOpen =
-        shouldOpen;
-
-
-      state.startAngle =
-        state.currentAngle;
-
-
-      /*
-        Opening:
-          go to 100 degrees.
-
-        Closing:
-          go back to 0 degrees.
-      */
-      const targetDegrees =
-        shouldOpen
-          ? this.data.openAngle *
-            this.data.direction
-          : 0;
-
-
-      state.targetAngle =
-        THREE.MathUtils
-          .degToRad(
-            targetDegrees
           );
 
 
-      state.animationTime = 0;
+        /* --------------------------------------------------
+           EXTERNAL ACTIVATION
+        -------------------------------------------------- */
 
-      state.isAnimating =
-        true;
+        this.el
+          .addEventListener(
 
+            'activate-object',
 
-      /*
-        Enable or disable the small
-        close target depending on
-        door state.
-      */
-      this.updateCloseTarget();
-    },
+            event => {
 
+              const hitObject =
 
-  /* ========================================================
-     CLICK / ACTIVATE A SPECIFIC DOOR
-  ======================================================== */
+                event.detail &&
+                event.detail.object
 
-  activatePart:
-    function (hitObject) {
+                  ? event.detail.object
 
-      const now =
-        performance.now();
+                  : null;
 
 
-      /*
-        Prevent accidental double activation
-        from one physical click.
-      */
-      if (
-        now -
-        this.lastActivation <
-        250
+              this.activatePart(
+                hitObject
+              );
+
+            }
+
+          );
+
+
+        /* --------------------------------------------------
+           MAC CLICK
+        -------------------------------------------------- */
+
+        this.el
+          .addEventListener(
+
+            'click',
+
+            event => {
+
+              /*
+                Quest uses the controller version.
+              */
+
+              if (
+                isImmersiveXRScene(
+                  this.el.sceneEl
+                )
+              ) {
+
+                return;
+
+              }
+
+
+              if (
+                event &&
+                event.stopPropagation
+              ) {
+
+                event.stopPropagation();
+
+              }
+
+
+              const hitObject =
+
+                event &&
+
+                event.detail &&
+
+                event.detail.intersection
+
+                  ? event.detail
+                      .intersection
+                      .object
+
+                  : null;
+
+
+              if (
+
+                hitObject &&
+
+                this.activatePart(
+                  hitObject
+                )
+
+              ) {
+
+                return;
+
+              }
+
+
+              /*
+                If an already-open door swung away,
+                clicking its close target closes it.
+              */
+
+              this.closeOpenDoor();
+
+            }
+
+          );
+
+      },
+
+
+    /* ======================================================
+       DOES OBJECT CONTAIN MESH?
+    ====================================================== */
+
+    hasMeshDescendant:
+      function (
+        object
       ) {
-        return false;
-      }
+
+        let found =
+          false;
 
 
-      const part =
-        this.findPartFromHit(
-          hitObject
+        object.traverse(
+
+          node => {
+
+            if (
+              node.isMesh
+            ) {
+
+              found =
+                true;
+
+            }
+
+          }
+
         );
 
 
-      if (!part) {
-        return false;
-      }
+        return found;
+
+      },
 
 
-      const state =
-        this.createState(
-          part
-        );
+    /* ======================================================
+       FIND SEPARATE DOOR PARTS
+    ====================================================== */
+
+    prepareDoorParts:
+      function () {
+
+        this.root =
+          this.el.getObject3D(
+            'mesh'
+          );
 
 
-      if (!state) {
-        return false;
-      }
+        if (!this.root) {
+
+          return;
+
+        }
 
 
-      this.lastActivation =
-        now;
+        let container =
+          this.root;
 
 
-      this.lastActiveState =
-        state;
+        while (true) {
 
+          const meaningfulChildren =
 
-      /*
-        THIS IS THE REPEATED TOGGLE:
+            container.children
+              .filter(
 
-        closed → open
-        open → closed
-        closed → open
-        etc.
-      */
-      this.startDoorAnimation(
-        state,
-        !state.isOpen
-      );
+                child =>
+                  this
+                    .hasMeshDescendant(
+                      child
+                    )
 
+              );
 
-      return true;
-    },
-
-
-  /* ========================================================
-     FIND AN OPEN DOOR
-  ======================================================== */
-
-  getOpenState:
-    function () {
-
-      /*
-        Prefer the most recently used door.
-      */
-      if (
-        this.lastActiveState &&
-        this.lastActiveState
-          .isOpen
-      ) {
-        return this.lastActiveState;
-      }
-
-
-      let openState =
-        null;
-
-
-      /*
-        Otherwise find any open door.
-      */
-      this.partStates.forEach(
-        (state) => {
 
           if (
-            !openState &&
-            state.isOpen
+
+            meaningfulChildren.length !==
+              1 ||
+
+            meaningfulChildren[0]
+              .isMesh
+
           ) {
-            openState =
-              state;
+
+            break;
+
           }
+
+
+          container =
+            meaningfulChildren[0];
+
         }
-      );
 
 
-      return openState;
-    },
+        this.parts =
+
+          container.children
+            .filter(
+
+              child =>
+                this
+                  .hasMeshDescendant(
+                    child
+                  )
+
+            );
 
 
-  /* ========================================================
-     RELIABLE CLOSE FUNCTION
+        /*
+          Single door fallback.
+        */
 
-     Used by the small invisible
-     doorway target.
-  ======================================================== */
+        if (
+          !this.parts.length
+        ) {
 
-  closeOpenDoor:
-    function () {
+          this.parts = [
+            container
+          ];
 
-      const state =
-        this.getOpenState();
-
-
-      if (!state) {
-        return false;
-      }
+        }
 
 
-      const now =
-        performance.now();
+        console.log(
+
+          `Door contains ${this.parts.length} selectable part(s).`
+
+        );
+
+      },
 
 
-      if (
-        now -
-        this.lastActivation <
-        250
-      ) {
-        return false;
-      }
+    /* ======================================================
+       SMALL CLOSE-ONLY TARGET
+    ====================================================== */
+
+    createCloseTarget:
+      function () {
+
+        if (
+
+          this.closeTarget ||
+
+          !this.root
+
+        ) {
+
+          return;
+
+        }
 
 
-      this.lastActivation =
-        now;
+        this.root
+          .updateMatrixWorld(
+            true
+          );
 
 
-      this.lastActiveState =
-        state;
+        const box =
+
+          new THREE.Box3()
+            .setFromObject(
+              this.root
+            );
 
 
-      /*
-        Always close.
-      */
-      this.startDoorAnimation(
-        state,
-        false
-      );
+        if (
+          box.isEmpty()
+        ) {
+
+          return;
+
+        }
 
 
-      return true;
-    },
+        const size =
+          new THREE.Vector3();
 
 
-  /* ========================================================
-     TOGGLE MOST RECENT DOOR
-
-     Preserved for other systems such
-     as the story manager.
-  ======================================================== */
-
-  toggleLastDoor:
-    function () {
-
-      const state =
-        this.lastActiveState;
+        const center =
+          new THREE.Vector3();
 
 
-      if (!state) {
-        return false;
-      }
+        box.getSize(
+          size
+        );
 
 
-      const now =
-        performance.now();
+        box.getCenter(
+          center
+        );
 
 
-      if (
-        now -
-        this.lastActivation <
-        250
-      ) {
-        return false;
-      }
+        const target =
+
+          document
+            .createElement(
+              'a-box'
+            );
 
 
-      this.lastActivation =
-        now;
+        target.setAttribute(
+          'id',
+          'doorCloseTarget'
+        );
 
 
-      this.startDoorAnimation(
-        state,
-        !state.isOpen
-      );
+        target.setAttribute(
+
+          'position',
+
+          `${center.x} ${center.y} ${center.z}`
+
+        );
 
 
-      return true;
-    },
+        target.setAttribute(
+
+          'width',
+
+          Math.max(
+            size.x * 0.28,
+            0.18
+          )
+
+        );
 
 
-  /* ========================================================
-     SHOW CLOSE TARGET ONLY WHILE
-     A DOOR IS OPEN
-  ======================================================== */
+        target.setAttribute(
 
-  updateCloseTarget:
-    function () {
+          'height',
 
-      if (!this.closeTarget) {
-        return;
-      }
+          Math.max(
+            size.y * 0.30,
+            0.42
+          )
+
+        );
 
 
-      this.closeTarget
-        .setAttribute(
+        target.setAttribute(
+
+          'depth',
+
+          Math.max(
+            size.z * 0.28,
+            0.12
+          )
+
+        );
+
+
+        target.setAttribute(
+
+          'material',
+
+          `
+            opacity: 0;
+            transparent: true;
+            depthWrite: false;
+            side: double
+          `
+
+        );
+
+
+        /*
+          Only visible to raycaster
+          while a door is open.
+        */
+
+        target.setAttribute(
           'visible',
-          Boolean(
-            this.getOpenState()
+          false
+        );
+
+
+        /* --------------------------------------------------
+           MAC CLOSE
+        -------------------------------------------------- */
+
+        target
+          .addEventListener(
+
+            'click',
+
+            event => {
+
+              if (
+                isImmersiveXRScene(
+                  this.el.sceneEl
+                )
+              ) {
+
+                return;
+
+              }
+
+
+              if (
+                event &&
+                event.stopPropagation
+              ) {
+
+                event.stopPropagation();
+
+              }
+
+
+              this.closeOpenDoor();
+
+            }
+
+          );
+
+
+        this.el.sceneEl
+          .appendChild(
+            target
+          );
+
+
+        this.closeTarget =
+          target;
+
+
+        this.updateCloseTarget();
+
+      },
+
+
+    /* ======================================================
+       DEFAULT PART
+    ====================================================== */
+
+    activateDefaultPart:
+      function () {
+
+        if (
+          !this.parts.length
+        ) {
+
+          return false;
+
+        }
+
+
+        return (
+          this.activatePart(
+            this.parts[0]
           )
         );
-    },
+
+      },
 
 
-  /* ========================================================
-     SMOOTH DOOR EASING
-  ======================================================== */
+    /* ======================================================
+       FIND WHICH DOOR PART WAS CLICKED
+    ====================================================== */
 
-  easeInOut:
-    function (value) {
+    findPartFromHit:
+      function (
+        hitObject
+      ) {
 
-      return (
-        value < 0.5
-
-          ? 2 *
-            value *
-            value
-
-          : 1 -
-            Math.pow(
-              -2 * value + 2,
-              2
-            ) / 2
-      );
-    },
+        let current =
+          hitObject;
 
 
-  /* ========================================================
-     RUN DOOR ANIMATION
-  ======================================================== */
+        while (current) {
 
-  tick:
-    function (
-      time,
-      deltaTime
-    ) {
+          if (
 
-      if (!deltaTime) {
-        return;
+            current.userData &&
+
+            current.userData
+              .doorPartState
+
+          ) {
+
+            return (
+              current.userData
+                .doorPartState
+                .part
+            );
+
+          }
+
+
+          if (
+            this.parts
+              .includes(
+                current
+              )
+          ) {
+
+            return current;
+
+          }
+
+
+          if (
+            current ===
+            this.root
+          ) {
+
+            break;
+
+          }
+
+
+          current =
+            current.parent;
+
+        }
+
+
+        return (
+
+          this.parts.length ===
+            1
+
+            ? this.parts[0]
+
+            : null
+
+        );
+
+      },
+
+
+    /* ======================================================
+       LOCAL BOUNDING BOX
+    ====================================================== */
+
+    getLocalBoundingBox:
+      function (
+        part
+      ) {
+
+        const box =
+          new THREE.Box3();
+
+
+        box.makeEmpty();
+
+
+        this.el.object3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        part
+          .updateMatrixWorld(
+            true
+          );
+
+
+        const inverseEntityWorld =
+
+          new THREE.Matrix4()
+            .copy(
+              this.el.object3D
+                .matrixWorld
+            )
+            .invert();
+
+
+        part.traverse(
+
+          node => {
+
+            if (
+
+              !node.isMesh ||
+
+              !node.geometry
+
+            ) {
+
+              return;
+
+            }
+
+
+            if (
+              !node.geometry
+                .boundingBox
+            ) {
+
+              node.geometry
+                .computeBoundingBox();
+
+            }
+
+
+            if (
+              !node.geometry
+                .boundingBox
+            ) {
+
+              return;
+
+            }
+
+
+            const nodeToEntity =
+
+              new THREE.Matrix4()
+                .multiplyMatrices(
+
+                  inverseEntityWorld,
+
+                  node.matrixWorld
+
+                );
+
+
+            const nodeBox =
+
+              node.geometry
+                .boundingBox
+                .clone()
+                .applyMatrix4(
+                  nodeToEntity
+                );
+
+
+            box.union(
+              nodeBox
+            );
+
+          }
+
+        );
+
+
+        return box;
+
+      },
+
+
+    /* ======================================================
+       CREATE DOOR HINGE STATE
+    ====================================================== */
+
+    createState:
+      function (
+        part
+      ) {
+
+        if (
+          this.partStates
+            .has(
+              part
+            )
+        ) {
+
+          return (
+            this.partStates
+              .get(
+                part
+              )
+          );
+
+        }
+
+
+        const box =
+          this.getLocalBoundingBox(
+            part
+          );
+
+
+        if (
+          box.isEmpty()
+        ) {
+
+          return null;
+
+        }
+
+
+        const size =
+          new THREE.Vector3();
+
+
+        const center =
+          new THREE.Vector3();
+
+
+        box.getSize(
+          size
+        );
+
+
+        box.getCenter(
+          center
+        );
+
+
+        const widthRunsAlongX =
+
+          size.x >=
+          size.z;
+
+
+        const hingePosition =
+
+          center.clone();
+
+
+        if (
+          widthRunsAlongX
+        ) {
+
+          hingePosition.x =
+
+            this.data.hingeSide ===
+              'left'
+
+              ? box.min.x
+
+              : box.max.x;
+
+
+        } else {
+
+
+          hingePosition.z =
+
+            this.data.hingeSide ===
+              'left'
+
+              ? box.min.z
+
+              : box.max.z;
+
+        }
+
+
+        const pivot =
+          new THREE.Group();
+
+
+        pivot.name =
+          'individual-door-hinge';
+
+
+        pivot.position
+          .copy(
+            hingePosition
+          );
+
+
+        this.el.object3D
+          .add(
+            pivot
+          );
+
+
+        /*
+          Preserve world transform.
+        */
+
+        pivot.attach(
+          part
+        );
+
+
+        const state = {
+
+          part:
+            part,
+
+          pivot:
+            pivot,
+
+          isOpen:
+            false,
+
+          currentAngle:
+            0,
+
+          startAngle:
+            0,
+
+          targetAngle:
+            0,
+
+          animationTime:
+            0,
+
+          isAnimating:
+            false
+
+        };
+
+
+        part.userData
+          .doorPartState =
+          state;
+
+
+        this.partStates
+          .set(
+            part,
+            state
+          );
+
+
+        return state;
+
+      },
+
+
+    /* ======================================================
+       START DOOR ANIMATION
+    ====================================================== */
+
+    startDoorAnimation:
+      function (
+        state,
+        shouldOpen
+      ) {
+
+        state.isOpen =
+          shouldOpen;
+
+
+        state.startAngle =
+          state.currentAngle;
+
+
+        const targetDegrees =
+
+          shouldOpen
+
+            ? this.data
+                .openAngle *
+              this.data
+                .direction
+
+            : 0;
+
+
+        state.targetAngle =
+
+          THREE.MathUtils
+            .degToRad(
+              targetDegrees
+            );
+
+
+        state.animationTime =
+          0;
+
+
+        state.isAnimating =
+          true;
+
+
+        this.updateCloseTarget();
+
+      },
+
+
+    /* ======================================================
+       ACTIVATE PART
+    ====================================================== */
+
+    activatePart:
+      function (
+        hitObject
+      ) {
+
+        const now =
+          performance.now();
+
+
+        if (
+
+          now -
+          this.lastActivation <
+
+          250
+
+        ) {
+
+          return false;
+
+        }
+
+
+        const part =
+          this.findPartFromHit(
+            hitObject
+          );
+
+
+        if (!part) {
+
+          return false;
+
+        }
+
+
+        const state =
+          this.createState(
+            part
+          );
+
+
+        if (!state) {
+
+          return false;
+
+        }
+
+
+        this.lastActivation =
+          now;
+
+
+        this.lastActiveState =
+          state;
+
+
+        /*
+          Repeated toggle.
+
+          closed → open
+          open → closed
+        */
+
+        this.startDoorAnimation(
+
+          state,
+
+          !state.isOpen
+
+        );
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       FIND OPEN DOOR
+    ====================================================== */
+
+    getOpenState:
+      function () {
+
+        if (
+
+          this.lastActiveState &&
+
+          this.lastActiveState
+            .isOpen
+
+        ) {
+
+          return (
+            this.lastActiveState
+          );
+
+        }
+
+
+        let openState =
+          null;
+
+
+        this.partStates
+          .forEach(
+
+            state => {
+
+              if (
+
+                !openState &&
+
+                state.isOpen
+
+              ) {
+
+                openState =
+                  state;
+
+              }
+
+            }
+
+          );
+
+
+        return openState;
+
+      },
+
+
+    /* ======================================================
+       CLOSE OPEN DOOR
+    ====================================================== */
+
+    closeOpenDoor:
+      function () {
+
+        const state =
+          this.getOpenState();
+
+
+        if (!state) {
+
+          return false;
+
+        }
+
+
+        const now =
+          performance.now();
+
+
+        if (
+
+          now -
+          this.lastActivation <
+
+          250
+
+        ) {
+
+          return false;
+
+        }
+
+
+        this.lastActivation =
+          now;
+
+
+        this.lastActiveState =
+          state;
+
+
+        this.startDoorAnimation(
+
+          state,
+
+          false
+
+        );
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       TOGGLE LAST DOOR
+    ====================================================== */
+
+    toggleLastDoor:
+      function () {
+
+        const state =
+          this.lastActiveState;
+
+
+        if (!state) {
+
+          return false;
+
+        }
+
+
+        const now =
+          performance.now();
+
+
+        if (
+
+          now -
+          this.lastActivation <
+
+          250
+
+        ) {
+
+          return false;
+
+        }
+
+
+        this.lastActivation =
+          now;
+
+
+        this.startDoorAnimation(
+
+          state,
+
+          !state.isOpen
+
+        );
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       CLOSE TARGET VISIBILITY
+    ====================================================== */
+
+    updateCloseTarget:
+      function () {
+
+        if (
+          !this.closeTarget
+        ) {
+
+          return;
+
+        }
+
+
+        this.closeTarget
+          .setAttribute(
+
+            'visible',
+
+            Boolean(
+              this.getOpenState()
+            )
+
+          );
+
+      },
+
+
+    /* ======================================================
+       EASING
+    ====================================================== */
+
+    easeInOut:
+      function (
+        value
+      ) {
+
+        return (
+
+          value < 0.5
+
+            ? 2 *
+              value *
+              value
+
+            : 1 -
+              Math.pow(
+                -2 * value + 2,
+                2
+              ) / 2
+
+        );
+
+      },
+
+
+    /* ======================================================
+       DOOR ANIMATION
+    ====================================================== */
+
+    tick:
+      function (
+        time,
+        deltaTime
+      ) {
+
+        if (!deltaTime) {
+
+          return;
+
+        }
+
+
+        this.partStates
+          .forEach(
+
+            state => {
+
+              if (
+                !state.isAnimating
+              ) {
+
+                return;
+
+              }
+
+
+              state.animationTime +=
+                deltaTime;
+
+
+              const progress =
+
+                Math.min(
+
+                  state.animationTime /
+                  this.data.duration,
+
+                  1
+
+                );
+
+
+              const eased =
+
+                this.easeInOut(
+                  progress
+                );
+
+
+              state.currentAngle =
+
+                THREE.MathUtils
+                  .lerp(
+
+                    state.startAngle,
+
+                    state.targetAngle,
+
+                    eased
+
+                  );
+
+
+              state.pivot
+                .rotation.y =
+                state.currentAngle;
+
+
+              if (
+                progress >= 1
+              ) {
+
+                state.currentAngle =
+                  state.targetAngle;
+
+
+                state.pivot
+                  .rotation.y =
+                  state.targetAngle;
+
+
+                state.isAnimating =
+                  false;
+
+              }
+
+            }
+
+          );
+
       }
 
+  }
 
-      this.partStates.forEach(
-        (state) => {
-
-          if (
-            !state.isAnimating
-          ) {
-            return;
-          }
-
-
-          state.animationTime +=
-            deltaTime;
-
-
-          const progress =
-            Math.min(
-              state.animationTime /
-              this.data.duration,
-              1
-            );
-
-
-          const eased =
-            this.easeInOut(
-              progress
-            );
-
-
-          state.currentAngle =
-            THREE.MathUtils.lerp(
-              state.startAngle,
-              state.targetAngle,
-              eased
-            );
-
-
-          state.pivot.rotation.y =
-            state.currentAngle;
-
-
-          if (
-            progress >= 1
-          ) {
-
-            state.currentAngle =
-              state.targetAngle;
-
-
-            state.pivot.rotation.y =
-              state.targetAngle;
-
-
-            state.isAnimating =
-              false;
-          }
-        }
-      );
-    }
-});
+);
 
 
 /* ============================================================
-   QUEST / VR DOOR INTERACTION
-
-   Right trigger + controller ray.
+   QUEST DOOR INTERACTION
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1182,67 +1620,77 @@ AFRAME.registerComponent(
         default: 0.65
       },
 
+
       releaseThreshold: {
         default: 0.2
       }
+
     },
 
 
-    init: function () {
+    init:
+      function () {
 
-      this.triggerHeld =
-        false;
-
-
-      this.lastTriggerTime =
-        0;
+        this.triggerHeld =
+          false;
 
 
-      this.pressTrigger =
-        this.pressTrigger
-          .bind(this);
+        this.lastTriggerTime =
+          0;
 
 
-      this.releaseTrigger =
-        this.releaseTrigger
-          .bind(this);
+        this.pressTrigger =
+          this.pressTrigger
+            .bind(this);
 
 
-      this.onTriggerChanged =
-        this.onTriggerChanged
-          .bind(this);
+        this.releaseTrigger =
+          this.releaseTrigger
+            .bind(this);
 
 
-      this.el.addEventListener(
-        'triggerdown',
-        this.pressTrigger
-      );
+        this.onTriggerChanged =
+          this.onTriggerChanged
+            .bind(this);
 
 
-      this.el.addEventListener(
-        'triggerup',
-        this.releaseTrigger
-      );
+        this.el.addEventListener(
+          'triggerdown',
+          this.pressTrigger
+        );
 
 
-      this.el.addEventListener(
-        'triggerchanged',
-        this.onTriggerChanged
-      );
+        this.el.addEventListener(
+          'triggerup',
+          this.releaseTrigger
+        );
 
 
-      this.el.addEventListener(
-        'controllerdisconnected',
-        this.releaseTrigger
-      );
-    },
+        this.el.addEventListener(
+          'triggerchanged',
+          this.onTriggerChanged
+        );
+
+
+        this.el.addEventListener(
+          'controllerdisconnected',
+          this.releaseTrigger
+        );
+
+      },
 
 
     pressTrigger:
-      function (event) {
+      function (
+        event
+      ) {
 
-        if (this.triggerHeld) {
+        if (
+          this.triggerHeld
+        ) {
+
           return;
+
         }
 
 
@@ -1250,7 +1698,9 @@ AFRAME.registerComponent(
           event &&
           event.stopPropagation
         ) {
+
           event.stopPropagation();
+
         }
 
 
@@ -1259,11 +1709,16 @@ AFRAME.registerComponent(
 
 
         if (
+
           now -
           this.lastTriggerTime <
+
           250
+
         ) {
+
           return;
+
         }
 
 
@@ -1276,6 +1731,7 @@ AFRAME.registerComponent(
 
 
         this.useDoor();
+
       },
 
 
@@ -1284,178 +1740,2286 @@ AFRAME.registerComponent(
 
         this.triggerHeld =
           false;
+
       },
 
 
     onTriggerChanged:
-      function (event) {
+      function (
+        event
+      ) {
 
         const value =
+
           event &&
+
           event.detail &&
-          typeof event.detail.value ===
+
+          typeof
+            event.detail.value ===
             'number'
+
             ? event.detail.value
+
             : null;
 
 
-        if (value === null) {
+        if (
+          value === null
+        ) {
+
           return;
+
         }
 
 
         if (
+
           value >=
-            this.data.pressThreshold &&
+            this.data
+              .pressThreshold &&
+
           !this.triggerHeld
+
         ) {
 
           this.pressTrigger();
 
+
         } else if (
+
           value <=
-            this.data.releaseThreshold
+          this.data
+            .releaseThreshold
+
         ) {
 
           this.releaseTrigger();
+
         }
+
       },
 
-
-    /* ======================================================
-       QUEST DOOR RAYCAST
-    ====================================================== */
 
     useDoor:
       function () {
 
         const raycaster =
+
           this.el.components
             .raycaster;
 
 
         const door =
+
           document.querySelector(
             '#door'
           );
 
 
         const closeTarget =
+
           document.querySelector(
             '#doorCloseTarget'
           );
 
 
         if (
+
           !raycaster ||
+
           !door
+
         ) {
+
           return;
+
         }
 
 
         const doorComponent =
+
           door.components[
             'door-hinge'
           ];
 
 
-        if (!doorComponent) {
+        if (
+          !doorComponent
+        ) {
+
           return;
+
         }
 
 
-        /*
-          Refresh because doorCloseTarget is
-          dynamically added after the GLB loads.
-        */
         if (
           raycaster.refreshObjects
         ) {
+
           raycaster
             .refreshObjects();
+
         }
 
 
         /*
-          FIRST:
-          check the close-only target.
+          Only the CLOSEST object gets the trigger.
+
+          This prevents pressing TV from also opening
+          a door behind it.
         */
-        const closeIntersection =
-          closeTarget &&
-          raycaster.getIntersection
-            ? raycaster
-                .getIntersection(
-                  closeTarget
-                )
+
+        const intersections =
+
+          raycaster.intersections ||
+          [];
+
+
+        const closest =
+
+          intersections.length
+
+            ? intersections[0]
+
             : null;
 
 
+        if (!closest) {
+
+          return;
+
+        }
+
+
+        /* --------------------------------------------------
+           CLOSE TARGET
+        -------------------------------------------------- */
+
         if (
-          closeIntersection
+
+          closeTarget &&
+
+          objectBelongsToEntity(
+
+            closest.object,
+
+            closeTarget
+
+          )
+
         ) {
 
           doorComponent
             .closeOpenDoor();
 
+
           return;
+
         }
 
 
-        /*
-          SECOND:
-          check actual visible door.
-        */
-        const doorIntersection =
-          raycaster.getIntersection
-            ? raycaster
-                .getIntersection(
-                  door
-                )
-            : null;
-
+        /* --------------------------------------------------
+           ACTUAL DOOR
+        -------------------------------------------------- */
 
         if (
-          !doorIntersection
+
+          !objectBelongsToEntity(
+
+            closest.object,
+
+            door
+
+          )
+
         ) {
+
           return;
+
         }
 
 
-        /*
-          Open/close the exact internal
-          door part hit by the laser.
-        */
         if (
+
           doorComponent
             .activatePart(
-              doorIntersection.object
+              closest.object
             )
+
         ) {
+
           return;
+
         }
 
 
-        /*
-          Fallback ONLY after the visible
-          door itself was genuinely hit.
-
-          Unlike the old code, looking beside
-          the door does not activate this.
-        */
         doorComponent
           .activateDefaultPart();
+
       }
+
   }
+
 );
 
 
 /* ============================================================
-   NATURAL GRAB SYSTEM
+   REAL CRT TV
 
-   teddy.glb
-   hairpin.glb
-   future clue objects
+   NO fake plane.
+
+   This component attaches to #living.
+============================================================ */
+
+AFRAME.registerComponent(
+  'embedded-tv',
+  {
+
+    schema: {
+
+      glowColor: {
+        default: '#d8efff'
+      },
+
+
+      screenColor: {
+        default: '#a9bdc8'
+      },
+
+
+      lightColor: {
+        default: '#c7e7ff'
+      },
+
+
+      lightIntensity: {
+        default: 2.0
+      },
+
+
+      lightDistance: {
+        default: 3
+      },
+
+
+      flickerMin: {
+        default: 1.55
+      },
+
+
+      flickerMax: {
+        default: 2.35
+      },
+
+
+      flickerInterval: {
+        default: 85
+      }
+
+    },
+
+
+    init:
+      function () {
+
+        this.root =
+          null;
+
+
+        this.isOn =
+          false;
+
+
+        /*
+          Exact real GLB television screen.
+        */
+
+        this.screenMesh =
+          null;
+
+
+        this.screenMaterial =
+          null;
+
+
+        this.screenMaterialIndex =
+          0;
+
+
+        /*
+          Original OFF appearance.
+        */
+
+        this.originalColor =
+          null;
+
+
+        this.originalEmissive =
+          null;
+
+
+        this.originalEmissiveIntensity =
+          1;
+
+
+        /*
+          Actual room illumination.
+        */
+
+        this.glowLight =
+          null;
+
+
+        this.lastFlickerTime =
+          0;
+
+
+        this.onDesktopClick =
+
+          this.onDesktopClick
+            .bind(this);
+
+
+        this.onModelLoaded =
+
+          this.onModelLoaded
+            .bind(this);
+
+
+        /* --------------------------------------------------
+           MAC CLICK
+        -------------------------------------------------- */
+
+        this.el.addEventListener(
+
+          'click',
+
+          this.onDesktopClick
+
+        );
+
+
+        /* --------------------------------------------------
+           GLB LOAD
+        -------------------------------------------------- */
+
+        this.el.addEventListener(
+
+          'model-loaded',
+
+          this.onModelLoaded
+
+        );
+
+
+        /*
+          Component may be attached after model loaded.
+        */
+
+        if (
+          this.el.getObject3D(
+            'mesh'
+          )
+        ) {
+
+          this.onModelLoaded();
+
+        }
+
+      },
+
+
+    /* ======================================================
+       MODEL READY
+    ====================================================== */
+
+    onModelLoaded:
+      function () {
+
+        this.root =
+
+          this.el.getObject3D(
+            'mesh'
+          );
+
+
+        if (!this.root) {
+
+          return;
+
+        }
+
+
+        /*
+          First try to identify a screen automatically
+          from its Blender material/object name.
+
+          If that fails, nothing breaks.
+
+          The first player click on the CRT glass will
+          identify it instead.
+        */
+
+        this.tryNamedScreenAutoBind();
+
+      },
+
+
+    /* ======================================================
+       AUTOMATIC SCREEN SEARCH
+    ====================================================== */
+
+    tryNamedScreenAutoBind:
+      function () {
+
+        if (
+
+          this.screenMaterial ||
+
+          !this.root
+
+        ) {
+
+          return false;
+
+        }
+
+
+        const keywords = [
+
+          'tvscreen',
+
+          'tv_screen',
+
+          'televisionscreen',
+
+          'television_screen',
+
+          'crtscreen',
+
+          'crt_screen',
+
+          'screen',
+
+          'display'
+
+        ];
+
+
+        let found =
+          null;
+
+
+        this.root.traverse(
+
+          node => {
+
+            if (
+
+              found ||
+
+              !node.isMesh ||
+
+              !node.material
+
+            ) {
+
+              return;
+
+            }
+
+
+            const materials =
+
+              Array.isArray(
+                node.material
+              )
+
+                ? node.material
+
+                : [
+                    node.material
+                  ];
+
+
+            materials.forEach(
+
+              (
+                material,
+                index
+              ) => {
+
+                if (
+
+                  found ||
+
+                  !material
+
+                ) {
+
+                  return;
+
+                }
+
+
+                const materialName =
+
+                  String(
+                    material.name || ''
+                  )
+                    .toLowerCase()
+                    .replace(
+                      /\s+/g,
+                      ''
+                    );
+
+
+                const meshName =
+
+                  String(
+                    node.name || ''
+                  )
+                    .toLowerCase()
+                    .replace(
+                      /\s+/g,
+                      ''
+                    );
+
+
+                const combined =
+
+                  `${meshName} ${materialName}`;
+
+
+                const matching =
+
+                  keywords.some(
+
+                    keyword =>
+                      combined.includes(
+                        keyword
+                          .replace(
+                            /\s+/g,
+                            ''
+                          )
+                      )
+
+                  );
+
+
+                if (
+                  matching
+                ) {
+
+                  found = {
+
+                    mesh:
+                      node,
+
+                    materialIndex:
+                      index
+
+                  };
+
+                }
+
+              }
+
+            );
+
+          }
+
+        );
+
+
+        if (!found) {
+
+          console.log(
+
+            'TV: no named screen found. ' +
+            'Click the real CRT glass once and it will bind automatically.'
+
+          );
+
+
+          return false;
+
+        }
+
+
+        this.bindSurface(
+
+          found.mesh,
+
+          found.materialIndex,
+
+          null
+
+        );
+
+
+        console.log(
+
+          'TV: named CRT screen found automatically.'
+
+        );
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       MAC CLICK
+    ====================================================== */
+
+    onDesktopClick:
+      function (
+        event
+      ) {
+
+        /*
+          Quest uses vr-tv-interactor.
+        */
+
+        if (
+          isImmersiveXRScene(
+            this.el.sceneEl
+          )
+        ) {
+
+          return;
+
+        }
+
+
+        const intersection =
+
+          event &&
+
+          event.detail &&
+
+          event.detail.intersection
+
+            ? event.detail
+                .intersection
+
+            : null;
+
+
+        if (!intersection) {
+
+          return;
+
+        }
+
+
+        if (
+
+          !objectBelongsToEntity(
+
+            intersection.object,
+
+            this.el
+
+          )
+
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+          event.stopPropagation
+        ) {
+
+          event.stopPropagation();
+
+        }
+
+
+        this.toggleFromIntersection(
+          intersection
+        );
+
+      },
+
+
+    /* ======================================================
+       DOES RAY HIT BOUND SCREEN?
+    ====================================================== */
+
+    intersectionMatchesScreen:
+      function (
+        intersection
+      ) {
+
+        if (
+
+          !intersection ||
+
+          !this.screenMesh
+
+        ) {
+
+          return false;
+
+        }
+
+
+        if (
+
+          intersection.object !==
+          this.screenMesh
+
+        ) {
+
+          return false;
+
+        }
+
+
+        const materialIndex =
+
+          getIntersectionMaterialIndex(
+            intersection
+          );
+
+
+        return (
+
+          materialIndex ===
+          this.screenMaterialIndex
+
+        );
+
+      },
+
+
+    /* ======================================================
+       INTERACTION
+
+       First click:
+       bind to real CRT surface + turn on.
+
+       Later clicks:
+       same screen surface toggles.
+    ====================================================== */
+
+    toggleFromIntersection:
+      function (
+        intersection
+      ) {
+
+        if (
+
+          !intersection ||
+
+          !intersection.object ||
+
+          !intersection.object.isMesh
+
+        ) {
+
+          return false;
+
+        }
+
+
+        /* --------------------------------------------------
+           FIRST CLICK
+
+           Remember exactly which GLB material was hit.
+        -------------------------------------------------- */
+
+        if (
+          !this.screenMaterial
+        ) {
+
+          const materialIndex =
+
+            getIntersectionMaterialIndex(
+              intersection
+            );
+
+
+          const bound =
+
+            this.bindSurface(
+
+              intersection.object,
+
+              materialIndex,
+
+              intersection
+
+            );
+
+
+          if (!bound) {
+
+            return false;
+
+          }
+
+
+          this.setState(
+            true
+          );
+
+
+          return true;
+
+        }
+
+
+        /* --------------------------------------------------
+           ALREADY BOUND
+
+           Other furniture does nothing.
+        -------------------------------------------------- */
+
+        if (
+
+          !this
+            .intersectionMatchesScreen(
+              intersection
+            )
+
+        ) {
+
+          return false;
+
+        }
+
+
+        this.toggle();
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       GET MATERIAL
+    ====================================================== */
+
+    getMaterialAt:
+      function (
+        mesh,
+        materialIndex
+      ) {
+
+        if (
+
+          !mesh ||
+
+          !mesh.material
+
+        ) {
+
+          return null;
+
+        }
+
+
+        if (
+          Array.isArray(
+            mesh.material
+          )
+        ) {
+
+          return (
+
+            mesh.material[
+              materialIndex
+            ] ||
+
+            mesh.material[0] ||
+
+            null
+
+          );
+
+        }
+
+
+        return mesh.material;
+
+      },
+
+
+    /* ======================================================
+       CLONE JUST ONE MATERIAL SLOT
+
+       Prevents another mesh sharing this material from glowing.
+    ====================================================== */
+
+    cloneMaterialSlot:
+      function (
+        mesh,
+        materialIndex
+      ) {
+
+        const original =
+
+          this.getMaterialAt(
+
+            mesh,
+
+            materialIndex
+
+          );
+
+
+        if (
+
+          !original ||
+
+          !original.clone
+
+        ) {
+
+          return null;
+
+        }
+
+
+        const cloned =
+
+          original.clone();
+
+
+        if (
+          Array.isArray(
+            mesh.material
+          )
+        ) {
+
+          const materials =
+
+            mesh.material.slice();
+
+
+          materials[
+            materialIndex
+          ] =
+            cloned;
+
+
+          mesh.material =
+            materials;
+
+
+        } else {
+
+
+          mesh.material =
+            cloned;
+
+        }
+
+
+        return cloned;
+
+      },
+
+
+    /* ======================================================
+       BIND REAL CRT MATERIAL
+    ====================================================== */
+
+    bindSurface:
+      function (
+        mesh,
+        materialIndex,
+        intersection
+      ) {
+
+        if (
+
+          !mesh ||
+
+          !mesh.isMesh
+
+        ) {
+
+          return false;
+
+        }
+
+
+        const material =
+
+          this.cloneMaterialSlot(
+
+            mesh,
+
+            materialIndex
+
+          );
+
+
+        if (!material) {
+
+          console.warn(
+
+            'TV: selected surface has no usable material.'
+
+          );
+
+
+          return false;
+
+        }
+
+
+        this.screenMesh =
+          mesh;
+
+
+        this.screenMaterialIndex =
+          materialIndex;
+
+
+        this.screenMaterial =
+          material;
+
+
+        /* --------------------------------------------------
+           SAVE ORIGINAL MATERIAL
+        -------------------------------------------------- */
+
+        if (
+
+          material.color &&
+
+          material.color.clone
+
+        ) {
+
+          this.originalColor =
+
+            material.color.clone();
+
+        }
+
+
+        if (
+
+          material.emissive &&
+
+          material.emissive.clone
+
+        ) {
+
+          this.originalEmissive =
+
+            material.emissive.clone();
+
+        }
+
+
+        if (
+
+          typeof
+            material.emissiveIntensity ===
+            'number'
+
+        ) {
+
+          this.originalEmissiveIntensity =
+
+            material
+              .emissiveIntensity;
+
+        }
+
+
+        mesh.userData
+          .roomsTVScreen =
+          true;
+
+
+        /* --------------------------------------------------
+           REAL WORLD SCREEN POSITION
+        -------------------------------------------------- */
+
+        const worldPoint =
+
+          intersection &&
+
+          intersection.point
+
+            ? intersection.point
+                .clone()
+
+            : this
+                .getMeshWorldCenter(
+                  mesh
+                );
+
+
+        /*
+          Make the actual room light originate
+          from the real CRT.
+        */
+
+        this.createGlowLight(
+          worldPoint
+        );
+
+
+        /*
+          audio.js can use this later so the
+          static also originates exactly here.
+        */
+
+        if (
+
+          worldPoint &&
+
+          window
+            .setRoomsTVPosition
+
+        ) {
+
+          window
+            .setRoomsTVPosition(
+              worldPoint
+            );
+
+        }
+
+
+        console.log(
+
+          'TV SCREEN BOUND:',
+
+          '\nMesh:',
+
+          mesh.name ||
+          '(unnamed mesh)',
+
+          '\nMaterial:',
+
+          material.name ||
+          '(unnamed material)',
+
+          '\nMaterial slot:',
+
+          materialIndex
+
+        );
+
+
+        /*
+          Useful warning:
+
+          If Blender exported the entire TV as one
+          single material, the whole mesh may glow.
+
+          Usually the CRT glass is a separate material.
+        */
+
+        if (
+          !Array.isArray(
+            mesh.material
+          )
+        ) {
+
+          console.log(
+
+            'TV note: this clicked mesh uses one material. ' +
+            'If the whole television glows instead of only the glass, ' +
+            'the CRT glass needs its own material in Blender.'
+
+          );
+
+        }
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       GET REAL MESH CENTER
+    ====================================================== */
+
+    getMeshWorldCenter:
+      function (
+        mesh
+      ) {
+
+        if (!mesh) {
+
+          return null;
+
+        }
+
+
+        mesh.updateMatrixWorld(
+          true
+        );
+
+
+        const box =
+
+          new THREE.Box3()
+            .setFromObject(
+              mesh
+            );
+
+
+        if (
+          box.isEmpty()
+        ) {
+
+          return null;
+
+        }
+
+
+        return (
+
+          box.getCenter(
+            new THREE.Vector3()
+          )
+
+        );
+
+      },
+
+
+    /* ======================================================
+       CREATE TV ROOM LIGHT
+
+       This creates ONLY a point light.
+
+       It does NOT create a visible rectangle.
+    ====================================================== */
+
+    createGlowLight:
+      function (
+        worldPoint
+      ) {
+
+        if (
+          !worldPoint
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+          !this.glowLight
+        ) {
+
+          const light =
+
+            document
+              .createElement(
+                'a-entity'
+              );
+
+
+          light.setAttribute(
+            'id',
+            'tvGlowLight'
+          );
+
+
+          light.setAttribute(
+
+            'light',
+
+            {
+
+              type:
+                'point',
+
+              color:
+                this.data
+                  .lightColor,
+
+              intensity:
+                0,
+
+              distance:
+                this.data
+                  .lightDistance,
+
+              decay:
+                2,
+
+              castShadow:
+                false
+
+            }
+
+          );
+
+
+          /*
+            Make it a child of livingasset.
+          */
+
+          this.el.appendChild(
+            light
+          );
+
+
+          this.glowLight =
+            light;
+
+        }
+
+
+        /*
+          Convert real screen world position to
+          livingasset local coordinates.
+        */
+
+        this.el.object3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        const localPoint =
+
+          this.el.object3D
+            .worldToLocal(
+
+              worldPoint.clone()
+
+            );
+
+
+        this.glowLight
+          .object3D
+          .position
+          .copy(
+            localPoint
+          );
+
+      },
+
+
+    /* ======================================================
+       TV TOGGLE
+    ====================================================== */
+
+    toggle:
+      function () {
+
+        this.setState(
+          !this.isOn
+        );
+
+      },
+
+
+    /* ======================================================
+       SET TV STATE
+    ====================================================== */
+
+    setState:
+      function (
+        shouldBeOn
+      ) {
+
+        if (
+          !this.screenMaterial
+        ) {
+
+          return false;
+
+        }
+
+
+        this.isOn =
+
+          Boolean(
+            shouldBeOn
+          );
+
+
+        this.applyVisualState();
+
+
+        /* --------------------------------------------------
+           AUDIO
+        -------------------------------------------------- */
+
+        if (
+          window.setRoomsTVState
+        ) {
+
+          window
+            .setRoomsTVState(
+              this.isOn
+            );
+
+        }
+
+
+        /* --------------------------------------------------
+           STORY EVENT
+        -------------------------------------------------- */
+
+        this.el.emit(
+
+          'tv-state-changed',
+
+          {
+
+            isOn:
+              this.isOn
+
+          },
+
+          false
+
+        );
+
+
+        console.log(
+
+          this.isOn
+
+            ? 'TV turned ON.'
+
+            : 'TV turned OFF.'
+
+        );
+
+
+        return true;
+
+      },
+
+
+    /* ======================================================
+       ACTUAL CRT VISUAL STATE
+    ====================================================== */
+
+    applyVisualState:
+      function () {
+
+        const material =
+          this.screenMaterial;
+
+
+        if (!material) {
+
+          return;
+
+        }
+
+
+        /* --------------------------------------------------
+           ON
+        -------------------------------------------------- */
+
+        if (
+          this.isOn
+        ) {
+
+          /*
+            Emissive glow for standard / physical
+            GLB materials.
+          */
+
+          if (
+
+            material.emissive &&
+
+            material.emissive.set
+
+          ) {
+
+            material.emissive
+              .set(
+                this.data
+                  .glowColor
+              );
+
+
+            if (
+
+              typeof
+                material.emissiveIntensity ===
+                'number'
+
+            ) {
+
+              material
+                .emissiveIntensity =
+                2.0;
+
+            }
+
+          }
+
+
+          /*
+            Pale old-TV screen.
+          */
+
+          if (
+
+            material.color &&
+
+            material.color.set
+
+          ) {
+
+            material.color
+              .set(
+                this.data
+                  .screenColor
+              );
+
+          }
+
+
+          /*
+            Actual nearby room illumination.
+          */
+
+          if (
+            this.glowLight
+          ) {
+
+            this.glowLight
+              .setAttribute(
+
+                'light',
+
+                'intensity',
+
+                this.data
+                  .lightIntensity
+
+              );
+
+          }
+
+
+        /* --------------------------------------------------
+           OFF
+        -------------------------------------------------- */
+
+        } else {
+
+
+          if (
+
+            this.originalColor &&
+
+            material.color &&
+
+            material.color.copy
+
+          ) {
+
+            material.color
+              .copy(
+                this.originalColor
+              );
+
+          }
+
+
+          if (
+
+            this.originalEmissive &&
+
+            material.emissive &&
+
+            material.emissive.copy
+
+          ) {
+
+            material.emissive
+              .copy(
+                this.originalEmissive
+              );
+
+          }
+
+
+          if (
+
+            typeof
+              material.emissiveIntensity ===
+              'number'
+
+          ) {
+
+            material
+              .emissiveIntensity =
+
+              this
+                .originalEmissiveIntensity;
+
+          }
+
+
+          if (
+            this.glowLight
+          ) {
+
+            this.glowLight
+              .setAttribute(
+
+                'light',
+
+                'intensity',
+
+                0
+
+              );
+
+          }
+
+        }
+
+
+        material.needsUpdate =
+          true;
+
+      },
+
+
+    /* ======================================================
+       OLD TV FLICKER
+    ====================================================== */
+
+    tick:
+      function (
+        time
+      ) {
+
+        if (
+
+          !this.isOn ||
+
+          !this.screenMaterial
+
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+
+          time -
+          this.lastFlickerTime <
+
+          this.data
+            .flickerInterval
+
+        ) {
+
+          return;
+
+        }
+
+
+        this.lastFlickerTime =
+          time;
+
+
+        const brightness =
+
+          this.data.flickerMin +
+
+          Math.random() *
+
+          (
+            this.data.flickerMax -
+            this.data.flickerMin
+          );
+
+
+        const material =
+          this.screenMaterial;
+
+
+        /*
+          Screen brightness shifts slightly.
+        */
+
+        if (
+
+          material.emissive &&
+
+          typeof
+            material.emissiveIntensity ===
+            'number'
+
+        ) {
+
+          material
+            .emissiveIntensity =
+            brightness;
+
+        }
+
+
+        /*
+          Nearby walls also receive a tiny
+          brightness variation.
+        */
+
+        if (
+          this.glowLight
+        ) {
+
+          const roomBrightness =
+
+            this.data
+              .lightIntensity *
+
+            (
+              0.78 +
+
+              Math.random() *
+              0.32
+            );
+
+
+          this.glowLight
+            .setAttribute(
+
+              'light',
+
+              'intensity',
+
+              roomBrightness
+
+            );
+
+        }
+
+      },
+
+
+    /* ======================================================
+       CLEANUP
+    ====================================================== */
+
+    remove:
+      function () {
+
+        this.el
+          .removeEventListener(
+
+            'click',
+
+            this.onDesktopClick
+
+          );
+
+
+        this.el
+          .removeEventListener(
+
+            'model-loaded',
+
+            this.onModelLoaded
+
+          );
+
+      }
+
+  }
+
+);
+
+
+/* ============================================================
+   QUEST REAL TV INTERACTION
+============================================================ */
+
+AFRAME.registerComponent(
+  'vr-tv-interactor',
+  {
+
+    schema: {
+
+      pressThreshold: {
+        default: 0.65
+      },
+
+
+      releaseThreshold: {
+        default: 0.2
+      }
+
+    },
+
+
+    init:
+      function () {
+
+        this.triggerHeld =
+          false;
+
+
+        this.pressTrigger =
+
+          this.pressTrigger
+            .bind(this);
+
+
+        this.releaseTrigger =
+
+          this.releaseTrigger
+            .bind(this);
+
+
+        this.onTriggerChanged =
+
+          this.onTriggerChanged
+            .bind(this);
+
+
+        this.el.addEventListener(
+
+          'triggerdown',
+
+          this.pressTrigger
+
+        );
+
+
+        this.el.addEventListener(
+
+          'triggerup',
+
+          this.releaseTrigger
+
+        );
+
+
+        this.el.addEventListener(
+
+          'triggerchanged',
+
+          this.onTriggerChanged
+
+        );
+
+
+        this.el.addEventListener(
+
+          'controllerdisconnected',
+
+          this.releaseTrigger
+
+        );
+
+      },
+
+
+    pressTrigger:
+      function () {
+
+        if (
+          this.triggerHeld
+        ) {
+
+          return;
+
+        }
+
+
+        this.triggerHeld =
+          true;
+
+
+        this.useTV();
+
+      },
+
+
+    releaseTrigger:
+      function () {
+
+        this.triggerHeld =
+          false;
+
+      },
+
+
+    onTriggerChanged:
+      function (
+        event
+      ) {
+
+        const value =
+
+          event &&
+
+          event.detail &&
+
+          typeof
+            event.detail.value ===
+            'number'
+
+            ? event.detail.value
+
+            : null;
+
+
+        if (
+          value === null
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+
+          value >=
+            this.data
+              .pressThreshold &&
+
+          !this.triggerHeld
+
+        ) {
+
+          this.pressTrigger();
+
+
+        } else if (
+
+          value <=
+          this.data
+            .releaseThreshold
+
+        ) {
+
+          this.releaseTrigger();
+
+        }
+
+      },
+
+
+    useTV:
+      function () {
+
+        const living =
+
+          document.querySelector(
+            '#living'
+          );
+
+
+        if (!living) {
+
+          return;
+
+        }
+
+
+        const television =
+
+          living.components[
+            'embedded-tv'
+          ];
+
+
+        const raycaster =
+
+          this.el.components
+            .raycaster;
+
+
+        if (
+
+          !television ||
+
+          !raycaster
+
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+          raycaster.refreshObjects
+        ) {
+
+          raycaster
+            .refreshObjects();
+
+        }
+
+
+        /*
+          Only closest visible intersection.
+        */
+
+        const intersections =
+
+          raycaster.intersections ||
+          [];
+
+
+        if (
+          !intersections.length
+        ) {
+
+          return;
+
+        }
+
+
+        const closest =
+          intersections[0];
+
+
+        /*
+          Trigger only works when the laser
+          is actually touching livingasset.glb.
+        */
+
+        if (
+
+          !objectBelongsToEntity(
+
+            closest.object,
+
+            living
+
+          )
+
+        ) {
+
+          return;
+
+        }
+
+
+        television
+          .toggleFromIntersection(
+            closest
+          );
+
+      }
+
+  }
+
+);
+
+
+/* ============================================================
+   AUTOMATIC REAL TV SETUP
+
+   This means index.html does NOT need:
+   - tvAnchor
+   - tvScreen
+   - fake a-plane
+   - manually placed TV glow
+
+   The actual living GLB becomes raycastable instead.
+============================================================ */
+
+function setupRoomsTV() {
+
+  const living =
+
+    document.querySelector(
+      '#living'
+    );
+
+
+  const cursor =
+
+    document.querySelector(
+      'a-cursor'
+    );
+
+
+  const rightHand =
+
+    document.querySelector(
+      '#rightHand'
+    );
+
+
+  if (!living) {
+
+    return;
+
+  }
+
+
+  /* --------------------------------------------------------
+     MARK LIVING MODEL AS TV-RAYCASTABLE
+  -------------------------------------------------------- */
+
+  living.classList.add(
+    'tv-interactable'
+  );
+
+
+  /* --------------------------------------------------------
+     ATTACH TV COMPONENT
+  -------------------------------------------------------- */
+
+  if (
+
+    !living.hasAttribute(
+      'embedded-tv'
+    )
+
+  ) {
+
+    living.setAttribute(
+      'embedded-tv',
+      ''
+    );
+
+  }
+
+
+  /* --------------------------------------------------------
+     MAC CROSSHAIR
+
+     Existing objects are preserved.
+  -------------------------------------------------------- */
+
+  appendRaycasterObjectSelector(
+
+    cursor,
+
+    '.tv-interactable'
+
+  );
+
+
+  /* --------------------------------------------------------
+     QUEST LASER
+
+     Existing door/UI selectors are preserved.
+  -------------------------------------------------------- */
+
+  appendRaycasterObjectSelector(
+
+    rightHand,
+
+    '.tv-interactable'
+
+  );
+
+
+  /* --------------------------------------------------------
+     QUEST TV CONTROLLER COMPONENT
+  -------------------------------------------------------- */
+
+  if (
+
+    rightHand &&
+
+    !rightHand.hasAttribute(
+      'vr-tv-interactor'
+    )
+
+  ) {
+
+    rightHand.setAttribute(
+      'vr-tv-interactor',
+      ''
+    );
+
+  }
+
+
+  console.log(
+
+    'Real embedded CRT TV interaction ready.'
+
+  );
+
+}
+
+
+/* ============================================================
+   WAIT FOR A-FRAME SCENE
+============================================================ */
+
+window.addEventListener(
+
+  'DOMContentLoaded',
+
+  () => {
+
+    const scene =
+
+      document.querySelector(
+        'a-scene'
+      );
+
+
+    if (!scene) {
+
+      return;
+
+    }
+
+
+    if (
+      scene.hasLoaded
+    ) {
+
+      setupRoomsTV();
+
+
+    } else {
+
+
+      scene.addEventListener(
+
+        'loaded',
+
+        setupRoomsTV,
+
+        {
+          once: true
+        }
+
+      );
+
+    }
+
+  }
+
+);
+
+
+/* ============================================================
+   NATURAL GRABBABLE OBJECT
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1468,142 +4032,162 @@ AFRAME.registerComponent(
         default: -9.8
       },
 
+
       floorY: {
         default: 0.015
       },
+
 
       throwMultiplier: {
         default: 1.0
       },
 
+
       maxThrowSpeed: {
         default: 6
       }
+
     },
 
 
-    init: function () {
+    init:
+      function () {
 
-      this.heldBy =
-        null;
-
-
-      this.velocity =
-        new THREE.Vector3();
+        this.heldBy =
+          null;
 
 
-      this.isMoving =
-        false;
+        this.velocity =
+          new THREE.Vector3();
 
 
-      this.lastSurfaceCheck =
-        0;
+        this.isMoving =
+          false;
 
 
-      this.dropRay =
-        new THREE.Raycaster();
+        this.lastSurfaceCheck =
+          0;
 
 
-      this.dropRay.far =
-        2.5;
+        this.dropRay =
+          new THREE.Raycaster();
 
 
-      this.cachedRoomMeshes =
-        [];
+        this.dropRay.far =
+          2.5;
 
 
-      this.roomMeshCacheTime =
-        0;
+        this.cachedRoomMeshes =
+          [];
 
 
-      /*
-        MAC CLICK PICKUP
+        this.roomMeshCacheTime =
+          0;
 
-        Again: block mouse interaction only
-        during a REAL immersive headset
-        session.
 
-        Mac fullscreen remains interactive.
-      */
-      this.el.addEventListener(
-        'click',
-        () => {
+        /* --------------------------------------------------
+           MAC PICKUP
+        -------------------------------------------------- */
 
-          if (
-            isImmersiveXRScene(
-              this.el.sceneEl
-            )
-          ) {
-            return;
+        this.el.addEventListener(
+
+          'click',
+
+          () => {
+
+            /*
+              Mac fullscreen remains clickable.
+            */
+
+            if (
+              isImmersiveXRScene(
+                this.el.sceneEl
+              )
+            ) {
+
+              return;
+
+            }
+
+
+            const desktopHold =
+
+              document.querySelector(
+                '#desktopHold'
+              );
+
+
+            if (
+              !desktopHold
+            ) {
+
+              return;
+
+            }
+
+
+            if (
+              this.heldBy
+            ) {
+
+              this.release(
+                new THREE.Vector3()
+              );
+
+
+            } else {
+
+
+              this.grab(
+                desktopHold
+              );
+
+            }
+
           }
 
+        );
 
-          const desktopHold =
-            document.querySelector(
-              '#desktopHold'
-            );
+      },
 
 
-          if (!desktopHold) {
-            return;
-          }
-
-
-          /*
-            Click held object again:
-            release it.
-
-            Click unheld object:
-            pick it up.
-          */
-          if (this.heldBy) {
-
-            this.release(
-              new THREE.Vector3()
-            );
-
-          } else {
-
-            this.grab(
-              desktopHold
-            );
-          }
-        }
-      );
-    },
-
-
-  /* ========================================================
-     GET WORLD BOUNDING BOX
-  ======================================================== */
+    /* ======================================================
+       WORLD BOUNDING BOX
+    ====================================================== */
 
     getWorldBox:
       function () {
 
         const model =
+
           this.el.getObject3D(
             'mesh'
           ) ||
+
           this.el.object3D;
 
 
-        model.updateMatrixWorld(
-          true
-        );
+        model
+          .updateMatrixWorld(
+            true
+          );
 
 
         return (
+
           new THREE.Box3()
             .setFromObject(
               model
             )
+
         );
+
       },
 
 
-  /* ========================================================
-     DISTANCE FROM HAND TO OBJECT
-  ======================================================== */
+    /* ======================================================
+       DISTANCE TO POINT
+    ====================================================== */
 
     distanceToPoint:
       function (
@@ -1614,12 +4198,17 @@ AFRAME.registerComponent(
           this.getWorldBox();
 
 
-        if (box.isEmpty()) {
+        if (
+          box.isEmpty()
+        ) {
+
           return Infinity;
+
         }
 
 
         const closest =
+
           worldPoint
             .clone()
             .clamp(
@@ -1629,17 +4218,20 @@ AFRAME.registerComponent(
 
 
         return (
-          closest.distanceTo(
-            worldPoint
-          )
+
+          closest
+            .distanceTo(
+              worldPoint
+            )
+
         );
+
       },
 
 
-  /* ========================================================
-     MOVE OBJECT BETWEEN PARENTS
-     WITHOUT TELEPORTING IT
-  ======================================================== */
+    /* ======================================================
+       REPARENT PRESERVING WORLD TRANSFORM
+    ====================================================== */
 
     reparentPreserveWorld:
       function (
@@ -1652,23 +4244,29 @@ AFRAME.registerComponent(
           );
 
 
-        newParentObject3D.attach(
-          this.el.object3D
-        );
+        newParentObject3D
+          .attach(
+            this.el.object3D
+          );
+
       },
 
 
-  /* ========================================================
-     GRAB
-  ======================================================== */
+    /* ======================================================
+       GRAB
+    ====================================================== */
 
     grab:
       function (
         handEntity
       ) {
 
-        if (this.heldBy) {
+        if (
+          this.heldBy
+        ) {
+
           return false;
+
         }
 
 
@@ -1693,36 +4291,45 @@ AFRAME.registerComponent(
 
 
         /*
-          story.js listens for this state
-          when an object has class="clue".
+          story.js can detect this.
         */
+
         this.el.addState(
           'grabbed'
         );
 
 
         console.log(
+
           this.el.id,
+
           'grabbed by',
+
           handEntity.id
+
         );
 
 
         return true;
+
       },
 
 
-  /* ========================================================
-     RELEASE / THROW
-  ======================================================== */
+    /* ======================================================
+       RELEASE / THROW
+    ====================================================== */
 
     release:
       function (
         controllerVelocity
       ) {
 
-        if (!this.heldBy) {
+        if (
+          !this.heldBy
+        ) {
+
           return;
+
         }
 
 
@@ -1730,9 +4337,6 @@ AFRAME.registerComponent(
           this.el.sceneEl;
 
 
-        /*
-          Return object to the main scene.
-        */
         this.reparentPreserveWorld(
           scene.object3D
         );
@@ -1748,54 +4352,65 @@ AFRAME.registerComponent(
 
 
         this.velocity.copy(
+
           controllerVelocity ||
+
           new THREE.Vector3()
+
         );
 
 
-        this.velocity.multiplyScalar(
-          this.data
-            .throwMultiplier
-        );
+        this.velocity
+          .multiplyScalar(
+            this.data
+              .throwMultiplier
+          );
 
 
-        this.velocity.clampLength(
-          0,
-          this.data
-            .maxThrowSpeed
-        );
+        this.velocity
+          .clampLength(
+
+            0,
+
+            this.data
+              .maxThrowSpeed
+
+          );
 
 
-        /*
-          Very slow release:
-          try settling it immediately
-          on nearby furniture/floor.
-        */
         if (
+
           this.velocity.length() <
           0.22
+
         ) {
 
           const settled =
-            this.settleOnNearbySurface(
-              0.45
-            );
+
+            this
+              .settleOnNearbySurface(
+                0.45
+              );
 
 
           this.isMoving =
             !settled;
 
+
         } else {
+
 
           this.isMoving =
             true;
+
         }
+
       },
 
 
-  /* ========================================================
-     CACHE ROOM MESHES
-  ======================================================== */
+    /* ======================================================
+       ROOM COLLISION / DROP SURFACES
+    ====================================================== */
 
     getRoomMeshes:
       function () {
@@ -1805,15 +4420,21 @@ AFRAME.registerComponent(
 
 
         if (
+
           this.cachedRoomMeshes
             .length &&
+
           now -
           this.roomMeshCacheTime <
+
           5000
+
         ) {
+
           return (
             this.cachedRoomMeshes
           );
+
         }
 
 
@@ -1826,17 +4447,20 @@ AFRAME.registerComponent(
             '.roompart'
           )
           .forEach(
-            (entity) => {
+
+            entity => {
 
               const root =
-                entity
-                  .getObject3D(
-                    'mesh'
-                  );
+
+                entity.getObject3D(
+                  'mesh'
+                );
 
 
               if (!root) {
+
                 return;
+
               }
 
 
@@ -1846,18 +4470,25 @@ AFRAME.registerComponent(
 
 
               root.traverse(
-                (node) => {
+
+                node => {
 
                   if (
                     node.isMesh
                   ) {
+
                     meshes.push(
                       node
                     );
+
                   }
+
                 }
+
               );
+
             }
+
           );
 
 
@@ -1872,12 +4503,13 @@ AFRAME.registerComponent(
         return (
           this.cachedRoomMeshes
         );
+
       },
 
 
-  /* ========================================================
-     PLACE DROPPED ITEM ON A NEARBY SURFACE
-  ======================================================== */
+    /* ======================================================
+       SETTLE ON FURNITURE
+    ====================================================== */
 
     settleOnNearbySurface:
       function (
@@ -1891,7 +4523,9 @@ AFRAME.registerComponent(
         if (
           !roomMeshes.length
         ) {
+
           return false;
+
         }
 
 
@@ -1899,8 +4533,12 @@ AFRAME.registerComponent(
           this.getWorldBox();
 
 
-        if (box.isEmpty()) {
+        if (
+          box.isEmpty()
+        ) {
+
           return false;
+
         }
 
 
@@ -1913,66 +4551,81 @@ AFRAME.registerComponent(
         );
 
 
-        /*
-          Cast downward from slightly above
-          the bottom of the object's box.
-        */
         const origin =
+
           new THREE.Vector3(
+
             center.x,
-            box.min.y + 0.08,
+
+            box.min.y +
+            0.08,
+
             center.z
+
           );
 
 
         this.dropRay.set(
+
           origin,
+
           new THREE.Vector3(
             0,
             -1,
             0
           )
+
         );
 
 
         this.dropRay.far =
+
           maximumDistance +
           0.08;
 
 
         const hit =
+
           this.dropRay
             .intersectObjects(
+
               roomMeshes,
+
               true
+
             )[0];
 
 
         if (!hit) {
+
           return false;
+
         }
 
 
         const gap =
+
           box.min.y -
           hit.point.y;
 
 
         if (
+
           gap < -0.03 ||
+
           gap >
           maximumDistance
+
         ) {
+
           return false;
+
         }
 
 
-        /*
-          Move object so its bottom sits
-          slightly above the surface.
-        */
         this.el.object3D
           .position.y +=
+
           hit.point.y -
           box.min.y +
           0.012;
@@ -1986,12 +4639,13 @@ AFRAME.registerComponent(
 
 
         return true;
+
       },
 
 
-  /* ========================================================
-     SIMPLE THROW / GRAVITY PHYSICS
-  ======================================================== */
+    /* ======================================================
+       SIMPLE THROW PHYSICS
+    ====================================================== */
 
     tick:
       function (
@@ -2000,47 +4654,69 @@ AFRAME.registerComponent(
       ) {
 
         if (
+
           this.heldBy ||
+
           !this.isMoving ||
+
           !deltaTime
+
         ) {
+
           return;
+
         }
 
 
         const dt =
+
           Math.min(
-            deltaTime / 1000,
+
+            deltaTime /
+            1000,
+
             0.04
+
           );
 
 
-        /*
-          Gravity.
-        */
+        /* --------------------------------------------------
+           GRAVITY
+        -------------------------------------------------- */
+
         this.velocity.y +=
+
           this.data.gravity *
           dt;
 
 
-        /*
-          Movement.
-        */
+        /* --------------------------------------------------
+           MOVE
+        -------------------------------------------------- */
+
         this.el.object3D
           .position
           .addScaledVector(
+
             this.velocity,
+
             dt
+
           );
 
 
-        /*
-          Air damping.
-        */
+        /* --------------------------------------------------
+           AIR DAMPING
+        -------------------------------------------------- */
+
         const damping =
+
           Math.pow(
+
             0.985,
+
             dt * 60
+
           );
 
 
@@ -2062,12 +4738,16 @@ AFRAME.registerComponent(
           this.getWorldBox();
 
 
-        /*
-          Basic fallback floor.
-        */
-        if (!box.isEmpty()) {
+        /* --------------------------------------------------
+           FALLBACK FLOOR
+        -------------------------------------------------- */
+
+        if (
+          !box.isEmpty()
+        ) {
 
           const floorPenetration =
+
             this.data.floorY -
             box.min.y;
 
@@ -2082,13 +4762,14 @@ AFRAME.registerComponent(
               floorPenetration;
 
 
-            /*
-              Small bounce for stronger throws.
-            */
             if (
+
               Math.abs(
                 this.velocity.y
-              ) > 0.8
+              ) >
+
+              0.8
+
             ) {
 
               this.velocity.y *=
@@ -2102,7 +4783,9 @@ AFRAME.registerComponent(
               this.velocity.z *=
                 0.72;
 
+
             } else {
+
 
               this.velocity.set(
                 0,
@@ -2113,21 +4796,30 @@ AFRAME.registerComponent(
 
               this.isMoving =
                 false;
+
             }
+
           }
+
         }
 
 
-        /*
-          While falling, occasionally look
-          for furniture/surfaces.
-        */
+        /* --------------------------------------------------
+           FURNITURE SETTLE
+        -------------------------------------------------- */
+
         if (
+
           this.isMoving &&
-          this.velocity.y <= 0 &&
+
+          this.velocity.y <=
+            0 &&
+
           time -
           this.lastSurfaceCheck >
+
           120
+
         ) {
 
           this.lastSurfaceCheck =
@@ -2135,21 +4827,30 @@ AFRAME.registerComponent(
 
 
           if (
-            this.settleOnNearbySurface(
-              0.12
-            )
+
+            this
+              .settleOnNearbySurface(
+                0.12
+              )
+
           ) {
+
             this.isMoving =
               false;
+
           }
+
         }
+
       }
+
   }
+
 );
 
 
 /* ============================================================
-   VR HAND GRABBING
+   QUEST NATURAL GRAB HAND
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -2162,173 +4863,195 @@ AFRAME.registerComponent(
         default: 0.4
       },
 
+
       velocitySmoothing: {
         default: 0.35
       },
 
+
       gripThreshold: {
         default: 0.5
       }
+
     },
 
 
-    init: function () {
+    init:
+      function () {
 
-      this.heldItem =
-        null;
-
-
-      this.previousPosition =
-        new THREE.Vector3();
+        this.heldItem =
+          null;
 
 
-      this.currentPosition =
-        new THREE.Vector3();
+        this.previousPosition =
+          new THREE.Vector3();
 
 
-      this.smoothedVelocity =
-        new THREE.Vector3();
+        this.currentPosition =
+          new THREE.Vector3();
 
 
-      this.instantVelocity =
-        new THREE.Vector3();
+        this.smoothedVelocity =
+          new THREE.Vector3();
 
 
-      this.hasPreviousPosition =
-        false;
+        this.instantVelocity =
+          new THREE.Vector3();
 
 
-      this.gripHeld =
-        false;
+        this.hasPreviousPosition =
+          false;
 
 
-      this.analogGripHeld =
-        false;
+        this.gripHeld =
+          false;
 
 
-      this.beginGrip =
-        this.beginGrip
-          .bind(this);
+        this.analogGripHeld =
+          false;
 
 
-      this.endGrip =
-        this.endGrip
-          .bind(this);
+        this.beginGrip =
+
+          this.beginGrip
+            .bind(this);
 
 
-      this.onGripChanged =
-        this.onGripChanged
-          .bind(this);
+        this.endGrip =
+
+          this.endGrip
+            .bind(this);
 
 
-      /*
-        Meta Quest grip events.
-      */
-      this.el.addEventListener(
-        'gripdown',
-        this.beginGrip
-      );
+        this.onGripChanged =
+
+          this.onGripChanged
+            .bind(this);
 
 
-      this.el.addEventListener(
-        'squeezestart',
-        this.beginGrip
-      );
+        /* --------------------------------------------------
+           QUEST GRIP EVENTS
+        -------------------------------------------------- */
+
+        this.el.addEventListener(
+          'gripdown',
+          this.beginGrip
+        );
 
 
-      this.el.addEventListener(
-        'gripup',
-        this.endGrip
-      );
+        this.el.addEventListener(
+          'squeezestart',
+          this.beginGrip
+        );
 
 
-      this.el.addEventListener(
-        'squeezeend',
-        this.endGrip
-      );
+        this.el.addEventListener(
+          'gripup',
+          this.endGrip
+        );
 
 
-      this.el.addEventListener(
-        'gripchanged',
-        this.onGripChanged
-      );
+        this.el.addEventListener(
+          'squeezeend',
+          this.endGrip
+        );
 
 
-      /*
-        Additional controller buttons
-        as fallback pickup controls.
-      */
-      this.el.addEventListener(
-        'abuttondown',
-        this.beginGrip
-      );
+        this.el.addEventListener(
+          'gripchanged',
+          this.onGripChanged
+        );
 
 
-      this.el.addEventListener(
-        'abuttonup',
-        this.endGrip
-      );
+        this.el.addEventListener(
+          'abuttondown',
+          this.beginGrip
+        );
 
 
-      this.el.addEventListener(
-        'xbuttondown',
-        this.beginGrip
-      );
+        this.el.addEventListener(
+          'abuttonup',
+          this.endGrip
+        );
 
 
-      this.el.addEventListener(
-        'xbuttonup',
-        this.endGrip
-      );
+        this.el.addEventListener(
+          'xbuttondown',
+          this.beginGrip
+        );
 
 
-      this.el.addEventListener(
-        'controllerdisconnected',
-        this.endGrip
-      );
-    },
+        this.el.addEventListener(
+          'xbuttonup',
+          this.endGrip
+        );
 
 
-  /* ========================================================
-     ANALOG GRIP
-  ======================================================== */
+        this.el.addEventListener(
+          'controllerdisconnected',
+          this.endGrip
+        );
+
+      },
+
+
+    /* ======================================================
+       ANALOG GRIP
+    ====================================================== */
 
     onGripChanged:
-      function (event) {
+      function (
+        event
+      ) {
 
         const value =
+
           event &&
+
           event.detail &&
-          typeof event.detail.value ===
+
+          typeof
+            event.detail.value ===
             'number'
 
             ? event.detail.value
 
             : (
+
                 event &&
+
                 typeof event.detail ===
                   'number'
 
                   ? event.detail
 
                   : null
+
               );
 
 
-        if (value === null) {
+        if (
+          value === null
+        ) {
+
           return;
+
         }
 
 
         const isPressed =
+
           value >=
           this.data
             .gripThreshold;
 
 
         if (
+
           isPressed &&
+
           !this.analogGripHeld
+
         ) {
 
           this.analogGripHeld =
@@ -2337,9 +5060,13 @@ AFRAME.registerComponent(
 
           this.beginGrip();
 
+
         } else if (
+
           !isPressed &&
+
           this.analogGripHeld
+
         ) {
 
           this.analogGripHeld =
@@ -2347,19 +5074,25 @@ AFRAME.registerComponent(
 
 
           this.endGrip();
+
         }
+
       },
 
 
-  /* ========================================================
-     START GRIP
-  ======================================================== */
+    /* ======================================================
+       BEGIN GRIP
+    ====================================================== */
 
     beginGrip:
       function () {
 
-        if (this.gripHeld) {
+        if (
+          this.gripHeld
+        ) {
+
           return;
+
         }
 
 
@@ -2368,21 +5101,27 @@ AFRAME.registerComponent(
 
 
         this.grabNearest();
+
       },
 
 
-  /* ========================================================
-     RELEASE GRIP
-  ======================================================== */
+    /* ======================================================
+       END GRIP
+    ====================================================== */
 
     endGrip:
       function () {
 
         if (
+
           !this.gripHeld &&
+
           !this.heldItem
+
         ) {
+
           return;
+
         }
 
 
@@ -2391,12 +5130,13 @@ AFRAME.registerComponent(
 
 
         this.releaseHeld();
+
       },
 
 
-  /* ========================================================
-     FIND NEAREST GRABBABLE OBJECT
-  ======================================================== */
+    /* ======================================================
+       FIND NEAREST GRABBABLE
+    ====================================================== */
 
     findNearest:
       function () {
@@ -2428,23 +5168,31 @@ AFRAME.registerComponent(
             '[natural-grabbable]'
           )
           .forEach(
-            (entity) => {
+
+            entity => {
 
               const component =
+
                 entity.components[
                   'natural-grabbable'
                 ];
 
 
               if (
+
                 !component ||
+
                 component.heldBy
+
               ) {
+
                 return;
+
               }
 
 
               const distance =
+
                 component
                   .distanceToPoint(
                     handPosition
@@ -2466,68 +5214,85 @@ AFRAME.registerComponent(
 
                 nearestDistance =
                   distance;
+
               }
+
             }
+
           );
 
 
         return {
-          nearest: nearest,
+
+          nearest:
+            nearest,
 
           nearestEl:
             nearestEl,
 
           nearestDistance:
             nearestDistance
+
         };
+
       },
 
 
-  /* ========================================================
-     GRAB NEAREST
-  ======================================================== */
+    /* ======================================================
+       GRAB NEAREST
+    ====================================================== */
 
     grabNearest:
       function () {
 
-        if (this.heldItem) {
+        if (
+          this.heldItem
+        ) {
+
           return;
+
         }
 
 
         const {
+
           nearest,
+
           nearestEl,
+
           nearestDistance
+
         } =
           this.findNearest();
 
 
-        /*
-          Nothing close enough.
-        */
         if (
+
           !nearest ||
+
           nearestDistance >
           this.data.radius
+
         ) {
 
           console.log(
+
             this.el.id,
-            'grip pressed, but no item was close enough. Nearest was',
+
+            'grip pressed, but no item was close enough. Nearest:',
+
             nearestEl
               ? nearestEl.id
               : 'none'
+
           );
 
 
           return;
+
         }
 
 
-        /*
-          Successful grab.
-        */
         if (
           nearest.grab(
             this.el
@@ -2536,19 +5301,25 @@ AFRAME.registerComponent(
 
           this.heldItem =
             nearest;
+
         }
+
       },
 
 
-  /* ========================================================
-     RELEASE HELD OBJECT
-  ======================================================== */
+    /* ======================================================
+       RELEASE
+    ====================================================== */
 
     releaseHeld:
       function () {
 
-        if (!this.heldItem) {
+        if (
+          !this.heldItem
+        ) {
+
           return;
+
         }
 
 
@@ -2560,19 +5331,19 @@ AFRAME.registerComponent(
           null;
 
 
-        /*
-          Throw using smoothed hand velocity.
-        */
         released.release(
+
           this.smoothedVelocity
             .clone()
+
         );
+
       },
 
 
-  /* ========================================================
-     CALCULATE HAND VELOCITY
-  ======================================================== */
+    /* ======================================================
+       HAND VELOCITY FOR THROWING
+    ====================================================== */
 
     tick:
       function (
@@ -2581,7 +5352,9 @@ AFRAME.registerComponent(
       ) {
 
         if (!deltaTime) {
+
           return;
+
         }
 
 
@@ -2591,9 +5364,6 @@ AFRAME.registerComponent(
           );
 
 
-        /*
-          First frame.
-        */
         if (
           !this.hasPreviousPosition
         ) {
@@ -2609,38 +5379,42 @@ AFRAME.registerComponent(
 
 
           return;
+
         }
 
 
         const seconds =
+
           deltaTime /
           1000;
 
 
-        if (seconds > 0) {
+        if (
+          seconds >
+          0
+        ) {
 
-          /*
-            Raw controller velocity.
-          */
           this.instantVelocity
             .subVectors(
+
               this.currentPosition,
+
               this.previousPosition
+
             )
             .divideScalar(
               seconds
             );
 
 
-          /*
-            Smooth the velocity so throws
-            do not feel extremely jittery.
-          */
           this.smoothedVelocity
             .lerp(
+
               this.instantVelocity,
+
               this.data
                 .velocitySmoothing
+
             );
 
 
@@ -2648,7 +5422,115 @@ AFRAME.registerComponent(
             .copy(
               this.currentPosition
             );
+
         }
+
       }
+
   }
+
 );
+/* ============================================================
+   DESKTOP / MAC POV HEIGHT
+
+   Mac:
+   lower eye height
+
+   Quest:
+   keeps normal VR camera height
+============================================================ */
+
+AFRAME.registerComponent('platform-pov', {
+
+  schema: {
+
+    desktopHeight: {
+      default: 1.48
+    },
+
+    vrHeight: {
+      default: 1.60
+    }
+
+  },
+
+
+  init: function () {
+
+    this.updateHeight =
+      this.updateHeight.bind(this);
+
+
+    this.el.sceneEl.addEventListener(
+      'enter-vr',
+      this.updateHeight
+    );
+
+
+    this.el.sceneEl.addEventListener(
+      'exit-vr',
+      this.updateHeight
+    );
+
+
+    /*
+      Initial desktop height.
+    */
+    this.updateHeight();
+
+  },
+
+
+  updateHeight: function () {
+
+    const scene =
+      this.el.sceneEl;
+
+
+    const immersiveXR =
+      Boolean(
+        scene &&
+        scene.renderer &&
+        scene.renderer.xr &&
+        scene.renderer.xr.isPresenting
+      );
+
+
+    /*
+      Quest / real WebXR
+    */
+    if (immersiveXR) {
+
+      this.el.object3D.position.y =
+        this.data.vrHeight;
+
+
+    /*
+      Mac / normal browser / fullscreen
+    */
+    } else {
+
+      this.el.object3D.position.y =
+        this.data.desktopHeight;
+
+    }
+
+  },
+
+
+  remove: function () {
+
+    this.el.sceneEl.removeEventListener(
+      'enter-vr',
+      this.updateHeight
+    );
+
+
+    this.el.sceneEl.removeEventListener(
+      'exit-vr',
+      this.updateHeight
+    );
+
+  }
+
+});
