@@ -1,853 +1,688 @@
 /* ============================================================
    audio.js
-   POSITIONAL ROOM AUDIO + FOOTSTEPS + MASTER VOLUME
+   ROOMS WITHIN
 
-   Main changes:
-   - Fan, rain, fluorescent light and TV are now 3D positional.
-   - Walking closer makes a sound louder.
-   - Walking away makes it quieter.
-   - Turning your head changes left/right direction.
-   - Overall volumes are lower.
-   - Player footsteps remain attached to the player.
+   Handles:
+   - Positional ambience
+   - TV static
+   - Real TV sound position
+   - Master volume
+   - Mute / unmute
+   - Pause-menu audio behaviour
+   - Footstep audio
 ============================================================ */
 
 
 /* ============================================================
-   ROOM SOUND LOCATIONS
+   GLOBAL AUDIO STATE
+============================================================ */
 
-   These coordinates are starting positions.
+let roomsMasterVolume = 1.0;
+let roomsMuted = false;
+let roomsTVOn = false;
+let roomsTVWorldPosition = null;
 
-   Later, if the TV/fan/etc. are in slightly different places
-   inside your GLB, we only need to change the position values
-   here. We do NOT need to rewrite the sound system.
+/* ui-scare.js can use this as a fallback. */
+window.roomsMuted = roomsMuted;
+
+
+/* ============================================================
+   SOUND DEFINITIONS
 ============================================================ */
 
 const ROOM_SOUND_DEFINITIONS = [
-
-  /* --------------------------------------------------------
-     CEILING FAN
-  -------------------------------------------------------- */
   {
     id: 'fanSound',
-
-    src:
-      'sounds/73347__noisecollector__noisy_ceiling_fan.mp3',
-
-    position:
-      '-3.5 2.4 -1',
-
-    /*
-      Much quieter than the old 0.20.
-    */
-    baseVolume:
-      0.075,
-
-    /*
-      Within roughly this distance,
-      the sound remains fairly clear.
-    */
-    refDistance:
-      1.4,
-
-    /*
-      Higher value = fades faster
-      when walking away.
-    */
-    rolloffFactor:
-      1.8,
-
-    maxDistance:
-      9
+    src: 'sounds/73347__noisecollector__noisy_ceiling_fan.mp3',
+    position: new THREE.Vector3(-3.5, 2.4, -1),
+    volume: 0.075,
+    loop: true,
+    startAutomatically: true,
+    refDistance: 1.5,
+    maxDistance: 12,
+    rolloffFactor: 1.25
   },
 
-
-  /* --------------------------------------------------------
-     BEDROOM RAIN
-  -------------------------------------------------------- */
   {
-    id: 'bedroomRainSound',
-
-    src:
-      'sounds/bedroom-rain.wav',
-
-    position:
-      '-3.2 1.7 -3.8',
-
-    baseVolume:
-      0.060,
-
-    /*
-      Rain spreads further than the
-      smaller mechanical sounds.
-    */
-    refDistance:
-      2.2,
-
-    rolloffFactor:
-      1.25,
-
-    maxDistance:
-      13
+    id: 'rainSound',
+    src: 'sounds/bedroom-rain.wav',
+    position: new THREE.Vector3(-2, 1.6, -3),
+    volume: 0.060,
+    loop: true,
+    startAutomatically: true,
+    refDistance: 1.4,
+    maxDistance: 11,
+    rolloffFactor: 1.25
   },
 
-
-  /* --------------------------------------------------------
-     FLUORESCENT LIGHT
-  -------------------------------------------------------- */
   {
     id: 'fluorescentSound',
-
-    src:
-      'sounds/fluorescent-light.wav',
-
-    position:
-      '2.5 2.5 1.5',
-
-    baseVolume:
-      0.045,
-
-    refDistance:
-      1.2,
-
-    rolloffFactor:
-      2.0,
-
-    maxDistance:
-      8
+    src: 'sounds/fluorescent-light.wav',
+    position: new THREE.Vector3(2.5, 2.5, 1.5),
+    volume: 0.045,
+    loop: true,
+    startAutomatically: true,
+    refDistance: 1.2,
+    maxDistance: 9,
+    rolloffFactor: 1.4
   },
 
-
-  /* --------------------------------------------------------
-     TV STATIC
-  -------------------------------------------------------- */
   {
     id: 'tvStaticSound',
-
-    src:
-      'sounds/tv-static.mp3',
-
-    position:
-      '2.2 1.15 -1.8',
-
-    /*
-      TV is deliberately very quiet.
-      It should become noticeable mainly
-      when the player gets closer.
-    */
-    baseVolume:
-      0.025,
-
-    refDistance:
-      1.0,
-
-    rolloffFactor:
-      2.25,
-
-    maxDistance:
-      7
+    src: 'sounds/tv-static.mp3',
+    position: new THREE.Vector3(0, 1, 0),
+    volume: 0.025,
+    loop: true,
+    startAutomatically: false,
+    refDistance: 0.8,
+    maxDistance: 7,
+    rolloffFactor: 1.6
   }
 ];
 
 
 /* ============================================================
-   MASTER AUDIO STATE
+   HELPERS
 ============================================================ */
 
-/*
-  1 = 100%
-  0.5 = 50%
-
-  The settings menu changes this.
-*/
-let roomsMasterVolume =
-  1;
+function getRoomSoundDefinition(id) {
+  return ROOM_SOUND_DEFINITIONS.find(
+    (definition) => definition.id === id
+  ) || null;
+}
 
 
-/*
-  True means all project audio
-  becomes silent.
-*/
-let roomsMuted =
-  false;
+function getFinalVolume(definition) {
+  if (!definition || roomsMuted) {
+    return 0;
+  }
+
+  return THREE.MathUtils.clamp(
+    definition.volume * roomsMasterVolume,
+    0,
+    1
+  );
+}
+
+
+function isRoomsPauseMenuOpen() {
+  const desktopOverlay =
+    document.querySelector('#screenPauseMenuOverlay');
+
+  if (
+    desktopOverlay &&
+    desktopOverlay.classList.contains('is-open')
+  ) {
+    return true;
+  }
+
+  const vrPanel =
+    document.querySelector('#vrPausePanel');
+
+  if (vrPanel) {
+    const visible = vrPanel.getAttribute('visible');
+
+    if (visible === true || visible === 'true') {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+
+function getRoomsAudioContext() {
+  try {
+    if (
+      typeof THREE !== 'undefined' &&
+      THREE.AudioContext &&
+      THREE.AudioContext.getContext
+    ) {
+      return THREE.AudioContext.getContext();
+    }
+  } catch (error) {
+    console.warn(
+      'Could not get THREE audio context:',
+      error
+    );
+  }
+
+  const scene = document.querySelector('a-scene');
+
+  if (
+    scene &&
+    scene.audioListener &&
+    scene.audioListener.context
+  ) {
+    return scene.audioListener.context;
+  }
+
+  return null;
+}
+
+
+function getPlayerFootstepVolume() {
+  return roomsMuted
+    ? 0
+    : 0.18 * roomsMasterVolume;
+}
+
+
+function getScareFootstepVolume() {
+  return roomsMuted
+    ? 0
+    : 0.35 * roomsMasterVolume;
+}
 
 
 /* ============================================================
    POSITIONAL AUDIO MANAGER
-
-   This component is attached to <a-scene>:
-
-   <a-scene spatial-audio-manager>
 ============================================================ */
 
-AFRAME.registerComponent(
-  'spatial-audio-manager',
-  {
+AFRAME.registerComponent('spatial-audio-manager', {
+  init: function () {
+    this.emitters = new Map();
+    this.desiredPlaying = new Set();
+    this.created = false;
 
-    init: function () {
+    this.createEmitters =
+      this.createEmitters.bind(this);
 
-      /*
-        Store all generated positional
-        sound entities here.
-      */
-      this.emitters =
-        [];
-
-
+    if (this.el.hasLoaded) {
       this.createEmitters();
-
-
-      /*
-        Listen for changes from the
-        Settings menu.
-      */
+    } else {
       this.el.addEventListener(
-        'audio-settings-changed',
+        'loaded',
+        this.createEmitters,
+        { once: true }
+      );
+    }
+  },
 
-        () => {
-          this.applyVolumes();
+
+  createEmitters: function () {
+    if (this.created) {
+      return;
+    }
+
+    this.created = true;
+
+    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
+      const emitter = document.createElement('a-entity');
+
+      emitter.setAttribute('id', definition.id);
+      emitter.classList.add('spatial-sound');
+
+      emitter.setAttribute(
+        'position',
+        {
+          x: definition.position.x,
+          y: definition.position.y,
+          z: definition.position.z
         }
       );
-    },
 
-
-    /* ======================================================
-       CREATE ALL ROOM SOUND SOURCES
-    ====================================================== */
-
-    createEmitters:
-      function () {
-
-        ROOM_SOUND_DEFINITIONS
-          .forEach(
-            (definition) => {
-
-              /*
-                Create one invisible entity
-                at the location where the
-                sound should come from.
-              */
-              const entity =
-                document.createElement(
-                  'a-entity'
-                );
-
-
-              entity.setAttribute(
-                'id',
-                definition.id
-              );
-
-
-              entity.setAttribute(
-                'class',
-                'spatial-sound'
-              );
-
-
-              entity.setAttribute(
-                'position',
-                definition.position
-              );
-
-
-              /*
-                Remember the original volume.
-
-                Master volume will multiply
-                this later.
-              */
-              entity.dataset.baseVolume =
-                String(
-                  definition.baseVolume
-                );
-
-
-              /*
-                A-Frame positional sound.
-
-                positional: true means this
-                sound exists at a location
-                in the 3D world.
-              */
-              entity.setAttribute(
-                'sound',
-
-                [
-                  `src: url(${definition.src})`,
-
-                  'autoplay: false',
-
-                  'loop: true',
-
-                  'positional: true',
-
-                  `volume: ${definition.baseVolume}`,
-
-                  'distanceModel: inverse',
-
-                  `refDistance: ${definition.refDistance}`,
-
-                  `rolloffFactor: ${definition.rolloffFactor}`,
-
-                  `maxDistance: ${definition.maxDistance}`
-                ].join('; ')
-              );
-
-
-              /*
-                Put it into the scene.
-              */
-              this.el.appendChild(
-                entity
-              );
-
-
-              this.emitters.push(
-                entity
-              );
-            }
-          );
-      },
-
-
-    /* ======================================================
-       START ONE POSITIONAL SOUND
-    ====================================================== */
-
-    startEmitter:
-      function (entity) {
-
-        const tryPlay =
-          () => {
-
-            const soundComponent =
-              entity.components &&
-              entity.components.sound;
-
-
-            /*
-              Component might not be ready
-              on the exact frame the user
-              presses ENABLE SOUND.
-            */
-            if (!soundComponent) {
-              return false;
-            }
-
-
-            try {
-
-              soundComponent
-                .playSound();
-
-
-              return true;
-
-            } catch (error) {
-
-              console.error(
-                'Could not start positional sound:',
-                entity.id,
-                error
-              );
-
-
-              return false;
-            }
-          };
-
-
-        /*
-          Usually it is already ready.
-        */
-        if (tryPlay()) {
-          return;
+      emitter.setAttribute(
+        'sound',
+        {
+          src: `url(${definition.src})`,
+          autoplay: false,
+          loop: definition.loop,
+          positional: true,
+          volume: getFinalVolume(definition),
+          distanceModel: 'inverse',
+          refDistance: definition.refDistance,
+          maxDistance: definition.maxDistance,
+          rolloffFactor: definition.rolloffFactor
         }
+      );
 
+      emitter.addEventListener(
+        'sound-loaded',
+        () => {
+          if (
+            this.desiredPlaying.has(definition.id) &&
+            this.el.audioUnlocked &&
+            !roomsMuted &&
+            !isRoomsPauseMenuOpen()
+          ) {
+            const sound = emitter.components.sound;
 
-        /*
-          If not, wait until A-Frame says
-          the sound component is ready.
-        */
-        const onComponentInitialized =
-          (event) => {
-
-            if (
-              !event.detail ||
-              event.detail.name !==
-                'sound'
-            ) {
-              return;
+            if (sound && sound.playSound) {
+              try {
+                sound.playSound();
+              } catch (error) {
+                console.warn(
+                  `Could not start ${definition.id}:`,
+                  error
+                );
+              }
             }
-
-
-            entity.removeEventListener(
-              'componentinitialized',
-              onComponentInitialized
-            );
-
-
-            tryPlay();
-          };
-
-
-        entity.addEventListener(
-          'componentinitialized',
-          onComponentInitialized
-        );
-      },
-
-
-    /* ======================================================
-       START ALL POSITIONAL SOUNDS
-    ====================================================== */
-
-    playAll:
-      function () {
-
-        this.emitters.forEach(
-          (entity) => {
-
-            this.startEmitter(
-              entity
-            );
           }
-        );
+        }
+      );
+
+      this.el.appendChild(emitter);
+      this.emitters.set(definition.id, emitter);
+    });
+
+    if (roomsTVWorldPosition) {
+      this.setEmitterPosition(
+        'tvStaticSound',
+        roomsTVWorldPosition
+      );
+    }
+
+    this.updateVolumes();
+  },
 
 
-        console.log(
-          `${this.emitters.length} positional room sound(s) requested.`
-        );
-      },
+  getEmitter: function (id) {
+    return this.emitters.get(id) || null;
+  },
 
 
-    /* ======================================================
-       APPLY MASTER VOLUME
-    ====================================================== */
+  startEmitter: function (id) {
+    this.desiredPlaying.add(id);
 
-    applyVolumes:
-      function () {
+    if (
+      !this.el.audioUnlocked ||
+      roomsMuted ||
+      isRoomsPauseMenuOpen()
+    ) {
+      return;
+    }
 
-        const multiplier =
-          roomsMuted
+    const emitter = this.getEmitter(id);
 
-            ? 0
+    if (!emitter) {
+      return;
+    }
 
-            : roomsMasterVolume;
+    const sound = emitter.components.sound;
 
+    if (!sound || !sound.playSound) {
+      return;
+    }
 
-        this.emitters.forEach(
-          (entity) => {
-
-            const base =
-              Number(
-                entity.dataset
-                  .baseVolume
-              );
-
-
-            if (
-              !Number.isFinite(
-                base
-              )
-            ) {
-              return;
-            }
+    try {
+      sound.playSound();
+    } catch (error) {
+      console.warn(
+        `Sound ${id} is not ready yet.`,
+        error
+      );
+    }
+  },
 
 
-            entity.setAttribute(
-              'sound',
-              'volume',
-              base *
-              multiplier
-            );
-          }
-        );
+  stopEmitter: function (id) {
+    this.desiredPlaying.delete(id);
+
+    const emitter = this.getEmitter(id);
+
+    if (!emitter) {
+      return;
+    }
+
+    const sound = emitter.components.sound;
+
+    if (!sound) {
+      return;
+    }
+
+    try {
+      if (sound.stopSound) {
+        sound.stopSound();
+      } else if (sound.pauseSound) {
+        sound.pauseSound();
       }
+    } catch (error) {
+      console.warn(
+        `Could not stop ${id}:`,
+        error
+      );
+    }
+  },
+
+
+  silenceEmitterWithoutChangingIntent: function (id) {
+    const emitter = this.getEmitter(id);
+
+    if (!emitter) {
+      return;
+    }
+
+    const sound = emitter.components.sound;
+
+    if (!sound) {
+      return;
+    }
+
+    try {
+      if (sound.pauseSound) {
+        sound.pauseSound();
+      } else if (sound.stopSound) {
+        sound.stopSound();
+      }
+    } catch (error) {
+      console.warn(
+        `Could not pause ${id}:`,
+        error
+      );
+    }
+  },
+
+
+  playNormalAmbience: function () {
+    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
+      if (definition.startAutomatically) {
+        this.startEmitter(definition.id);
+      }
+    });
+  },
+
+
+  stopAll: function () {
+    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
+      this.stopEmitter(definition.id);
+    });
+  },
+
+
+  pauseAllWithoutChangingIntent: function () {
+    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
+      this.silenceEmitterWithoutChangingIntent(
+        definition.id
+      );
+    });
+  },
+
+
+  updateVolumes: function () {
+    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
+      const emitter = this.getEmitter(definition.id);
+
+      if (!emitter) {
+        return;
+      }
+
+      emitter.setAttribute(
+        'sound',
+        'volume',
+        getFinalVolume(definition)
+      );
+    });
+  },
+
+
+  setEmitterPosition: function (id, worldPosition) {
+    const definition = getRoomSoundDefinition(id);
+
+    if (!definition || !worldPosition) {
+      return;
+    }
+
+    definition.position.set(
+      Number(worldPosition.x) || 0,
+      Number(worldPosition.y) || 0,
+      Number(worldPosition.z) || 0
+    );
+
+    const emitter = this.getEmitter(id);
+
+    if (!emitter) {
+      return;
+    }
+
+    emitter.object3D.position.copy(
+      definition.position
+    );
+  },
+
+
+  applyPlaybackState: function () {
+    this.updateVolumes();
+
+    if (
+      !this.el.audioUnlocked ||
+      roomsMuted ||
+      isRoomsPauseMenuOpen()
+    ) {
+      this.pauseAllWithoutChangingIntent();
+      return;
+    }
+
+    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
+      if (definition.startAutomatically) {
+        this.desiredPlaying.add(definition.id);
+      }
+    });
+
+    if (roomsTVOn) {
+      this.desiredPlaying.add('tvStaticSound');
+    } else {
+      this.desiredPlaying.delete('tvStaticSound');
+      this.stopEmitter('tvStaticSound');
+    }
+
+    this.desiredPlaying.forEach((id) => {
+      this.startEmitter(id);
+    });
   }
-);
+});
 
 
 /* ============================================================
-   PRIME NORMAL HTML AUDIO
-
-   Footsteps are different from room ambience.
-
-   The footstep sound belongs to the PLAYER rather than a point
-   in the environment, so it remains a normal <audio> element.
-
-   This function briefly starts it silently during the user's
-   ENABLE SOUND click so the Quest browser gives us permission
-   to play it later while walking.
+   GET MANAGER
 ============================================================ */
 
-async function primeHtmlAudio(
-  element,
-  finalVolume
-) {
+function getSpatialAudioManager() {
+  const scene = document.querySelector('a-scene');
 
-  if (!element) {
-    return;
+  if (!scene) {
+    return null;
   }
 
-
-  try {
-
-    /*
-      Start silently.
-    */
-    element.volume =
-      0;
-
-
-    await element.play();
-
-
-    /*
-      Immediately stop it again.
-    */
-    element.pause();
-
-
-    element.currentTime =
-      0;
-
-
-    /*
-      Restore wanted volume.
-    */
-    element.volume =
-      finalVolume;
-
-  } catch (error) {
-
-    /*
-      Even if priming fails, make sure
-      it has the proper volume for later.
-    */
-    element.volume =
-      finalVolume;
-
-
-    console.warn(
-      'Audio could not be primed yet:',
-      element.id,
-      error
-    );
-  }
+  return scene.components['spatial-audio-manager'] || null;
 }
 
 
 /* ============================================================
    ENABLE SOUND BUTTON
-
-   Called from index.html:
-
-   onclick="enableSound()"
 ============================================================ */
 
 async function enableSound() {
+  const scene = document.querySelector('a-scene');
+  const button = document.querySelector('#soundButton');
 
-  const button =
-    document.querySelector(
-      '#soundButton'
+  if (!scene) {
+    console.error(
+      'Cannot enable sound: a-scene was not found.'
     );
-
-
-  const scene =
-    document.querySelector(
-      'a-scene'
-    );
-
-
-  if (
-    !button ||
-    !scene
-  ) {
     return;
   }
 
-
-  button.textContent =
-    'STARTING SOUND...';
-
-
-  button.disabled =
-    true;
-
-
-  /* ========================================================
-     RESUME WEB AUDIO
-
-     Browsers normally block audio until
-     the user performs a real click.
-  ======================================================== */
-
-  try {
-
-    const context =
-      THREE.AudioContext
-        .getContext();
-
-
-    if (
-      context &&
-      context.state ===
-        'suspended'
-    ) {
-
-      await context.resume();
-    }
-
-  } catch (error) {
-
-    console.warn(
-      'Web Audio could not be resumed:',
-      error
-    );
+  if (button) {
+    button.textContent = 'STARTING SOUND...';
+    button.disabled = true;
   }
 
+  const context = getRoomsAudioContext();
 
-  /* ========================================================
-     UNLOCK PLAYER FOOTSTEPS
-  ======================================================== */
+  if (
+    context &&
+    context.state === 'suspended'
+  ) {
+    try {
+      await context.resume();
+    } catch (error) {
+      console.warn(
+        'Audio context could not resume:',
+        error
+      );
+    }
+  }
 
-  await primeHtmlAudio(
+  scene.audioUnlocked = true;
 
-    document.querySelector(
-      '#footstepAudio'
-    ),
+  const footstep =
+    document.querySelector('#footstepAudio');
 
-    0.18
-  );
+  if (footstep) {
+    footstep.volume = getPlayerFootstepVolume();
 
+    try {
+      const promise = footstep.play();
 
-  /* ========================================================
-     UNLOCK JUMPSCARE FOOTSTEPS
+      if (promise && promise.then) {
+        await promise;
+      }
 
-     This is a SEPARATE audio element even
-     though it uses the same WAV file.
+      footstep.pause();
+      footstep.currentTime = 0;
+    } catch (error) {
+      footstep.pause();
+      footstep.currentTime = 0;
+    }
+  }
 
-     That stops the normal walking system
-     from accidentally pausing the scare.
-  ======================================================== */
+  const scareFootstep =
+    document.querySelector('#scareFootstepAudio');
 
-  await primeHtmlAudio(
+  if (scareFootstep) {
+    scareFootstep.volume =
+      getScareFootstepVolume();
+  }
 
-    document.querySelector(
-      '#scareFootstepAudio'
-    ),
-
-    0.35
-  );
-
-
-  /* ========================================================
-     START POSITIONAL ROOM AUDIO
-  ======================================================== */
-
-  const manager =
-    scene.components[
-      'spatial-audio-manager'
-    ];
-
+  const manager = getSpatialAudioManager();
 
   if (manager) {
+    manager.playNormalAmbience();
 
-    manager.playAll();
+    if (roomsTVOn) {
+      manager.startEmitter(
+        'tvStaticSound'
+      );
+    }
 
-  } else {
-
-    console.error(
-      'spatial-audio-manager was not found on <a-scene>.'
-    );
+    manager.applyPlaybackState();
   }
 
+  updateRoomsVolumeUI();
 
-  /*
-    Tell footstep-player that audio
-    permission has been granted.
-  */
-  scene.audioUnlocked =
-    true;
-
-
-  /*
-    Apply current master volume.
-  */
-  applyRoomsAudioSettings();
-
-
-  button.textContent =
-    'SOUND ENABLED';
-
-
-  /*
-    Hide button after successful
-    activation.
-  */
-  window.setTimeout(
-    () => {
-
-      button.style.display =
-        'none';
-
-    },
-
-    1000
+  scene.emit(
+    'audio-settings-changed',
+    getRoomsAudioState(),
+    false
   );
 
+  if (button) {
+    button.textContent =
+      'SOUND ENABLED';
+
+    window.setTimeout(() => {
+      button.style.display = 'none';
+    }, 800);
+  }
 
   console.log(
-    'Room audio enabled.'
+    'Rooms Within audio enabled.'
   );
 }
 
 
 /* ============================================================
-   APPLY MASTER SETTINGS
-
-   This updates:
-
-   - positional ambience
-   - player footsteps
-   - jumpscare footsteps
+   TV STATE
 ============================================================ */
 
-function applyRoomsAudioSettings() {
+function setRoomsTVState(shouldBeOn) {
+  roomsTVOn = Boolean(shouldBeOn);
 
   const scene =
-    document.querySelector(
-      'a-scene'
-    );
+    document.querySelector('a-scene');
 
+  const manager =
+    getSpatialAudioManager();
 
-  const multiplier =
-    roomsMuted
-
-      ? 0
-
-      : roomsMasterVolume;
-
-
-  /* --------------------------------------------------------
-     PLAYER FOOTSTEPS
-  -------------------------------------------------------- */
-
-  const footsteps =
-    document.querySelector(
-      '#footstepAudio'
-    );
-
-
-  if (footsteps) {
-
-    footsteps.volume =
-      Math.max(
-        0,
-
-        Math.min(
-          1,
-
-          0.18 *
-          multiplier
-        )
-      );
+  if (!manager) {
+    return;
   }
 
-
-  /* --------------------------------------------------------
-     JUMPSCARE FOOTSTEPS
-  -------------------------------------------------------- */
-
-  const scareFootsteps =
-    document.querySelector(
-      '#scareFootstepAudio'
+  if (!roomsTVOn) {
+    manager.stopEmitter(
+      'tvStaticSound'
     );
 
-
-  if (scareFootsteps) {
-
-    scareFootsteps.volume =
-      Math.max(
-        0,
-
-        Math.min(
-          1,
-
-          0.35 *
-          multiplier
-        )
-      );
+    return;
   }
 
-
-  /* --------------------------------------------------------
-     POSITIONAL AMBIENCE
-
-     ui-scare.js also listens for this
-     so its volume label updates.
-  -------------------------------------------------------- */
-
-  if (scene) {
-
-    scene.emit(
-      'audio-settings-changed',
-
-      {
-        volume:
-          roomsMasterVolume,
-
-        muted:
-          roomsMuted
-      },
-
-      false
+  if (
+    scene &&
+    scene.audioUnlocked &&
+    !roomsMuted &&
+    !isRoomsPauseMenuOpen()
+  ) {
+    manager.startEmitter(
+      'tvStaticSound'
+    );
+  } else {
+    manager.desiredPlaying.add(
+      'tvStaticSound'
     );
   }
 }
 
 
 /* ============================================================
-   VOLUME DOWN / UP
-
-   ui-scare.js calls this.
+   REAL TV SOUND POSITION
 ============================================================ */
 
-function changeRoomsVolume(
-  delta
-) {
-
-  /*
-    If user adjusts volume while muted,
-    automatically unmute.
-  */
-  if (roomsMuted) {
-
-    roomsMuted =
-      false;
+function setRoomsTVPosition(worldPosition) {
+  if (!worldPosition) {
+    return;
   }
 
-
-  /*
-    Limit master volume between:
-
-    20% and 100%
-  */
-  roomsMasterVolume =
-    Math.max(
-
-      0.2,
-
-      Math.min(
-
-        1,
-
-        roomsMasterVolume +
-        delta
-      )
+  roomsTVWorldPosition =
+    new THREE.Vector3(
+      Number(worldPosition.x) || 0,
+      Number(worldPosition.y) || 0,
+      Number(worldPosition.z) || 0
     );
 
+  const manager =
+    getSpatialAudioManager();
+
+  if (manager) {
+    manager.setEmitterPosition(
+      'tvStaticSound',
+      roomsTVWorldPosition
+    );
+  }
+
+  console.log(
+    'TV static sound moved to real CRT position:',
+    roomsTVWorldPosition
+      .toArray()
+      .map((value) =>
+        value.toFixed(2)
+      )
+  );
+}
+
+
+/* ============================================================
+   MASTER VOLUME
+============================================================ */
+
+function changeRoomsVolume(amount) {
+  roomsMasterVolume =
+    THREE.MathUtils.clamp(
+      roomsMasterVolume +
+      Number(amount || 0),
+      0,
+      1
+    );
 
   applyRoomsAudioSettings();
 }
@@ -858,254 +693,400 @@ function changeRoomsVolume(
 ============================================================ */
 
 function toggleRoomsMute() {
+  roomsMuted = !roomsMuted;
 
-  roomsMuted =
-    !roomsMuted;
-
+  window.roomsMuted =
+    roomsMuted;
 
   applyRoomsAudioSettings();
+
+  return roomsMuted;
 }
 
 
 /* ============================================================
-   LET OTHER FILES READ CURRENT AUDIO SETTINGS
+   CURRENT AUDIO STATE
 ============================================================ */
 
 function getRoomsAudioState() {
+  const scene =
+    document.querySelector('a-scene');
 
   return {
-
-    volume:
-      roomsMasterVolume,
-
-
-    muted:
-      roomsMuted,
-
-
-    effectiveVolume:
-      roomsMuted
-
-        ? 0
-
-        : roomsMasterVolume
+    muted: roomsMuted,
+    volume: roomsMasterVolume,
+    tvOn: roomsTVOn,
+    unlocked: Boolean(
+      scene &&
+      scene.audioUnlocked
+    )
   };
 }
 
 
 /* ============================================================
-   EXPOSE FUNCTIONS GLOBALLY
+   APPLY SETTINGS
 
-   Needed because index.html and ui-scare.js
-   call these functions.
+   ui-scare.js calls this when you Resume.
 ============================================================ */
 
-window.enableSound = enableSound;
-window.changeRoomsVolume = changeRoomsVolume;
-window.toggleRoomsMute = toggleRoomsMute;
-window.getRoomsAudioState = getRoomsAudioState;
-window.applyRoomsAudioSettings = applyRoomsAudioSettings;
+function applyRoomsAudioSettings() {
+  const manager =
+    getSpatialAudioManager();
+
+  if (manager) {
+    manager.applyPlaybackState();
+  }
+
+  const footstep =
+    document.querySelector('#footstepAudio');
+
+  if (footstep) {
+    footstep.volume =
+      getPlayerFootstepVolume();
+
+    if (
+      roomsMuted ||
+      isRoomsPauseMenuOpen()
+    ) {
+      footstep.pause();
+    }
+  }
+
+  const scareFootstep =
+    document.querySelector(
+      '#scareFootstepAudio'
+    );
+
+  if (scareFootstep) {
+    scareFootstep.volume =
+      getScareFootstepVolume();
+
+    if (
+      roomsMuted ||
+      isRoomsPauseMenuOpen()
+    ) {
+      scareFootstep.pause();
+    }
+  }
+
+  updateRoomsVolumeUI();
+
+  const scene =
+    document.querySelector('a-scene');
+
+  if (scene) {
+    scene.emit(
+      'audio-settings-changed',
+      getRoomsAudioState(),
+      false
+    );
+  }
+}
+
 
 /* ============================================================
-   PLAYER FOOTSTEP SYSTEM
+   UPDATE UI
+============================================================ */
+
+function updateRoomsVolumeUI() {
+  const percent =
+    Math.round(
+      roomsMasterVolume * 100
+    );
+
+  const screenVolumeLabel =
+    document.querySelector(
+      '#screenVolumeLabel'
+    );
+
+  if (screenVolumeLabel) {
+    screenVolumeLabel.textContent =
+      `${percent}%`;
+  }
+
+  const vrVolumeLabel =
+    document.querySelector(
+      '#vrVolumeLabel'
+    );
+
+  if (vrVolumeLabel) {
+    vrVolumeLabel.setAttribute(
+      'value',
+      `${percent}%`
+    );
+  }
+
+  const vrMuteLabel =
+    document.querySelector(
+      '#vrMuteLabel'
+    );
+
+  if (vrMuteLabel) {
+    vrMuteLabel.setAttribute(
+      'value',
+      roomsMuted
+        ? 'OFF'
+        : 'ON'
+    );
+  }
+
+
+  /* NEW PAUSE MENU */
+
+  const soundText =
+    roomsMuted
+      ? 'SOUND: OFF'
+      : 'SOUND: ON';
+
+
+  const screenSoundButton =
+    document.querySelector(
+      '#screenSoundButton'
+    );
+
+  if (screenSoundButton) {
+    screenSoundButton.textContent =
+      soundText;
+  }
+
+
+  const vrSoundLabel =
+    document.querySelector(
+      '#vrSoundLabel'
+    );
+
+  if (vrSoundLabel) {
+    vrSoundLabel.setAttribute(
+      'value',
+      soundText
+    );
+  }
+}
+
+
+/* ============================================================
+   PLAYER FOOTSTEPS
 ============================================================ */
 
 AFRAME.registerComponent(
   'footstep-player',
   {
-
     schema: {
-
       minSpeed: {
         default: 0.02
       },
 
-
       maxSpeed: {
         default: 4
+      },
+
+      volume: {
+        default: 0.18
       }
     },
 
 
     init: function () {
-
-      /*
-        Remember where the player was
-        last frame.
-      */
-      this.previousPosition =
-        this.el.object3D
-          .position
-          .clone();
-
-
-      /*
-        Normal player walking audio.
-      */
       this.audio =
         document.querySelector(
           '#footstepAudio'
         );
 
+      this.previousWorldPosition =
+        new THREE.Vector3();
+
+      this.currentWorldPosition =
+        new THREE.Vector3();
+
+      this.hasPreviousPosition =
+        false;
 
       this.isPlaying =
         false;
 
-
-      /*
-        Footsteps are now quieter than
-        the old 0.30.
-      */
       if (this.audio) {
+        this.audio.loop = true;
 
         this.audio.volume =
-          0.18;
+          getPlayerFootstepVolume();
       }
     },
 
 
-    tick:
-      function (
-        time,
-        deltaTime
-      ) {
-
-        if (
-          !deltaTime ||
-          !this.audio
-        ) {
-          return;
-        }
-
-
-        const currentPosition =
-          this.el.object3D
-            .position;
-
-
-        const deltaX =
-          currentPosition.x -
-          this.previousPosition.x;
-
-
-        const deltaZ =
-          currentPosition.z -
-          this.previousPosition.z;
-
-
-        /*
-          Ignore vertical movement.
-
-          Footsteps should happen because
-          the player WALKED horizontally.
-        */
-        const distance =
-          Math.sqrt(
-            deltaX *
-            deltaX +
-
-            deltaZ *
-            deltaZ
-          );
-
-
-        const speed =
-          distance /
-          (
-            deltaTime /
-            1000
-          );
-
-
-        /*
-          Movement must be fast enough
-          to count as walking but not so
-          fast that teleporting triggers
-          footsteps.
-        */
-        const isWalking =
-          speed >=
-            this.data.minSpeed &&
-
-          speed <=
-            this.data.maxSpeed;
-
-
-        /*
-          Sound only starts after the
-          player pressed ENABLE SOUND.
-        */
-        const audioUnlocked =
-          this.el.sceneEl
-            .audioUnlocked;
-
-
-        /* ==================================================
-           START FOOTSTEPS
-        ================================================== */
-
-        if (
-          isWalking &&
-          audioUnlocked &&
-          !this.isPlaying
-        ) {
-
-          const playPromise =
-            this.audio.play();
-
-
-          if (playPromise) {
-
-            playPromise.catch(
-              (error) => {
-
-                console.error(
-                  'Footstep sound failed:',
-                  error
-                );
-              }
-            );
-          }
-
-
-          this.isPlaying =
-            true;
-
-
-        /* ==================================================
-           STOP FOOTSTEPS
-        ================================================== */
-
-        } else if (
-
-          (
-            !isWalking ||
-            !audioUnlocked
-          ) &&
-
-          this.isPlaying
-
-        ) {
-
-          this.audio.pause();
-
-
-          this.audio.currentTime =
-            0;
-
-
-          this.isPlaying =
-            false;
-        }
-
-
-        /*
-          Save current player position for
-          comparison on the next frame.
-        */
-        this.previousPosition.copy(
-          currentPosition
-        );
+    stopSteps: function () {
+      if (!this.audio) {
+        return;
       }
+
+      this.audio.pause();
+      this.audio.currentTime = 0;
+
+      this.isPlaying = false;
+    },
+
+
+    pause: function () {
+      this.stopSteps();
+    },
+
+
+    play: function () {
+      this.hasPreviousPosition =
+        false;
+    },
+
+
+    tick: function (
+      time,
+      deltaTime
+    ) {
+      if (
+        !deltaTime ||
+        !this.audio
+      ) {
+        return;
+      }
+
+
+      if (
+        roomsMuted ||
+        isRoomsPauseMenuOpen() ||
+        !this.el.sceneEl.audioUnlocked
+      ) {
+        if (this.isPlaying) {
+          this.stopSteps();
+        }
+
+        this.hasPreviousPosition =
+          false;
+
+        return;
+      }
+
+
+      this.el.object3D
+        .getWorldPosition(
+          this.currentWorldPosition
+        );
+
+
+      if (!this.hasPreviousPosition) {
+        this.previousWorldPosition
+          .copy(
+            this.currentWorldPosition
+          );
+
+        this.hasPreviousPosition =
+          true;
+
+        return;
+      }
+
+
+      const deltaX =
+        this.currentWorldPosition.x -
+        this.previousWorldPosition.x;
+
+
+      const deltaZ =
+        this.currentWorldPosition.z -
+        this.previousWorldPosition.z;
+
+
+      const distance =
+        Math.sqrt(
+          deltaX * deltaX +
+          deltaZ * deltaZ
+        );
+
+
+      const speed =
+        distance /
+        Math.max(
+          deltaTime / 1000,
+          0.001
+        );
+
+
+      const isWalking =
+        speed >=
+          this.data.minSpeed &&
+        speed <=
+          this.data.maxSpeed;
+
+
+      this.audio.volume =
+        roomsMuted
+          ? 0
+          : this.data.volume *
+            roomsMasterVolume;
+
+
+      if (
+        isWalking &&
+        !this.isPlaying
+      ) {
+        const playPromise =
+          this.audio.play();
+
+        if (
+          playPromise &&
+          playPromise.catch
+        ) {
+          playPromise.catch(
+            (error) => {
+              console.warn(
+                'Footstep sound could not start:',
+                error
+              );
+            }
+          );
+        }
+
+        this.isPlaying = true;
+
+      } else if (
+        !isWalking &&
+        this.isPlaying
+      ) {
+        this.stopSteps();
+      }
+
+
+      this.previousWorldPosition
+        .copy(
+          this.currentWorldPosition
+        );
+    }
   }
 );
+
+
+/* ============================================================
+   GLOBAL EXPORTS
+============================================================ */
+
+window.enableSound =
+  enableSound;
+
+window.setRoomsTVState =
+  setRoomsTVState;
+
+window.setRoomsTVPosition =
+  setRoomsTVPosition;
+
+window.changeRoomsVolume =
+  changeRoomsVolume;
+
+window.toggleRoomsMute =
+  toggleRoomsMute;
+
+window.getRoomsAudioState =
+  getRoomsAudioState;
+
+window.applyRoomsAudioSettings =
+  applyRoomsAudioSettings;
+
+window.updateRoomsVolumeUI =
+  updateRoomsVolumeUI;

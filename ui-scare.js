@@ -1,11 +1,27 @@
 /* ============================================================
    ui-scare.js
-   Pause menu + fullscreen/VR UI + tutorial hooks + jumpscare
+   ROOMS WITHIN
+
+   Handles:
+   - Mac fullscreen pause button
+   - Quest VR pause button
+   - Pause / resume
+   - Sound toggle label updates
+   - Restart game
+   - Exit VR / fullscreen
+   - VR pause-menu ray interaction
+   - Tutorial hook
+   - Jumpscare hook
 ============================================================ */
 
 let roomsPaused = false;
 
-function isImmersiveXR(scene) {
+
+/* ============================================================
+   MODE HELPERS
+============================================================ */
+
+function hasImmersiveXRSession(scene) {
   return Boolean(
     scene &&
     scene.renderer &&
@@ -14,6 +30,7 @@ function isImmersiveXR(scene) {
   );
 }
 
+
 function isBrowserFullscreen() {
   return Boolean(
     document.fullscreenElement ||
@@ -21,168 +38,279 @@ function isBrowserFullscreen() {
   );
 }
 
-function pauseGameplayAudio() {
-  document.querySelectorAll('.spatial-sound').forEach((entity) => {
-    entity.setAttribute('sound', 'volume', 0);
-  });
 
-  const footsteps = document.querySelector('#footstepAudio');
-  if (footsteps) {
-    footsteps.pause();
-    footsteps.currentTime = 0;
+function isDesktopAFrameVR(scene) {
+  return Boolean(
+    scene &&
+    scene.is &&
+    scene.is('vr-mode') &&
+    !hasImmersiveXRSession(scene)
+  );
+}
+
+
+/* ============================================================
+   SOUND LABELS
+============================================================ */
+
+function updatePauseSoundLabels() {
+  let muted = false;
+
+  if (window.getRoomsAudioState) {
+    const state = window.getRoomsAudioState();
+    muted = Boolean(state && state.muted);
+  } else if (typeof window.roomsMuted === 'boolean') {
+    muted = window.roomsMuted;
   }
 
-  const scareSteps = document.querySelector('#scareFootstepAudio');
-  if (scareSteps) {
-    scareSteps.pause();
-    scareSteps.currentTime = 0;
+  const text = muted
+    ? 'SOUND: OFF'
+    : 'SOUND: ON';
+
+  const screenButton =
+    document.querySelector('#screenSoundButton');
+
+  if (screenButton) {
+    screenButton.textContent = text;
+  }
+
+  const vrLabel =
+    document.querySelector('#vrSoundLabel');
+
+  if (vrLabel) {
+    vrLabel.setAttribute('value', text);
   }
 }
 
-function resumeGameplayAudio() {
+
+/* ============================================================
+   PAUSE AUDIO
+============================================================ */
+
+function pauseRoomsAudio() {
+  document
+    .querySelectorAll('.spatial-sound')
+    .forEach((entity) => {
+      const sound = entity.components.sound;
+
+      if (sound && sound.pauseSound) {
+        sound.pauseSound();
+      }
+    });
+
+  const footstep =
+    document.querySelector('#footstepAudio');
+
+  if (footstep) {
+    footstep.pause();
+  }
+
+  const scareFootstep =
+    document.querySelector('#scareFootstepAudio');
+
+  if (scareFootstep) {
+    scareFootstep.pause();
+  }
+}
+
+
+function resumeRoomsAudio() {
   if (window.applyRoomsAudioSettings) {
     window.applyRoomsAudioSettings();
   }
 }
 
-function updatePauseSoundLabels() {
-  const state = window.getRoomsAudioState
-    ? window.getRoomsAudioState()
-    : { muted: false };
 
-  const soundText = state.muted
-    ? 'SOUND: OFF'
-    : 'SOUND: ON';
-
-  const screenSoundButton =
-    document.querySelector('#screenSoundButton');
-
-  if (screenSoundButton) {
-    screenSoundButton.textContent = soundText;
-  }
-
-  const vrSoundLabel =
-    document.querySelector('#vrSoundLabel');
-
-  if (vrSoundLabel) {
-    vrSoundLabel.setAttribute('value', soundText);
-  }
-}
+/* ============================================================
+   PAUSE / RESUME GAMEPLAY
+============================================================ */
 
 function setRoomsPaused(paused) {
-  roomsPaused = paused;
+  roomsPaused = Boolean(paused);
 
-  const scene = document.querySelector('a-scene');
-  const rig = document.querySelector('#rig');
-  const cam = document.querySelector('#cam');
-  const leftHand = document.querySelector('#leftHand');
-  const cursor = cam
-    ? cam.querySelector('a-cursor')
-    : null;
+  const scene =
+    document.querySelector('a-scene');
+
+  const rig =
+    document.querySelector('#rig');
+
+  const cam =
+    document.querySelector('#cam');
+
+  const leftHand =
+    document.querySelector('#leftHand');
+
+  const rightHand =
+    document.querySelector('#rightHand');
+
+  const cursor =
+    cam
+      ? cam.querySelector('a-cursor')
+      : null;
+
+
+  /* PLAYER MOVEMENT */
 
   if (rig) {
     rig.setAttribute(
       'movement-controls',
       'enabled',
-      !paused
+      !roomsPaused
     );
   }
 
-  if (cam) {
+
+  /* MAC MOUSE LOOK */
+
+  if (
+    cam &&
+    !hasImmersiveXRSession(scene)
+  ) {
     cam.setAttribute(
       'look-controls',
       'enabled',
-      !paused
+      !roomsPaused
     );
   }
+
+
+  /* QUEST TELEPORT */
 
   if (leftHand) {
     leftHand.setAttribute(
       'blink-controls',
       'enabled',
-      !paused
+      !roomsPaused
     );
   }
+
+
+  /* DESKTOP WORLD CLICKING */
 
   if (cursor) {
     cursor.setAttribute(
       'raycaster',
       'enabled',
-      !paused
+      !roomsPaused
     );
   }
 
-  const headBob =
-    cam && cam.components['head-bob'];
 
-  if (headBob) {
-    if (paused && headBob.pause) {
-      headBob.pause();
-    } else if (!paused && headBob.play) {
-      headBob.play();
+  /* QUEST DOOR / TV */
+
+  if (rightHand) {
+    if (rightHand.hasAttribute('vr-door-interactor')) {
+      rightHand.setAttribute(
+        'vr-door-interactor',
+        'enabled',
+        !roomsPaused
+      );
+    }
+
+    if (rightHand.hasAttribute('vr-tv-interactor')) {
+      rightHand.setAttribute(
+        'vr-tv-interactor',
+        'enabled',
+        !roomsPaused
+      );
     }
   }
 
-  const collider =
-    rig && rig.components['quest-room-collider'];
 
-  if (collider) {
-    if (paused && collider.pause) {
-      collider.pause();
-    } else if (!paused && collider.play) {
-      collider.play();
-    }
+  /* COMPONENT PAUSE */
+
+  const pausableComponents = [];
+
+  if (rig) {
+    pausableComponents.push(
+      rig.components['quest-room-collider'],
+      rig.components['footstep-player']
+    );
   }
 
-  const footsteps =
-    rig && rig.components['footstep-player'];
-
-  if (footsteps) {
-    if (paused && footsteps.pause) {
-      footsteps.pause();
-    } else if (!paused && footsteps.play) {
-      footsteps.play();
-    }
+  if (cam) {
+    pausableComponents.push(
+      cam.components['head-bob']
+    );
   }
 
-  if (paused) {
-    pauseGameplayAudio();
+  pausableComponents.forEach((component) => {
+    if (!component) {
+      return;
+    }
+
+    if (
+      roomsPaused &&
+      component.pause
+    ) {
+      component.pause();
+    } else if (
+      !roomsPaused &&
+      component.play
+    ) {
+      component.play();
+    }
+  });
+
+
+  /* AUDIO */
+
+  if (roomsPaused) {
+    pauseRoomsAudio();
   } else {
-    resumeGameplayAudio();
+    resumeRoomsAudio();
   }
+
 
   if (scene) {
     scene.emit(
       'rooms-pause-changed',
-      { paused: paused },
+      {
+        paused: roomsPaused
+      },
       false
     );
   }
 }
 
+
+/* ============================================================
+   OPEN / CLOSE PAUSE MENU
+============================================================ */
+
 function toggleRoomsPauseMenu(forceOpen) {
-  const scene = document.querySelector('a-scene');
+  const scene =
+    document.querySelector('a-scene');
 
   if (!scene) {
     return;
   }
 
-  const immersive = isImmersiveXR(scene);
+  const immersive =
+    hasImmersiveXRSession(scene);
 
   const screenOverlay =
-    document.querySelector('#screenPauseMenuOverlay');
+    document.querySelector(
+      '#screenPauseMenuOverlay'
+    );
 
   const vrPanel =
-    document.querySelector('#vrPausePanel');
+    document.querySelector(
+      '#vrPausePanel'
+    );
 
   const shouldOpen =
     typeof forceOpen === 'boolean'
       ? forceOpen
       : !roomsPaused;
 
+
   if (immersive) {
     if (vrPanel) {
-      vrPanel.setAttribute('visible', shouldOpen);
+      vrPanel.setAttribute(
+        'visible',
+        shouldOpen
+      );
     }
   } else {
     if (screenOverlay) {
@@ -194,21 +322,40 @@ function toggleRoomsPauseMenu(forceOpen) {
   }
 
   setRoomsPaused(shouldOpen);
+
+  updatePauseSoundLabels();
 }
 
+
+/* ============================================================
+   RESTART
+============================================================ */
+
+function restartRoomsWithin() {
+  window.location.reload();
+}
+
+
+/* ============================================================
+   EXIT VR / FULLSCREEN
+============================================================ */
+
 async function exitRoomsWithin() {
-  toggleRoomsPauseMenu(false);
+  if (roomsPaused) {
+    toggleRoomsPauseMenu(false);
+  }
 
-  const scene = document.querySelector('a-scene');
+  const scene =
+    document.querySelector('a-scene');
 
-  try {
-    if (
-      scene &&
-      (
-        isImmersiveXR(scene) ||
-        scene.is('vr-mode')
-      )
-    ) {
+
+  if (
+    scene &&
+    scene.is &&
+    scene.is('vr-mode') &&
+    scene.exitVR
+  ) {
+    try {
       const result = scene.exitVR();
 
       if (
@@ -217,13 +364,14 @@ async function exitRoomsWithin() {
       ) {
         await result;
       }
+    } catch (error) {
+      console.error(
+        'Could not exit A-Frame VR mode:',
+        error
+      );
     }
-  } catch (error) {
-    console.error(
-      'Could not exit A-Frame VR mode:',
-      error
-    );
   }
+
 
   try {
     if (document.fullscreenElement) {
@@ -242,302 +390,640 @@ async function exitRoomsWithin() {
   }
 }
 
-function restartRoomsWithin() {
-  window.location.reload();
-}
 
-window.toggleRoomsPauseMenu = toggleRoomsPauseMenu;
-window.exitRoomsWithin = exitRoomsWithin;
-window.restartRoomsWithin = restartRoomsWithin;
+/* ============================================================
+   EXPOSE BUTTON FUNCTIONS
+============================================================ */
+
+window.toggleRoomsPauseMenu =
+  toggleRoomsPauseMenu;
+
+window.restartRoomsWithin =
+  restartRoomsWithin;
+
+window.exitRoomsWithin =
+  exitRoomsWithin;
+
+window.updatePauseSoundLabels =
+  updatePauseSoundLabels;
 
 
 /* ============================================================
-   Controls when the pause button should appear
+   UI FLOW MANAGER
+
+   IMPORTANT FIX:
+
+   The old code looked for:
+     #screenSettingsButton
+     #screenExitButton
+
+   The new index.html uses:
+     #screenPauseButton
 ============================================================ */
 
-AFRAME.registerComponent('ui-flow-manager', {
-  init: function () {
-    this.hasEnteredVR = false;
-    this.sync = this.sync.bind(this);
-    this.updateAudioUI = this.updateAudioUI.bind(this);
+AFRAME.registerComponent(
+  'ui-flow-manager',
+  {
+    init: function () {
+      this.sync =
+        this.sync.bind(this);
 
-    this.el.addEventListener('enter-vr', () => {
-      this.hasEnteredVR = true;
+      this.updateAudioUI =
+        this.updateAudioUI.bind(this);
+
+      this.onEnterVR =
+        this.onEnterVR.bind(this);
+
+      this.onExitVR =
+        this.onExitVR.bind(this);
+
+      this.onFullscreenChange =
+        this.onFullscreenChange.bind(this);
+
+      this.onKeyDown =
+        this.onKeyDown.bind(this);
+
+
+      this.el.addEventListener(
+        'enter-vr',
+        this.onEnterVR
+      );
+
+      this.el.addEventListener(
+        'exit-vr',
+        this.onExitVR
+      );
+
+      this.el.addEventListener(
+        'audio-settings-changed',
+        this.updateAudioUI
+      );
+
+      document.addEventListener(
+        'fullscreenchange',
+        this.onFullscreenChange
+      );
+
+      document.addEventListener(
+        'webkitfullscreenchange',
+        this.onFullscreenChange
+      );
+
+      document.addEventListener(
+        'keydown',
+        this.onKeyDown
+      );
+
+
       this.sync();
-      window.setTimeout(this.sync, 250);
-    });
+      this.updateAudioUI();
+    },
 
-    this.el.addEventListener('exit-vr', () => {
-      this.hasEnteredVR = false;
-      toggleRoomsPauseMenu(false);
+
+    onEnterVR: function () {
+      /*
+        A-Frame can fire enter-vr before fullscreen state
+        completely settles, so check several times.
+      */
+
       this.sync();
-    });
 
-    this.el.addEventListener(
-      'audio-settings-changed',
-      this.updateAudioUI
-    );
+      window.setTimeout(
+        this.sync,
+        50
+      );
 
-    document.addEventListener(
-      'fullscreenchange',
-      this.sync
-    );
+      window.setTimeout(
+        this.sync,
+        250
+      );
 
-    document.addEventListener(
-      'webkitfullscreenchange',
-      this.sync
-    );
+      window.setTimeout(
+        this.sync,
+        600
+      );
+    },
 
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && roomsPaused) {
+
+    onExitVR: function () {
+      if (roomsPaused) {
         toggleRoomsPauseMenu(false);
       }
-    });
 
-    this.sync();
-    this.updateAudioUI();
-  },
+      this.sync();
 
-  sync: function () {
-    const immersive = isImmersiveXR(this.el);
-
-    const showDesktopPauseButton =
-      (this.hasEnteredVR || isBrowserFullscreen()) &&
-      !immersive;
-
-    const screenPauseButton =
-      document.querySelector('#screenPauseButton');
-
-    if (screenPauseButton) {
-      screenPauseButton.classList.toggle(
-        'is-visible',
-        showDesktopPauseButton
+      window.setTimeout(
+        this.sync,
+        100
       );
-    }
+    },
 
-    if (!showDesktopPauseButton) {
-      const overlay =
-        document.querySelector('#screenPauseMenuOverlay');
 
-      if (overlay) {
-        overlay.classList.remove('is-open');
+    onFullscreenChange: function () {
+      this.sync();
+    },
+
+
+    onKeyDown: function (event) {
+      if (
+        event.key === 'Escape' &&
+        roomsPaused
+      ) {
+        toggleRoomsPauseMenu(false);
       }
-    }
+    },
 
-    const vrPauseButton =
-      document.querySelector('#vrPauseButton');
 
-    const vrPausePanel =
-      document.querySelector('#vrPausePanel');
+    sync: function () {
+      const immersive =
+        hasImmersiveXRSession(this.el);
 
-    if (vrPauseButton) {
-      vrPauseButton.setAttribute(
-        'visible',
-        immersive
+      const desktopVR =
+        isDesktopAFrameVR(this.el);
+
+      const fullscreen =
+        isBrowserFullscreen();
+
+
+      /* MAC / DESKTOP BUTTON */
+
+      const showDesktopPauseButton =
+        !immersive &&
+        (
+          desktopVR ||
+          fullscreen
+        );
+
+
+      const screenPauseButton =
+        document.querySelector(
+          '#screenPauseButton'
+        );
+
+      if (screenPauseButton) {
+        screenPauseButton.classList.toggle(
+          'is-visible',
+          showDesktopPauseButton
+        );
+      }
+
+
+      /* DESKTOP MENU */
+
+      const desktopOverlay =
+        document.querySelector(
+          '#screenPauseMenuOverlay'
+        );
+
+      if (
+        desktopOverlay &&
+        !showDesktopPauseButton
+      ) {
+        desktopOverlay.classList.remove(
+          'is-open'
+        );
+      }
+
+
+      /* REAL QUEST VR BUTTON */
+
+      const vrPauseButton =
+        document.querySelector(
+          '#vrPauseButton'
+        );
+
+      const vrPausePanel =
+        document.querySelector(
+          '#vrPausePanel'
+        );
+
+      if (vrPauseButton) {
+        vrPauseButton.setAttribute(
+          'visible',
+          immersive
+        );
+      }
+
+      if (
+        vrPausePanel &&
+        !immersive
+      ) {
+        vrPausePanel.setAttribute(
+          'visible',
+          false
+        );
+      }
+
+
+      console.log(
+        'Pause UI mode:',
+        {
+          immersiveXR: immersive,
+          desktopAFrameVR: desktopVR,
+          browserFullscreen: fullscreen,
+          showDesktopButton:
+            showDesktopPauseButton
+        }
+      );
+    },
+
+
+    updateAudioUI: function () {
+      updatePauseSoundLabels();
+    },
+
+
+    remove: function () {
+      this.el.removeEventListener(
+        'enter-vr',
+        this.onEnterVR
+      );
+
+      this.el.removeEventListener(
+        'exit-vr',
+        this.onExitVR
+      );
+
+      this.el.removeEventListener(
+        'audio-settings-changed',
+        this.updateAudioUI
+      );
+
+      document.removeEventListener(
+        'fullscreenchange',
+        this.onFullscreenChange
+      );
+
+      document.removeEventListener(
+        'webkitfullscreenchange',
+        this.onFullscreenChange
+      );
+
+      document.removeEventListener(
+        'keydown',
+        this.onKeyDown
       );
     }
-
-    if (vrPausePanel && !immersive) {
-      vrPausePanel.setAttribute(
-        'visible',
-        false
-      );
-    }
-  },
-
-  updateAudioUI: function () {
-    updatePauseSoundLabels();
   }
-});
+);
 
 
 /* ============================================================
-   Keeps Quest button at a screen corner
+   CAMERA-CORNER VR UI
 ============================================================ */
 
-AFRAME.registerComponent('camera-corner-ui', {
-  schema: {
-    side: {
-      default: 'right',
-      oneOf: ['left', 'right']
+AFRAME.registerComponent(
+  'camera-corner-ui',
+  {
+    schema: {
+      side: {
+        default: 'left',
+        oneOf: [
+          'left',
+          'right'
+        ]
+      },
+
+      verticalAnchor: {
+        default: 'bottom',
+        oneOf: [
+          'top',
+          'bottom'
+        ]
+      },
+
+      distance: {
+        default: 2
+      },
+
+      horizontalInset: {
+        default: 0.13
+      },
+
+      verticalInset: {
+        default: 0.16
+      }
     },
-    verticalAnchor: {
-      default: 'top',
-      oneOf: ['top', 'bottom']
+
+
+    init: function () {
+      this.lastUpdate = 0;
     },
-    distance: { default: 2 },
-    horizontalInset: { default: 0.13 },
-    verticalInset: { default: 0.16 }
-  },
 
-  init: function () {
-    this.lastUpdate = 0;
-  },
 
-  tick: function (time) {
-    if (time - this.lastUpdate < 150) {
-      return;
+    tick: function (time) {
+      if (
+        time - this.lastUpdate < 150
+      ) {
+        return;
+      }
+
+      this.lastUpdate = time;
+
+      const cameraEl =
+        document.querySelector('#cam');
+
+      const camera =
+        cameraEl
+          ? cameraEl.getObject3D('camera')
+          : null;
+
+      if (!camera) {
+        return;
+      }
+
+      const distance =
+        this.data.distance;
+
+      const fov =
+        THREE.MathUtils.degToRad(
+          camera.fov || 60
+        );
+
+      const halfHeight =
+        Math.tan(fov / 2) *
+        distance;
+
+      const aspect =
+        camera.aspect ||
+        (
+          window.innerWidth /
+          Math.max(
+            window.innerHeight,
+            1
+          )
+        );
+
+      const halfWidth =
+        halfHeight * aspect;
+
+      const xMagnitude =
+        halfWidth *
+        (
+          1 -
+          this.data.horizontalInset
+        );
+
+      const yMagnitude =
+        halfHeight *
+        (
+          1 -
+          this.data.verticalInset
+        );
+
+      const x =
+        this.data.side === 'left'
+          ? -xMagnitude
+          : xMagnitude;
+
+      const y =
+        this.data.verticalAnchor === 'bottom'
+          ? -yMagnitude
+          : yMagnitude;
+
+      this.el.object3D.position.set(
+        x,
+        y,
+        -distance
+      );
     }
-
-    this.lastUpdate = time;
-
-    const cameraEl = document.querySelector('#cam');
-    const camera =
-      cameraEl && cameraEl.getObject3D('camera');
-
-    if (!camera) {
-      return;
-    }
-
-    const distance = this.data.distance;
-
-    const fov = THREE.MathUtils.degToRad(
-      camera.fov || 60
-    );
-
-    const halfHeight =
-      Math.tan(fov / 2) * distance;
-
-    const aspect =
-      camera.aspect ||
-      (window.innerWidth / Math.max(window.innerHeight, 1));
-
-    const halfWidth = halfHeight * aspect;
-
-    const xMagnitude =
-      halfWidth *
-      (1 - this.data.horizontalInset);
-
-    const yMagnitude =
-      halfHeight *
-      (1 - this.data.verticalInset);
-
-    const x =
-      this.data.side === 'left'
-        ? -xMagnitude
-        : xMagnitude;
-
-    const y =
-      this.data.verticalAnchor === 'bottom'
-        ? -yMagnitude
-        : yMagnitude;
-
-    this.el.object3D.position.set(
-      x,
-      y,
-      -distance
-    );
   }
-});
+);
 
 
 /* ============================================================
-   VR controller interaction for pause menu
+   QUEST PAUSE MENU INTERACTION
 ============================================================ */
 
-AFRAME.registerComponent('vr-ui-interactor', {
-  init: function () {
-    this.triggerHeld = false;
-    this.onTriggerDown = this.onTriggerDown.bind(this);
-    this.onTriggerUp = this.onTriggerUp.bind(this);
+AFRAME.registerComponent(
+  'vr-ui-interactor',
+  {
+    schema: {
+      pressThreshold: {
+        default: 0.65
+      },
 
-    this.el.addEventListener(
-      'triggerdown',
-      this.onTriggerDown
-    );
+      releaseThreshold: {
+        default: 0.2
+      }
+    },
 
-    this.el.addEventListener(
-      'triggerup',
-      this.onTriggerUp
-    );
 
-    this.el.addEventListener(
-      'controllerdisconnected',
-      this.onTriggerUp
-    );
-  },
+    init: function () {
+      this.triggerHeld = false;
 
-  onTriggerDown: function () {
-    if (this.triggerHeld) {
-      return;
-    }
+      this.pressTrigger =
+        this.pressTrigger.bind(this);
 
-    this.triggerHeld = true;
+      this.releaseTrigger =
+        this.releaseTrigger.bind(this);
 
-    const raycaster = this.el.components.raycaster;
+      this.onTriggerChanged =
+        this.onTriggerChanged.bind(this);
 
-    if (!raycaster) {
-      return;
-    }
 
-    if (raycaster.refreshObjects) {
-      raycaster.refreshObjects();
-    }
+      this.el.addEventListener(
+        'triggerdown',
+        this.pressTrigger
+      );
 
-    const hit = (element) =>
-      element && raycaster.getIntersection
-        ? raycaster.getIntersection(element)
-        : null;
+      this.el.addEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
 
-    const vrPauseButton =
-      document.querySelector('#vrPauseButton');
+      this.el.addEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
 
-    const vrPausePanel =
-      document.querySelector('#vrPausePanel');
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    },
 
-    const vrResumeButton =
-      document.querySelector('#vrResumeButton');
 
-    const vrSoundButton =
-      document.querySelector('#vrSoundButton');
+    pressTrigger: function (event) {
+      if (this.triggerHeld) {
+        return;
+      }
 
-    const vrRestartButton =
-      document.querySelector('#vrRestartButton');
+      if (
+        event &&
+        event.stopPropagation
+      ) {
+        event.stopPropagation();
+      }
 
-    const vrExitButton =
-      document.querySelector('#vrExitButton');
+      this.triggerHeld = true;
+      this.useUI();
+    },
 
-    if (hit(vrPauseButton)) {
-      toggleRoomsPauseMenu();
-      return;
-    }
 
-    if (
-      vrPausePanel &&
-      vrPausePanel.getAttribute('visible')
-    ) {
-      if (hit(vrResumeButton)) {
+    releaseTrigger: function () {
+      this.triggerHeld = false;
+    },
+
+
+    onTriggerChanged: function (event) {
+      const value =
+        event &&
+        event.detail &&
+        typeof event.detail.value === 'number'
+          ? event.detail.value
+          : null;
+
+      if (value === null) {
+        return;
+      }
+
+      if (
+        value >=
+          this.data.pressThreshold &&
+        !this.triggerHeld
+      ) {
+        this.pressTrigger();
+      } else if (
+        value <=
+        this.data.releaseThreshold
+      ) {
+        this.releaseTrigger();
+      }
+    },
+
+
+    useUI: function () {
+      const raycaster =
+        this.el.components.raycaster;
+
+      if (!raycaster) {
+        return;
+      }
+
+      if (raycaster.refreshObjects) {
+        raycaster.refreshObjects();
+      }
+
+
+      const hit = (element) => {
+        if (
+          !element ||
+          !raycaster.getIntersection
+        ) {
+          return null;
+        }
+
+        return raycaster.getIntersection(
+          element
+        );
+      };
+
+
+      const pauseButton =
+        document.querySelector(
+          '#vrPauseButton'
+        );
+
+      const pausePanel =
+        document.querySelector(
+          '#vrPausePanel'
+        );
+
+      const resumeButton =
+        document.querySelector(
+          '#vrResumeButton'
+        );
+
+      const soundButton =
+        document.querySelector(
+          '#vrSoundButton'
+        );
+
+      const restartButton =
+        document.querySelector(
+          '#vrRestartButton'
+        );
+
+      const exitButton =
+        document.querySelector(
+          '#vrExitButton'
+        );
+
+
+      if (hit(pauseButton)) {
+        toggleRoomsPauseMenu();
+        return;
+      }
+
+
+      if (
+        !pausePanel ||
+        !pausePanel.getAttribute('visible')
+      ) {
+        return;
+      }
+
+
+      if (hit(resumeButton)) {
         toggleRoomsPauseMenu(false);
         return;
       }
 
-      if (hit(vrSoundButton)) {
+
+      if (hit(soundButton)) {
         if (window.toggleRoomsMute) {
           window.toggleRoomsMute();
         }
+
+        window.setTimeout(
+          updatePauseSoundLabels,
+          0
+        );
+
         return;
       }
 
-      if (hit(vrRestartButton)) {
+
+      if (hit(restartButton)) {
         restartRoomsWithin();
         return;
       }
 
-      if (hit(vrExitButton)) {
-        exitRoomsWithin();
-        return;
-      }
-    }
-  },
 
-  onTriggerUp: function () {
-    this.triggerHeld = false;
+      if (hit(exitButton)) {
+        exitRoomsWithin();
+      }
+    },
+
+
+    remove: function () {
+      this.el.removeEventListener(
+        'triggerdown',
+        this.pressTrigger
+      );
+
+      this.el.removeEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
+
+      this.el.removeEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+      this.el.removeEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    }
   }
-});
+);
 
 
 /* ============================================================
-   Tutorial hook
+   TUTORIAL HOOK
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -545,7 +1031,9 @@ AFRAME.registerComponent(
   {
     init: function () {
       const manager =
-        document.querySelector('#story-manager');
+        document.querySelector(
+          '#story-manager'
+        );
 
       if (!manager) {
         return;
@@ -559,7 +1047,9 @@ AFRAME.registerComponent(
             false
           );
         },
-        { once: true }
+        {
+          once: true
+        }
       );
     }
   }
@@ -567,91 +1057,126 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
-   Intro hook
+   INTRO HOOK
 ============================================================ */
 
-AFRAME.registerComponent('intro-sequence', {
-  schema: {
-    voiceSrc: { type: 'selector' }
-  },
+AFRAME.registerComponent(
+  'intro-sequence',
+  {
+    schema: {
+      voiceSrc: {
+        type: 'selector'
+      }
+    },
 
-  play: function () {
-    console.log(
-      'Intro sequence hook ready. Add final voice/fader assets before enabling it.'
-    );
+    play: function () {
+      console.log(
+        'Intro sequence hook ready.'
+      );
+    }
   }
-});
+);
 
 
 /* ============================================================
-   Jumpscare
+   JUMPSCARE
 ============================================================ */
 
-AFRAME.registerComponent('jumpscare-controller', {
-  init: function () {
-    const manager =
-      document.querySelector('#story-manager');
-
-    if (!manager) {
-      return;
-    }
-
-    manager.addEventListener(
-      'all-clues-collected',
-      () => this.trigger(),
-      { once: true }
-    );
-  },
-
-  trigger: function () {
-    const scareSteps =
-      document.querySelector('#scareFootstepAudio');
-
-    if (scareSteps) {
-      const audioState =
-        window.getRoomsAudioState
-          ? window.getRoomsAudioState()
-          : { muted: false, volume: 1 };
-
-      scareSteps.volume =
-        audioState.muted
-          ? 0
-          : 0.35 * audioState.volume;
-
-      scareSteps.currentTime = 0;
-
-      scareSteps.play().catch((error) => {
-        console.error(
-          'Scare footstep sound failed:',
-          error
+AFRAME.registerComponent(
+  'jumpscare-controller',
+  {
+    init: function () {
+      const manager =
+        document.querySelector(
+          '#story-manager'
         );
-      });
-    }
 
-    setTimeout(() => {
-      const character =
-        document.querySelector('#scare-character');
-
-      if (character) {
-        character.setAttribute(
-          'visible',
-          true
-        );
+      if (!manager) {
+        return;
       }
 
-      setTimeout(() => {
-        if (character) {
-          character.setAttribute(
-            'visible',
-            false
-          );
+      manager.addEventListener(
+        'all-clues-collected',
+        () => this.trigger(),
+        {
+          once: true
         }
+      );
+    },
 
-        if (scareSteps) {
-          scareSteps.pause();
-          scareSteps.currentTime = 0;
-        }
-      }, 1800);
-    }, 500);
+
+    trigger: function () {
+      const scareSteps =
+        document.querySelector(
+          '#scareFootstepAudio'
+        );
+
+      if (scareSteps) {
+        const audioState =
+          window.getRoomsAudioState
+            ? window.getRoomsAudioState()
+            : {
+                muted: false,
+                volume: 1
+              };
+
+        scareSteps.volume =
+          audioState.muted
+            ? 0
+            : 0.35 *
+              (
+                audioState.volume !== undefined
+                  ? audioState.volume
+                  : 1
+              );
+
+        scareSteps.currentTime = 0;
+
+        scareSteps
+          .play()
+          .catch((error) => {
+            console.error(
+              'Scare footstep sound failed:',
+              error
+            );
+          });
+      }
+
+
+      window.setTimeout(
+        () => {
+          const character =
+            document.querySelector(
+              '#scare-character'
+            );
+
+          if (character) {
+            character.setAttribute(
+              'visible',
+              true
+            );
+          }
+
+
+          window.setTimeout(
+            () => {
+              if (character) {
+                character.setAttribute(
+                  'visible',
+                  false
+                );
+              }
+
+              if (scareSteps) {
+                scareSteps.pause();
+                scareSteps.currentTime = 0;
+              }
+            },
+            1800
+          );
+        },
+        500
+      );
+    }
   }
-});
+);
