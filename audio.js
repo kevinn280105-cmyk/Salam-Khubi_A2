@@ -900,21 +900,11 @@ function getRoomsAudioState() {
    call these functions.
 ============================================================ */
 
-window.enableSound =
-  enableSound;
-
-
-window.changeRoomsVolume =
-  changeRoomsVolume;
-
-
-window.toggleRoomsMute =
-  toggleRoomsMute;
-
-
-window.getRoomsAudioState =
-  getRoomsAudioState;
-
+window.enableSound = enableSound;
+window.changeRoomsVolume = changeRoomsVolume;
+window.toggleRoomsMute = toggleRoomsMute;
+window.getRoomsAudioState = getRoomsAudioState;
+window.applyRoomsAudioSettings = applyRoomsAudioSettings;
 
 /* ============================================================
    PLAYER FOOTSTEP SYSTEM

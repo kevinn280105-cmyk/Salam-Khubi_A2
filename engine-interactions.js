@@ -2998,123 +2998,319 @@ AFRAME.registerComponent(
       },
 
 
-    /* ======================================================
-       CREATE TV ROOM LIGHT
+  /* ======================================================
+   CREATE FORWARD-FACING TV GLOW
 
-       This creates ONLY a point light.
+   Uses a SPOT light instead of a POINT light.
 
-       It does NOT create a visible rectangle.
-    ====================================================== */
+   The direction is calculated from the actual CRT
+   surface that the player clicked.
 
-    createGlowLight:
-      function (
-        worldPoint
-      ) {
+   This makes the television cast light FORWARD
+   into the room instead of lighting its sides.
+====================================================== */
+
+createGlowLight:
+  function (
+    worldPoint,
+    mesh,
+    intersection
+  ) {
+
+    if (!worldPoint) {
+      return;
+    }
+
+
+    /* --------------------------------------------------
+       FIND THE DIRECTION THE SCREEN IS FACING
+    -------------------------------------------------- */
+
+    const forward =
+      new THREE.Vector3();
+
+
+    /*
+      Best method:
+      use the actual triangle normal from the CRT glass.
+    */
+
+    if (
+      intersection &&
+      intersection.face &&
+      mesh
+    ) {
+
+      const normalMatrix =
+        new THREE.Matrix3()
+          .getNormalMatrix(
+            mesh.matrixWorld
+          );
+
+
+      forward
+        .copy(
+          intersection.face.normal
+        )
+        .applyMatrix3(
+          normalMatrix
+        )
+        .normalize();
+
+
+      /*
+        Sometimes a GLB's normals face inward.
+
+        Check which side the player is standing on.
+        The TV should shine toward the player/room,
+        not backward through the television.
+      */
+
+      const cameraEl =
+        document.querySelector(
+          '#cam'
+        );
+
+
+      if (cameraEl) {
+
+        const cameraWorld =
+          new THREE.Vector3();
+
+
+        cameraEl.object3D
+          .getWorldPosition(
+            cameraWorld
+          );
+
+
+        const towardCamera =
+          cameraWorld
+            .clone()
+            .sub(
+              worldPoint
+            )
+            .normalize();
+
 
         if (
-          !worldPoint
+          forward.dot(
+            towardCamera
+          ) < 0
         ) {
 
-          return;
+          forward.multiplyScalar(
+            -1
+          );
 
         }
 
-
-        if (
-          !this.glowLight
-        ) {
-
-          const light =
-
-            document
-              .createElement(
-                'a-entity'
-              );
+      }
 
 
-          light.setAttribute(
-            'id',
-            'tvGlowLight'
+    } else {
+
+      /*
+        Fallback:
+
+        Point from the television toward the camera.
+        This is used if the screen was discovered
+        automatically by its Blender name.
+      */
+
+      const cameraEl =
+        document.querySelector(
+          '#cam'
+        );
+
+
+      if (cameraEl) {
+
+        const cameraWorld =
+          new THREE.Vector3();
+
+
+        cameraEl.object3D
+          .getWorldPosition(
+            cameraWorld
           );
 
 
-          light.setAttribute(
-
-            'light',
-
-            {
-
-              type:
-                'point',
-
-              color:
-                this.data
-                  .lightColor,
-
-              intensity:
-                0,
-
-              distance:
-                this.data
-                  .lightDistance,
-
-              decay:
-                2,
-
-              castShadow:
-                false
-
-            }
-
-          );
+        forward
+          .subVectors(
+            cameraWorld,
+            worldPoint
+          )
+          .normalize();
 
 
-          /*
-            Make it a child of livingasset.
-          */
+      } else {
 
-          this.el.appendChild(
-            light
-          );
+        forward.set(
+          0,
+          0,
+          1
+        );
 
+      }
 
-          this.glowLight =
-            light;
-
-        }
+    }
 
 
-        /*
-          Convert real screen world position to
-          livingasset local coordinates.
-        */
+    /* --------------------------------------------------
+       POSITION
 
-        this.el.object3D
-          .updateMatrixWorld(
-            true
-          );
+       Put the light slightly IN FRONT of the glass
+       so it is not trapped inside the TV model.
+    -------------------------------------------------- */
 
-
-        const localPoint =
-
-          this.el.object3D
-            .worldToLocal(
-
-              worldPoint.clone()
-
-            );
+    const lightWorld =
+      worldPoint
+        .clone()
+        .addScaledVector(
+          forward,
+          0.07
+        );
 
 
-        this.glowLight
-          .object3D
-          .position
-          .copy(
-            localPoint
-          );
+    /*
+      Target about 1.5m in front of the screen.
+    */
 
-      },
+    const targetWorld =
+      worldPoint
+        .clone()
+        .addScaledVector(
+          forward,
+          1.5
+        );
 
 
+    /* --------------------------------------------------
+       CREATE TARGET
+    -------------------------------------------------- */
+
+    if (!this.glowTarget) {
+
+      const target =
+        document.createElement(
+          'a-entity'
+        );
+
+
+      target.setAttribute(
+        'id',
+        'tvGlowTarget'
+      );
+
+
+      this.el.appendChild(
+        target
+      );
+
+
+      this.glowTarget =
+        target;
+
+    }
+
+
+    /* --------------------------------------------------
+       CREATE SPOT LIGHT
+    -------------------------------------------------- */
+
+    if (!this.glowLight) {
+
+      const light =
+        document.createElement(
+          'a-entity'
+        );
+
+
+      light.setAttribute(
+        'id',
+        'tvGlowLight'
+      );
+
+
+      light.setAttribute(
+        'light',
+        `
+          type: spot;
+          color: ${this.data.lightColor};
+          intensity: 0;
+          distance: 3.2;
+          decay: 2;
+          angle: 52;
+          penumbra: 0.72;
+          target: #tvGlowTarget;
+          castShadow: false
+        `
+      );
+
+
+      this.el.appendChild(
+        light
+      );
+
+
+      this.glowLight =
+        light;
+
+    }
+
+
+    /* --------------------------------------------------
+       CONVERT WORLD POSITIONS INTO livingasset LOCAL SPACE
+    -------------------------------------------------- */
+
+    this.el.object3D
+      .updateMatrixWorld(
+        true
+      );
+
+
+    const localLight =
+      this.el.object3D
+        .worldToLocal(
+          lightWorld.clone()
+        );
+
+
+    const localTarget =
+      this.el.object3D
+        .worldToLocal(
+          targetWorld.clone()
+        );
+
+
+    this.glowLight
+      .object3D
+      .position
+      .copy(
+        localLight
+      );
+
+
+    this.glowTarget
+      .object3D
+      .position
+      .copy(
+        localTarget
+      );
+
+
+    console.log(
+      'TV glow points forward:',
+      forward
+        .toArray()
+        .map(
+          value =>
+            value.toFixed(2)
+        )
+    );
+
+  },
     /* ======================================================
        TV TOGGLE
     ====================================================== */
