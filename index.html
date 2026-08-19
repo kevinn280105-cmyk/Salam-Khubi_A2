@@ -1,407 +1,196 @@
 <!DOCTYPE html>
 <html lang="vi">
-
 <head>
-
   <meta charset="UTF-8" />
-
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <title>Rooms Within</title>
 
-
-  <!-- ======================================================
-       A-FRAME
-  ======================================================= -->
-
-  <script
-    src="https://aframe.io/releases/1.5.0/aframe.min.js">
-  </script>
-
-
-  <!-- ======================================================
-       MOVEMENT
-  ======================================================= -->
-
-  <script
-    src="https://cdn.jsdelivr.net/npm/aframe-extras@7.2.0/dist/aframe-extras.min.js">
-  </script>
-
-
-  <!-- ======================================================
-       QUEST TELEPORT
-  ======================================================= -->
-
-  <script
-    src="https://cdn.jsdelivr.net/npm/aframe-blink-controls@0.4.3/dist/aframe-blink-controls.min.js">
-  </script>
-
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/aframe-extras@7.2.0/dist/aframe-extras.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/aframe-blink-controls@0.4.3/dist/aframe-blink-controls.min.js"></script>
 
   <style>
-
     body {
       margin: 0;
       overflow: hidden;
       background: #020202;
     }
 
-
-    /* ======================================================
-       VIGNETTE
-    ======================================================= */
-
     #vignette {
       position: fixed;
       inset: 0;
       z-index: 999;
       pointer-events: none;
-
-      background:
-        radial-gradient(
-          ellipse at center,
-          rgba(0, 0, 0, 0) 50%,
-          rgba(5, 8, 5, 0.5) 100%
-        );
+      background: radial-gradient(
+        ellipse at center,
+        rgba(0, 0, 0, 0) 50%,
+        rgba(5, 8, 5, 0.5) 100%
+      );
     }
-
-
-    /* ======================================================
-       ENABLE SOUND
-    ======================================================= */
 
     #soundButton {
       position: fixed;
-
       top: 16px;
       left: 16px;
-
       z-index: 1000;
-
       padding: 12px 18px;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.75);
-
+      border: 1px solid rgba(255, 255, 255, 0.75);
       border-radius: 8px;
-
       color: white;
-
-      background:
-        rgba(0, 0, 0, 0.82);
-
-      font:
-        600 15px Arial,
-        sans-serif;
-
+      background: rgba(0, 0, 0, 0.82);
+      font: 600 15px Arial, sans-serif;
       cursor: pointer;
     }
-
 
     #soundButton:disabled {
       opacity: 0.7;
       cursor: default;
     }
 
-
-    /* ======================================================
+    /* =========================================================
        MAC / DESKTOP PAUSE BUTTON
-    ======================================================= */
+    ========================================================= */
 
     .screen-vr-control {
-
       position: fixed;
-
-      left:
-        max(
-          14px,
-          env(safe-area-inset-left)
-        );
-
-      bottom:
-        max(
-          14px,
-          env(safe-area-inset-bottom)
-        );
-
+      left: max(14px, env(safe-area-inset-left));
+      bottom: max(14px, env(safe-area-inset-bottom));
       z-index: 1005;
-
       width: 46px;
       height: 46px;
-
       padding: 0;
-
       display: none;
-
       align-items: center;
       justify-content: center;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.22);
-
+      border: 1px solid rgba(255, 255, 255, 0.22);
       border-radius: 999px;
-
       color: #ffffff;
-
-      background:
-        rgba(17, 19, 23, 0.94);
-
-      box-shadow:
-        0 6px 18px
-        rgba(0, 0, 0, 0.44);
-
+      background: rgba(17, 19, 23, 0.94);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.44);
       cursor: pointer;
-
       opacity: 0.95;
-
-      transition:
-        transform 0.15s ease,
-        opacity 0.15s ease;
+      transition: transform 0.15s ease, opacity 0.15s ease;
     }
-
 
     .screen-vr-control.is-visible {
       display: flex;
     }
 
-
     .screen-vr-control:hover {
-
       opacity: 1;
-
-      transform:
-        scale(1.06);
+      transform: scale(1.06);
     }
 
-
     .screen-vr-control svg {
-
       width: 22px;
       height: 22px;
-
       pointer-events: none;
     }
 
-
-    /* ======================================================
+    /* =========================================================
        MAC / DESKTOP PAUSE MENU
-    ======================================================= */
+    ========================================================= */
 
     #screenPauseMenuOverlay {
-
       position: fixed;
-
       inset: 0;
-
       z-index: 1010;
-
       display: none;
-
       align-items: center;
       justify-content: center;
-
-      background:
-        rgba(0, 0, 0, 0.58);
-
-      backdrop-filter:
-        blur(4px);
-
-      -webkit-backdrop-filter:
-        blur(4px);
+      background: rgba(0, 0, 0, 0.58);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
     }
-
 
     #screenPauseMenuOverlay.is-open {
       display: flex;
     }
 
-
     #screenPauseMenu {
-
-      width:
-        min(
-          340px,
-          calc(100vw - 32px)
-        );
-
+      width: min(340px, calc(100vw - 32px));
       padding: 20px;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.14);
-
+      border: 1px solid rgba(255, 255, 255, 0.14);
       border-radius: 18px;
-
-      background:
-        rgba(15, 16, 19, 0.96);
-
-      box-shadow:
-        0 14px 42px
-        rgba(0, 0, 0, 0.5);
+      background: rgba(15, 16, 19, 0.96);
+      box-shadow: 0 14px 42px rgba(0, 0, 0, 0.5);
     }
 
-
     #screenPauseMenuTitle {
-
       margin-bottom: 16px;
-
       color: #ffffff;
-
       text-align: center;
-
-      font:
-        700 20px Arial,
-        sans-serif;
-
+      font: 700 20px Arial, sans-serif;
       letter-spacing: 1px;
     }
 
-
     .pause-menu-button {
-
       width: 100%;
-
       margin-top: 10px;
-
       padding: 12px 14px;
-
-      border:
-        1px solid
-        rgba(255, 255, 255, 0.14);
-
+      border: 1px solid rgba(255, 255, 255, 0.14);
       border-radius: 10px;
-
       color: #ffffff;
-
-      background:
-        rgba(255, 255, 255, 0.06);
-
-      font:
-        600 14px Arial,
-        sans-serif;
-
+      background: rgba(255, 255, 255, 0.06);
+      font: 600 14px Arial, sans-serif;
       cursor: pointer;
-
-      transition:
-        background 0.15s ease,
-        transform 0.15s ease;
+      transition: background 0.15s ease, transform 0.15s ease;
     }
-
 
     .pause-menu-button:hover {
-
-      background:
-        rgba(255, 255, 255, 0.12);
-
-      transform:
-        translateY(-1px);
+      background: rgba(255, 255, 255, 0.12);
+      transform: translateY(-1px);
     }
-
 
     .pause-menu-button.danger {
-
-      background:
-        rgba(140, 31, 31, 0.26);
+      background: rgba(140, 31, 31, 0.26);
     }
-
 
     .pause-menu-button.danger:hover {
-
-      background:
-        rgba(170, 37, 37, 0.36);
+      background: rgba(170, 37, 37, 0.36);
     }
-
   </style>
 
-
-  <!-- ======================================================
-       PROJECT JS
-  ======================================================= -->
-
   <script src="engine-environment.js"></script>
-
   <script src="engine-interactions.js"></script>
-
   <script src="audio.js"></script>
-
   <script src="story.js"></script>
-
   <script src="ui-scare.js"></script>
-
   <script src="incense.js"></script>
-
+  <script src="mirror.js"></script>
 </head>
 
-
 <body>
-
-
-  <!-- ======================================================
-       VIGNETTE
-  ======================================================= -->
-
   <div id="vignette"></div>
 
-
-  <!-- ======================================================
-       ENABLE SOUND
-  ======================================================= -->
-
   <button
-
     id="soundButton"
-
     type="button"
-
     onclick="enableSound()">
-
     ENABLE SOUND
-
   </button>
 
-
   <!-- ======================================================
-       MAC / DESKTOP PAUSE BUTTON
-
-       Hidden on normal webpage.
-
-       Appears after fullscreen / A-Frame VR mode begins.
+       MAC / DESKTOP PAUSE UI
   ======================================================= -->
 
   <button
-
     id="screenPauseButton"
-
     class="screen-vr-control"
-
     type="button"
-
     aria-label="Pause menu"
-
     title="Pause"
-
     onclick="toggleRoomsPauseMenu()">
 
-
     <svg
-
       viewBox="0 0 24 24"
-
       fill="none"
-
       stroke="currentColor"
-
       stroke-width="1.7"
-
       stroke-linecap="round"
-
       stroke-linejoin="round"
-
       aria-hidden="true">
-
 
       <circle
         cx="12"
@@ -409,29 +198,18 @@
         r="3.2">
       </circle>
 
-
       <circle
         cx="12"
         cy="12"
         r="7.1">
       </circle>
 
-
       <path
-        d="
-          M12 2.8v2.2
-          M12 19v2.2
-          M2.8 12H5
-          M19 12h2.2">
+        d="M12 2.8v2.2M12 19v2.2M2.8 12H5M19 12h2.2">
       </path>
 
-
       <path
-        d="
-          M5.5 5.5l1.6 1.6
-          M16.9 16.9l1.6 1.6
-          M18.5 5.5l-1.6 1.6
-          M7.1 16.9l-1.6 1.6">
+        d="M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6">
       </path>
 
     </svg>
@@ -439,108 +217,47 @@
   </button>
 
 
-  <!-- ======================================================
-       MAC / DESKTOP PAUSE MENU
-  ======================================================= -->
-
   <div
-
     id="screenPauseMenuOverlay"
-
-    onclick="
-      if (event.target === this)
-        toggleRoomsPauseMenu(false)
-    ">
-
+    onclick="if (event.target === this) toggleRoomsPauseMenu(false)">
 
     <div id="screenPauseMenu">
 
-
       <div id="screenPauseMenuTitle">
-
         PAUSED
-
       </div>
 
-
-      <!-- RESUME -->
-
       <button
-
         id="screenResumeButton"
-
         class="pause-menu-button"
-
         type="button"
-
-        onclick="
-          toggleRoomsPauseMenu(false)
-        ">
-
+        onclick="toggleRoomsPauseMenu(false)">
         RESUME
-
       </button>
 
-
-      <!-- SOUND -->
-
       <button
-
         id="screenSoundButton"
-
         class="pause-menu-button"
-
         type="button"
-
-        onclick="
-          toggleRoomsMute()
-        ">
-
+        onclick="toggleRoomsMute()">
         SOUND: ON
-
       </button>
 
-
-      <!-- RESTART -->
-
       <button
-
         id="screenRestartButton"
-
         class="pause-menu-button"
-
         type="button"
-
-        onclick="
-          restartRoomsWithin()
-        ">
-
+        onclick="restartRoomsWithin()">
         RESTART GAME
-
       </button>
-
-
-      <!-- EXIT -->
 
       <button
-
         id="screenExitButton"
-
-        class="
-          pause-menu-button
-          danger
-        "
-
+        class="pause-menu-button danger"
         type="button"
-
-        onclick="
-          exitRoomsWithin()
-        ">
-
+        onclick="exitRoomsWithin()">
         EXIT VR / FULLSCREEN
-
       </button>
-
 
     </div>
 
@@ -548,47 +265,27 @@
 
 
   <!-- ======================================================
-       FOOTSTEP AUDIO
+       AUDIO
   ======================================================= -->
 
   <audio
-
     id="footstepAudio"
-
-    src="
-      sounds/842186__aardsreal__footstep-floor.wav
-    "
-
+    src="sounds/842186__aardsreal__footstep-floor.wav"
     preload="auto"
-
     loop
-
     playsinline>
-
   </audio>
-
-
-  <!-- ======================================================
-       SCARE FOOTSTEPS
-  ======================================================= -->
 
   <audio
-
     id="scareFootstepAudio"
-
-    src="
-      sounds/842186__aardsreal__footstep-floor.wav
-    "
-
+    src="sounds/842186__aardsreal__footstep-floor.wav"
     preload="auto"
-
     playsinline>
-
   </audio>
 
 
   <!-- ======================================================
-       A-FRAME SCENE
+       SCENE
   ======================================================= -->
 
   <a-scene
@@ -597,27 +294,22 @@
 
     spatial-audio-manager
 
-
     background="
       color: #020202"
-
 
     fog="
       type: exponential;
       color: #050805;
       density: 0.025"
 
-
     renderer="
       colorManagement: true;
       physicallyCorrectLights: true"
-
 
     loading-screen="
       enabled: true;
       dotsColor: white;
       backgroundColor: black"
-
 
     webxr="
       optionalFeatures:
@@ -625,9 +317,9 @@
         bounded-floor">
 
 
-    <!-- ====================================================
-         AMBIENT LIGHT
-    ===================================================== -->
+    <!-- ======================================================
+         LIGHTING
+    ======================================================= -->
 
     <a-light
 
@@ -640,14 +332,9 @@
     </a-light>
 
 
-    <!-- ====================================================
-         GREEN LIGHT
-    ===================================================== -->
-
     <a-entity
 
       position="-3.5 2.6 -1"
-
 
       light="
         type: point;
@@ -657,7 +344,6 @@
         decay: 2;
         castShadow: false"
 
-
       flicker="
         min: 5.5;
         max: 7.5;
@@ -666,14 +352,9 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         WARM LIGHT
-    ===================================================== -->
-
     <a-entity
 
       position="2.5 2.6 1.5"
-
 
       light="
         type: point;
@@ -683,7 +364,6 @@
         decay: 2;
         castShadow: false"
 
-
       flicker="
         min: 6.5;
         max: 8.5;
@@ -692,9 +372,9 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         WALL + FLOOR
-    ===================================================== -->
+    <!-- ======================================================
+         ROOM MODELS
+    ======================================================= -->
 
     <a-entity
 
@@ -702,9 +382,7 @@
 
       class="roompart"
 
-      gltf-model="
-        url(wallandground.glb)
-      "
+      gltf-model="url(wallandground.glb)"
 
       position="0 0 0"
 
@@ -716,20 +394,13 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         LIVING ROOM
-         Real CRT television is inside this GLB.
-    ===================================================== -->
-
     <a-entity
 
       id="living"
 
       class="roompart"
 
-      gltf-model="
-        url(livingasset.glb)
-      "
+      gltf-model="url(livingasset.glb)"
 
       position="0 0 0"
 
@@ -741,19 +412,13 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         KITCHEN
-    ===================================================== -->
-
     <a-entity
 
       id="kitchen"
 
       class="roompart"
 
-      gltf-model="
-        url(kitchenasset.glb)
-      "
+      gltf-model="url(kitchenasset.glb)"
 
       position="0 0 0"
 
@@ -765,19 +430,13 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         BEDROOM
-    ===================================================== -->
-
     <a-entity
 
       id="bedroom"
 
       class="roompart"
 
-      gltf-model="
-        url(bedroomasset.glb)
-      "
+      gltf-model="url(bedroomasset.glb)"
 
       position="0 0 0"
 
@@ -789,19 +448,13 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         TOILET
-    ===================================================== -->
-
     <a-entity
 
       id="toilet"
 
       class="roompart"
 
-      gltf-model="
-        url(toiletasset.glb)
-      "
+      gltf-model="url(toiletasset.glb)"
 
       position="0 0 0"
 
@@ -813,19 +466,13 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         BÀN THỜ
-    ===================================================== -->
-
     <a-entity
 
       id="bantho"
 
       class="roompart"
 
-      gltf-model="
-        url(bantho.glb)
-      "
+      gltf-model="url(bantho.glb)"
 
       position="0 0 0"
 
@@ -838,13 +485,12 @@
 
 
     <!-- ====================================================
-         INCENSE OFFERING MANAGER
+         INCENSE OFFERING RITUAL
     ===================================================== -->
 
     <a-entity
 
       id="offeringManager"
-
 
       offering-layout="
         altar: #bantho;
@@ -855,7 +501,6 @@
         temporaryFlame: true;
         debugVisible: false"
 
-
       offering-blackout="
         delay: 1400;
         blackoutDuration: 1900">
@@ -863,16 +508,15 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         INCENSE FLAME DETECTION
-    ===================================================== -->
+    <!-- ======================================================
+         INCENSE LIGHTING ZONE
+    ======================================================= -->
 
     <a-sphere
 
       id="incenseFlameZone"
 
       radius="0.11"
-
 
       material="
         color: #ff7b00;
@@ -883,9 +527,9 @@
     </a-sphere>
 
 
-    <!-- ====================================================
+    <!-- ======================================================
          TEMPORARY ALTAR FLAME
-    ===================================================== -->
+    ======================================================= -->
 
     <a-entity
 
@@ -899,7 +543,6 @@
         radius="0.025"
 
         position="0 0.01 0"
-
 
         material="
           shader: standard;
@@ -925,20 +568,18 @@
 
       </a-light>
 
-
     </a-entity>
 
 
-    <!-- ====================================================
-         BÁT HƯƠNG DETECTION
-    ===================================================== -->
+    <!-- ======================================================
+         INCENSE BOWL ZONE
+    ======================================================= -->
 
     <a-sphere
 
       id="incenseBowlZone"
 
       radius="0.13"
-
 
       material="
         color: #00ff88;
@@ -949,9 +590,9 @@
     </a-sphere>
 
 
-    <!-- ====================================================
-         FINAL INCENSE POSITION
-    ===================================================== -->
+    <!-- ======================================================
+         PLACED INCENSE POINT
+    ======================================================= -->
 
     <a-entity
 
@@ -962,9 +603,9 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         INCENSE
-    ===================================================== -->
+    <!-- ======================================================
+         INCENSE STICK
+    ======================================================= -->
 
     <a-entity
 
@@ -973,47 +614,28 @@
       class="
         item
         interactable
-        incense-item
-      "
+        incense-item"
 
       natural-grabbable
-
 
       incense-offering="
         tip: #incenseTip;
         base: #incenseBase;
-
-        flameZone:
-          #incenseFlameZone;
-
-        bowlZone:
-          #incenseBowlZone;
-
-        placedPoint:
-          #incensePlacedPoint;
-
-        ember:
-          #incenseEmber;
-
-        tipFlame:
-          #incenseTipFlame;
-
+        flameZone: #incenseFlameZone;
+        bowlZone: #incenseBowlZone;
+        placedPoint: #incensePlacedPoint;
+        ember: #incenseEmber;
+        tipFlame: #incenseTipFlame;
         requiredBows: 3;
-
         lightDistance: 0.11;
-
         lightHoldTime: 700;
-
         placeDistance: 0.13;
-
         bowDownAngle: 28;
-
         bowUpAngle: 12;
-
         bowCooldown: 450">
 
 
-      <!-- TEMPORARY INCENSE MODEL -->
+      <!-- INCENSE BODY -->
 
       <a-cylinder
 
@@ -1026,7 +648,9 @@
       </a-cylinder>
 
 
-      <!-- INCENSE TIP -->
+      <!-- ==================================================
+           INCENSE TIP + IMPROVED SMOKE
+      =================================================== -->
 
       <a-entity
 
@@ -1034,23 +658,15 @@
 
         position="0 0.19 0"
 
-
         incense-smoke="
           active: false;
-
-          count: 12;
-
-          height: 0.9;
-
-          speed: 0.18;
-
-          width: 0.085;
-
-          opacity: 0.16;
-
-          size: 0.035;
-
-          color: #c5c5c5">
+          count: 18;
+          height: 1.15;
+          speed: 0.14;
+          width: 0.11;
+          opacity: 0.22;
+          size: 0.045;
+          color: #d0d0d0">
 
 
         <!-- EMBER -->
@@ -1063,22 +679,17 @@
 
           radius="0.010"
 
-
           material="
             shader: standard;
-
             color: #ff3c16;
-
             emissive: #ff2400;
-
             emissiveIntensity: 3;
-
             roughness: 0.6">
 
         </a-sphere>
 
 
-        <!-- TEMPORARY FLAME ON INCENSE -->
+        <!-- SHORT IGNITION FLAME -->
 
         <a-cone
 
@@ -1094,22 +705,15 @@
 
           height="0.045"
 
-
           material="
             shader: standard;
-
             color: #ffad33;
-
             emissive: #ff5a00;
-
             emissiveIntensity: 3;
-
             transparent: true;
-
             opacity: 0.9">
 
         </a-cone>
-
 
       </a-entity>
 
@@ -1124,13 +728,187 @@
 
       </a-entity>
 
+    </a-entity>
+
+
+    <!-- ======================================================
+         MIRROR
+    ======================================================= -->
+
+    <a-entity
+
+      id="mirrorWrapper"
+
+      position="0 1.45 -2.8"
+
+      rotation="0 0 0">
+
+
+      <!-- LEFT FRAME -->
+
+      <a-box
+
+        position="-0.37 0 0"
+
+        width="0.06"
+
+        height="1.20"
+
+        depth="0.06"
+
+        material="
+          color: #241b16;
+          roughness: 0.65;
+          metalness: 0.05">
+
+      </a-box>
+
+
+      <!-- RIGHT FRAME -->
+
+      <a-box
+
+        position="0.37 0 0"
+
+        width="0.06"
+
+        height="1.20"
+
+        depth="0.06"
+
+        material="
+          color: #241b16;
+          roughness: 0.65;
+          metalness: 0.05">
+
+      </a-box>
+
+
+      <!-- TOP FRAME -->
+
+      <a-box
+
+        position="0 0.57 0"
+
+        width="0.80"
+
+        height="0.06"
+
+        depth="0.06"
+
+        material="
+          color: #241b16;
+          roughness: 0.65;
+          metalness: 0.05">
+
+      </a-box>
+
+
+      <!-- BOTTOM FRAME -->
+
+      <a-box
+
+        position="0 -0.57 0"
+
+        width="0.80"
+
+        height="0.06"
+
+        depth="0.06"
+
+        material="
+          color: #241b16;
+          roughness: 0.65;
+          metalness: 0.05">
+
+      </a-box>
+
+
+      <!-- ==================================================
+           MIRROR INTERACTION HIT AREA
+      =================================================== -->
+
+      <a-plane
+
+        id="mirror"
+
+        class="mirror-interactable"
+
+        position="0 0 0.034"
+
+        width="0.68"
+
+        height="1.08"
+
+        material="
+          opacity: 0;
+          transparent: true;
+          depthWrite: false;
+          side: double"
+
+        haunted-mirror="
+          surface: #mirrorSurface;
+          distortion: #mirrorDistortion;
+          postOfferingPulseSpeed: 1.6;
+          inspectionDuration: 1200">
+
+
+        <!-- MIRROR GLASS -->
+
+        <a-plane
+
+          id="mirrorSurface"
+
+          position="0 0 0.002"
+
+          width="0.68"
+
+          height="1.08"
+
+          material="
+            shader: standard;
+            color: #57616a;
+            metalness: 0.92;
+            roughness: 0.16;
+            emissive: #101820;
+            emissiveIntensity: 0.12;
+            side: double">
+
+        </a-plane>
+
+
+        <!-- HAUNTED DISTORTION LAYER -->
+
+        <a-plane
+
+          id="mirrorDistortion"
+
+          position="0 0 0.004"
+
+          width="0.67"
+
+          height="1.07"
+
+          visible="false"
+
+          material="
+            shader: flat;
+            color: #081012;
+            opacity: 0.045;
+            transparent: true;
+            depthWrite: false;
+            side: double">
+
+        </a-plane>
+
+      </a-plane>
 
     </a-entity>
 
 
-    <!-- ====================================================
+    <!-- ======================================================
          TELEPORT FLOOR
-    ===================================================== -->
+    ======================================================= -->
 
     <a-plane
 
@@ -1138,17 +916,13 @@
 
       class="floor"
 
-
       position="0 0.01 0"
 
-
       rotation="-90 0 0"
-
 
       width="30"
 
       height="30"
-
 
       material="
         opacity: 0;
@@ -1158,9 +932,9 @@
     </a-plane>
 
 
-    <!-- ====================================================
+    <!-- ======================================================
          DOOR
-    ===================================================== -->
+    ======================================================= -->
 
     <a-entity
 
@@ -1168,17 +942,12 @@
 
       class="door"
 
-
       gltf-model="
-        url(cua.glb)
-      "
-
+        url(cua.glb)"
 
       position="0 0 0"
 
-
       rotation="0 0 0"
-
 
       door-hinge="
         openAngle: 100;
@@ -1186,16 +955,15 @@
         direction: 1;
         duration: 650"
 
-
       model-status="
         name: Door">
 
     </a-entity>
 
 
-    <!-- ====================================================
+    <!-- ======================================================
          TEDDY
-    ===================================================== -->
+    ======================================================= -->
 
     <a-entity
 
@@ -1203,31 +971,23 @@
 
       class="
         item
-        interactable
-      "
-
+        interactable"
 
       gltf-model="
-        url(teddy.glb)
-      "
-
+        url(teddy.glb)"
 
       position="0 0 0"
 
-
       natural-grabbable
-
 
       model-status="
         name: Teddy bear"
-
 
       animation__hoverin="
         property: scale;
         to: 1.1 1.1 1.1;
         startEvents: mouseenter;
         dur: 200"
-
 
       animation__hoverout="
         property: scale;
@@ -1238,9 +998,9 @@
     </a-entity>
 
 
-    <!-- ====================================================
+    <!-- ======================================================
          STORY
-    ===================================================== -->
+    ======================================================= -->
 
     <a-entity
 
@@ -1251,12 +1011,10 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         JUMPSCARE
-    ===================================================== -->
-
     <a-entity
+
       jumpscare-controller>
+
     </a-entity>
 
 
@@ -1271,23 +1029,23 @@
     </a-entity>
 
 
-    <!-- ====================================================
+    <!-- ======================================================
          PLAYER RIG
-    ===================================================== -->
+    ======================================================= -->
 
     <a-entity
 
       id="rig"
 
-
       position="1 0.08 0.5"
-
 
       movement-controls="
         speed: 0.15;
-        controls: gamepad, keyboard, touch;
+        controls:
+          gamepad,
+          keyboard,
+          touch;
         fly: false"
-
 
       quest-room-collider="
         objects: [gltf-model];
@@ -1295,7 +1053,6 @@
         skin: 0.035;
         maxSubstep: 0.12;
         teleportDistance: 0.75"
-
 
       footstep-player="
         minSpeed: 0.02;
@@ -1310,17 +1067,13 @@
 
         id="cam"
 
-
         camera="
           near: 0.01;
           fov: 60"
 
-
         position="0 1.48 0"
 
-
         look-controls
-
 
         head-bob="
           verticalAmount: 0.026;
@@ -1329,11 +1082,9 @@
           vrMultiplier: 0.3">
 
 
-        <!-- ================================================
-             QUEST PAUSE BUTTON
-
-             Bottom-left corner.
-        ================================================= -->
+        <!-- ==================================================
+             3D PAUSE BUTTON
+        =================================================== -->
 
         <a-circle
 
@@ -1341,8 +1092,10 @@
 
           class="vr-control"
 
-          visible="false"
+          onclick="
+            toggleRoomsPauseMenu()"
 
+          visible="false"
 
           camera-corner-ui="
             side: left;
@@ -1351,11 +1104,9 @@
             horizontalInset: 0.13;
             verticalInset: 0.16"
 
-
           radius="0.044"
 
           segments="40"
-
 
           material="
             color: #17191c;
@@ -1375,7 +1126,6 @@
 
             position="0 0 0.002"
 
-
             material="
               color: #69758d;
               shader: flat;
@@ -1394,7 +1144,6 @@
 
             position="0 0 0.006"
 
-
             material="
               color: #ffffff;
               shader: flat;
@@ -1410,7 +1159,6 @@
             height="0.004"
 
             position="0 0 0.007"
-
 
             material="
               color: #ffffff;
@@ -1430,7 +1178,6 @@
 
             position="0 0 0.008"
 
-
             material="
               color: #ffffff;
               shader: flat;
@@ -1449,7 +1196,6 @@
 
             position="0 0 0.009"
 
-
             material="
               color: #ffffff;
               shader: flat;
@@ -1457,13 +1203,12 @@
 
           </a-plane>
 
-
         </a-circle>
 
 
-        <!-- ================================================
-             QUEST PAUSE PANEL
-        ================================================= -->
+        <!-- ==================================================
+             3D PAUSE MENU
+        =================================================== -->
 
         <a-entity
 
@@ -1474,14 +1219,11 @@
           position="0 0 -1.6">
 
 
-          <!-- PANEL -->
-
           <a-plane
 
             width="0.62"
 
             height="0.56"
-
 
             material="
               color: #111318;
@@ -1492,8 +1234,6 @@
 
           </a-plane>
 
-
-          <!-- TITLE -->
 
           <a-text
 
@@ -1510,9 +1250,7 @@
           </a-text>
 
 
-          <!-- ============================================
-               RESUME
-          ============================================= -->
+          <!-- RESUME -->
 
           <a-plane
 
@@ -1520,12 +1258,14 @@
 
             class="vr-control"
 
+            onclick="
+              toggleRoomsPauseMenu(false)"
+
             width="0.42"
 
             height="0.08"
 
             position="0 0.10 0.01"
-
 
             material="
               color: #2d3440;
@@ -1550,9 +1290,7 @@
           </a-text>
 
 
-          <!-- ============================================
-               SOUND
-          ============================================= -->
+          <!-- SOUND -->
 
           <a-plane
 
@@ -1560,12 +1298,14 @@
 
             class="vr-control"
 
+            onclick="
+              toggleRoomsMute()"
+
             width="0.42"
 
             height="0.08"
 
             position="0 0.01 0.01"
-
 
             material="
               color: #2d3440;
@@ -1592,9 +1332,7 @@
           </a-text>
 
 
-          <!-- ============================================
-               RESTART
-          ============================================= -->
+          <!-- RESTART -->
 
           <a-plane
 
@@ -1602,12 +1340,14 @@
 
             class="vr-control"
 
+            onclick="
+              restartRoomsWithin()"
+
             width="0.42"
 
             height="0.08"
 
             position="0 -0.08 0.01"
-
 
             material="
               color: #2d3440;
@@ -1632,9 +1372,7 @@
           </a-text>
 
 
-          <!-- ============================================
-               EXIT VR
-          ============================================= -->
+          <!-- EXIT -->
 
           <a-plane
 
@@ -1642,12 +1380,14 @@
 
             class="vr-control"
 
+            onclick="
+              exitRoomsWithin()"
+
             width="0.42"
 
             height="0.08"
 
             position="0 -0.17 0.01"
-
 
             material="
               color: #6c2424;
@@ -1671,13 +1411,12 @@
 
           </a-text>
 
-
         </a-entity>
 
 
-        <!-- ================================================
-             DESKTOP HOLD POINT
-        ================================================= -->
+        <!-- ==================================================
+             MAC HELD-OBJECT POSITION
+        =================================================== -->
 
         <a-entity
 
@@ -1688,9 +1427,9 @@
         </a-entity>
 
 
-        <!-- ================================================
+        <!-- ==================================================
              MAC CROSSHAIR
-        ================================================= -->
+        =================================================== -->
 
         <a-cursor
 
@@ -1698,44 +1437,35 @@
 
           scale="0.7 0.7 0.7"
 
-
           cursor="
             rayOrigin: entity;
             fuse: false"
-
 
           raycaster="
             objects:
               #door,
               #doorCloseTarget,
-              .item;
+              .item,
+              .mirror-interactable,
+              .vr-control;
             far: 3;
             interval: 50">
 
         </a-cursor>
-
 
       </a-entity>
 
 
       <!-- ==================================================
            LEFT QUEST CONTROLLER
-
-           Trigger:
-           teleport
-
-           Grip:
-           grab
       =================================================== -->
 
       <a-entity
 
         id="leftHand"
 
-
         hand-controls="
           hand: left"
-
 
         blink-controls="
           cameraRig: #rig;
@@ -1744,7 +1474,6 @@
           button: trigger;
           snapTurn: false;
           rotateOnTeleport: false"
-
 
         natural-grab-hand="
           radius: 0.4;
@@ -1755,29 +1484,20 @@
 
       <!-- ==================================================
            RIGHT QUEST CONTROLLER
-
-           Trigger:
-           doors
-           TV
-           pause UI
-
-           Grip:
-           grab
       =================================================== -->
 
       <a-entity
 
         id="rightHand"
 
-
         hand-controls="
           hand: right"
-
 
         raycaster="
           objects:
             #door,
             #doorCloseTarget,
+            .mirror-interactable,
             .vr-control;
           far: 3;
           interval: 50;
@@ -1785,26 +1505,21 @@
           lineColor: #ffffff;
           lineOpacity: 0.8"
 
-
         natural-grab-hand="
           radius: 0.4;
           velocitySmoothing: 0.35"
 
-
         vr-door-interactor
 
+        vr-mirror-interactor
 
         vr-ui-interactor>
 
       </a-entity>
 
-
     </a-entity>
-
 
   </a-scene>
 
-
 </body>
-
 </html>
