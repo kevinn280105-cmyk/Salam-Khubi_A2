@@ -1,41 +1,39 @@
 /* ============================================================
-   incense.js
-   ROOMS WITHIN - VIETNAMESE ALTAR / INCENSE OFFERING
+   incense.js — ROOMS WITHIN
+   Full replacement.
 
-   Ritual flow:
-   1. Pick up incense.
-   2. Hold the burning tip near the altar flame for ~0.7 s.
-   3. Ember + smoke begin.
-   4. While holding the lit incense, bow 3 times.
-   5. Move the LOWER end of the incense into the bat huong zone.
-   6. Incense snaps upright into place.
-   7. Emits "offering-completed".
-   8. A short flicker/blackout happens after the offering.
-
-   No incense GLB is required yet. index.html uses a temporary cylinder.
-   Later, replace the temporary geometry with incense.glb but KEEP:
-   - #incenseStick
-   - #incenseTip
-   - #incenseBase
-   - incense-offering component
-============================================================ */
-
-
-/* ============================================================
-   HELPERS
+   Keeps the existing incense ritual and adds a temporary
+   interaction to bantho.glb:
+   - Mac: aim at bantho + click
+   - Quest: right controller laser + trigger
+   - Result: incense smoke rises from the top of bantho for ~4.2s
 ============================================================ */
 
 function ritualIsImmersiveXR(scene) {
-  return Boolean(
-    scene &&
-    scene.renderer &&
-    scene.renderer.xr &&
-    scene.renderer.xr.isPresenting
-  );
+  return Boolean(scene && scene.renderer && scene.renderer.xr && scene.renderer.xr.isPresenting);
+}
+
+function ritualIsPaused() {
+  return Boolean(window.roomsPaused || window.roomsInputLocked);
 }
 
 function ritualWait(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+  if (window.waitRoomsMilliseconds) return window.waitRoomsMilliseconds(ms);
+
+  return new Promise((resolve) => {
+    let remaining = Math.max(0, Number(ms) || 0);
+    let previous = performance.now();
+
+    function step(now) {
+      const elapsed = Math.max(0, now - previous);
+      previous = now;
+      if (!ritualIsPaused()) remaining -= elapsed;
+      if (remaining <= 0) return resolve();
+      requestAnimationFrame(step);
+    }
+
+    requestAnimationFrame(step);
+  });
 }
 
 function ritualNormalizeName(value) {
@@ -48,70 +46,82 @@ function ritualNormalizeName(value) {
 
 function ritualFindNamedObject(root, keywords) {
   if (!root) return null;
-
-  const normalizedKeywords = keywords.map(ritualNormalizeName);
-  let result = null;
+  const wanted = keywords.map(ritualNormalizeName);
+  let found = null;
 
   root.traverse((node) => {
-    if (result) return;
-
+    if (found) return;
     const names = [node.name || ''];
-
     if (node.material) {
-      const materials = Array.isArray(node.material)
-        ? node.material
-        : [node.material];
-
-      materials.forEach((material) => {
-        if (material && material.name) names.push(material.name);
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach((m) => {
+        if (m && m.name) names.push(m.name);
       });
     }
-
     const combined = ritualNormalizeName(names.join(' '));
-
-    if (
-      normalizedKeywords.some((keyword) =>
-        combined.includes(keyword)
-      )
-    ) {
-      result = node;
-    }
+    if (wanted.some((key) => combined.includes(key))) found = node;
   });
 
-  return result;
-}
-
-function ritualWorldCenter(object) {
-  if (!object) return null;
-  object.updateMatrixWorld(true);
-
-  const box = new THREE.Box3().setFromObject(object);
-  if (box.isEmpty()) return null;
-
-  return box.getCenter(new THREE.Vector3());
+  return found;
 }
 
 function ritualWorldBox(object) {
   if (!object) return null;
   object.updateMatrixWorld(true);
-
   const box = new THREE.Box3().setFromObject(object);
   return box.isEmpty() ? null : box;
 }
 
+function ritualWorldCenter(object) {
+  const box = ritualWorldBox(object);
+  return box ? box.getCenter(new THREE.Vector3()) : null;
+}
+
+function ritualObjectBelongsToEntity(hitObject, entity) {
+  if (!hitObject || !entity) return false;
+  const root = entity.getObject3D('mesh');
+  if (!root) return false;
+
+  let current = hitObject;
+
+  while (current) {
+    if (current === root) return true;
+    current = current.parent;
+  }
+
+  return false;
+}
+
+function ritualAppendRaycasterSelector(entity, selector) {
+  if (!entity || !selector) return;
+
+  const data = entity.getAttribute('raycaster') || {};
+
+  const list = String(data.objects || '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+  if (!list.includes(selector)) {
+    list.push(selector);
+  }
+
+  entity.setAttribute(
+    'raycaster',
+    'objects',
+    list.join(', ')
+  );
+
+  const raycaster = entity.components.raycaster;
+
+  if (raycaster && raycaster.refreshObjects) {
+    raycaster.refreshObjects();
+  }
+}
+
 
 /* ============================================================
-   INCENSE SMOKE
-
-   Improved smoke system:
-   - Soft generated smoke texture (no image file required).
-   - Bottom section rises almost straight like laminar smoke.
-   - Middle section slowly curls into S-shapes.
-   - Top section spreads, drifts and fades irregularly.
-   - Smoke lives in WORLD SPACE, so it always rises upward even
-     while the player tilts or carries the incense.
-   - Works on Mac and Quest.
-   - Pauses when the Rooms Within pause menu opens.
+   SMOKE
 ============================================================ */
 
 AFRAME.registerComponent('incense-smoke', {
@@ -130,12 +140,11 @@ AFRAME.registerComponent('incense-smoke', {
     this.puffs = [];
     this.tipWorld = new THREE.Vector3();
     this.sceneObject = this.el.sceneEl.object3D;
-    this.isRoomsPaused = false;
+    this.paused = false;
+    this.texture = this.makeTexture();
 
-    this.smokeTexture = this.createSmokeTexture();
-
-    this.onRoomsPauseChanged = (event) => {
-      this.isRoomsPaused = Boolean(
+    this.onPause = (event) => {
+      this.paused = Boolean(
         event &&
         event.detail &&
         event.detail.paused
@@ -144,62 +153,70 @@ AFRAME.registerComponent('incense-smoke', {
 
     this.el.sceneEl.addEventListener(
       'rooms-pause-changed',
-      this.onRoomsPauseChanged
+      this.onPause
     );
 
-    this.createPuffs();
+    this.makePuffs();
   },
 
-  createSmokeTexture: function () {
+  makeTexture: function () {
     const canvas = document.createElement('canvas');
+
     canvas.width = 128;
     canvas.height = 128;
 
-    const context = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d');
 
-    const gradient = context.createRadialGradient(
-      64, 64, 2,
-      64, 64, 61
+    const g = ctx.createRadialGradient(
+      64,
+      64,
+      2,
+      64,
+      64,
+      61
     );
 
-    gradient.addColorStop(
+    g.addColorStop(
       0,
       'rgba(235,235,235,0.78)'
     );
 
-    gradient.addColorStop(
-      0.18,
-      'rgba(220,220,220,0.58)'
+    g.addColorStop(
+      0.20,
+      'rgba(220,220,220,0.55)'
     );
 
-    gradient.addColorStop(
-      0.42,
-      'rgba(200,200,200,0.30)'
+    g.addColorStop(
+      0.48,
+      'rgba(200,200,200,0.26)'
     );
 
-    gradient.addColorStop(
-      0.72,
-      'rgba(175,175,175,0.10)'
+    g.addColorStop(
+      0.78,
+      'rgba(175,175,175,0.08)'
     );
 
-    gradient.addColorStop(
+    g.addColorStop(
       1,
       'rgba(160,160,160,0)'
     );
 
-    context.fillStyle = gradient;
-    context.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = g;
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
+    ctx.fillRect(
+      0,
+      0,
+      128,
+      128
+    );
 
-    return texture;
+    return new THREE.CanvasTexture(canvas);
   },
 
-  createPuffs: function () {
+  makePuffs: function () {
     for (let i = 0; i < this.data.count; i++) {
       const material = new THREE.SpriteMaterial({
-        map: this.smokeTexture,
+        map: this.texture,
         color: new THREE.Color(this.data.color),
         transparent: true,
         opacity: 0,
@@ -208,6 +225,7 @@ AFRAME.registerComponent('incense-smoke', {
       });
 
       const sprite = new THREE.Sprite(material);
+
       sprite.visible = false;
       sprite.renderOrder = 20;
 
@@ -227,9 +245,42 @@ AFRAME.registerComponent('incense-smoke', {
     }
   },
 
+  restartPuffs: function () {
+    this.puffs.forEach((p, i) => {
+      p.life =
+        -(
+          i /
+          Math.max(this.puffs.length, 1)
+        ) * 0.42;
+
+      p.phase =
+        Math.random() *
+        Math.PI *
+        2;
+
+      p.driftX =
+        (Math.random() - 0.5) *
+        2;
+
+      p.driftZ =
+        (Math.random() - 0.5) *
+        2;
+
+      p.sprite.visible = false;
+      p.material.opacity = 0;
+    });
+  },
+
+  hideAll: function () {
+    this.puffs.forEach((p) => {
+      p.sprite.visible = false;
+      p.material.opacity = 0;
+    });
+  },
+
   update: function (oldData) {
     if (!this.data.active) {
-      this.hideAllPuffs();
+      this.hideAll();
     }
 
     if (
@@ -237,211 +288,171 @@ AFRAME.registerComponent('incense-smoke', {
       oldData.color &&
       oldData.color !== this.data.color
     ) {
-      const color = new THREE.Color(this.data.color);
+      const color =
+        new THREE.Color(
+          this.data.color
+        );
 
-      this.puffs.forEach((puff) => {
-        puff.material.color.copy(color);
+      this.puffs.forEach((p) => {
+        p.material.color.copy(color);
       });
     }
-  },
-
-  hideAllPuffs: function () {
-    this.puffs.forEach((puff) => {
-      puff.sprite.visible = false;
-      puff.material.opacity = 0;
-    });
-  },
-
-  resetPuff: function (puff) {
-    puff.life = 0;
-    puff.phase = Math.random() * Math.PI * 2;
-    puff.driftX = (Math.random() - 0.5) * 2;
-    puff.driftZ = (Math.random() - 0.5) * 2;
-    puff.sizeSeed = 0.72 + Math.random() * 0.58;
-    puff.rotationSpeed = (Math.random() - 0.5) * 0.34;
-    puff.opacitySeed = 0.82 + Math.random() * 0.25;
   },
 
   tick: function (time, deltaTime) {
     if (
       !this.data.active ||
       !deltaTime ||
-      this.isRoomsPaused
+      this.paused ||
+      ritualIsPaused()
     ) {
       return;
     }
 
-    this.el.object3D.getWorldPosition(this.tipWorld);
+    this.el.object3D.getWorldPosition(
+      this.tipWorld
+    );
 
-    const dt = Math.min(deltaTime / 1000, 0.05);
-    const t = time * 0.001;
+    const dt =
+      Math.min(
+        deltaTime / 1000,
+        0.05
+      );
 
-    this.puffs.forEach((puff) => {
-      /*
-        A slower life rate keeps incense smoke gentle rather than
-        looking like fire or steam.
-      */
-      puff.life += dt * this.data.speed * 1.35;
+    const t =
+      time * 0.001;
 
-      if (puff.life > 1) {
-        this.resetPuff(puff);
+    this.puffs.forEach((p) => {
+      p.life +=
+        dt *
+        this.data.speed *
+        1.35;
+
+      if (p.life > 1) {
+        p.life = 0;
+
+        p.phase =
+          Math.random() *
+          Math.PI *
+          2;
+
+        p.driftX =
+          (Math.random() - 0.5) *
+          2;
+
+        p.driftZ =
+          (Math.random() - 0.5) *
+          2;
       }
 
-      if (puff.life < 0) {
-        puff.sprite.visible = false;
+      if (p.life < 0) {
+        p.sprite.visible = false;
         return;
       }
 
-      const life = puff.life;
-      const y = life * this.data.height;
+      const life = p.life;
 
-      /* ------------------------------------------------------
-         THREE SMOKE REGIONS
+      const middle =
+        THREE.MathUtils.smoothstep(
+          life,
+          0.20,
+          0.72
+        );
 
-         0.00 - 0.28 : thin and almost vertical
-         0.28 - 0.68 : slow S-shaped curling
-         0.68 - 1.00 : spreading and irregular turbulence
-      ------------------------------------------------------ */
+      const upper =
+        THREE.MathUtils.smoothstep(
+          life,
+          0.58,
+          1
+        );
 
-      const lowerAmount = THREE.MathUtils.clamp(
-        life / 0.28,
-        0,
-        1
-      );
-
-      const middleAmount = THREE.MathUtils.smoothstep(
-        life,
-        0.20,
-        0.72
-      );
-
-      const upperAmount = THREE.MathUtils.smoothstep(
-        life,
-        0.58,
-        1
-      );
-
-      /* Very thin lower thread. */
-      const lowerX =
-        Math.sin(t * 0.65 + puff.phase) *
-        this.data.width *
-        0.035 *
-        lowerAmount;
-
-      const lowerZ =
-        Math.cos(t * 0.55 + puff.phase * 1.2) *
-        this.data.width *
-        0.025 *
-        lowerAmount;
-
-      /* Slow S-shaped middle curl. */
-      const curlX =
+      const x =
         Math.sin(
           t * 0.95 +
           life * 8.6 +
-          puff.phase
+          p.phase
         ) *
-        this.data.width *
-        0.52 *
-        middleAmount;
+          this.data.width *
+          0.52 *
+          middle +
 
-      const curlZ =
-        Math.cos(
-          t * 0.78 +
-          life * 7.1 +
-          puff.phase * 1.35
-        ) *
-        this.data.width *
-        0.36 *
-        middleAmount;
+        p.driftX *
+          this.data.width *
+          0.42 *
+          upper +
 
-      /* Wider, less predictable top section. */
-      const driftX =
-        puff.driftX *
-        this.data.width *
-        0.42 *
-        upperAmount;
-
-      const driftZ =
-        puff.driftZ *
-        this.data.width *
-        0.34 *
-        upperAmount;
-
-      const turbulenceX =
         Math.sin(
           t * 1.55 +
           life * 14.5 +
-          puff.phase * 1.8
+          p.phase * 1.8
         ) *
-        this.data.width *
-        0.18 *
-        upperAmount;
+          this.data.width *
+          0.18 *
+          upper;
 
-      const turbulenceZ =
+      const z =
+        Math.cos(
+          t * 0.78 +
+          life * 7.1 +
+          p.phase * 1.35
+        ) *
+          this.data.width *
+          0.36 *
+          middle +
+
+        p.driftZ *
+          this.data.width *
+          0.34 *
+          upper +
+
         Math.cos(
           t * 1.35 +
           life * 12.4 +
-          puff.phase * 1.15
+          p.phase * 1.15
         ) *
-        this.data.width *
-        0.15 *
-        upperAmount;
+          this.data.width *
+          0.15 *
+          upper;
 
-      puff.sprite.position.set(
-        this.tipWorld.x +
-          lowerX +
-          curlX +
-          driftX +
-          turbulenceX,
-
-        this.tipWorld.y + y,
-
-        this.tipWorld.z +
-          lowerZ +
-          curlZ +
-          driftZ +
-          turbulenceZ
+      p.sprite.position.set(
+        this.tipWorld.x + x,
+        this.tipWorld.y +
+          life *
+          this.data.height,
+        this.tipWorld.z + z
       );
 
-      /*
-        Smoke begins as a narrow thread and becomes wider/softer
-        as it climbs.
-      */
-      const baseScale =
+      const scale =
         this.data.size *
-        puff.sizeSeed;
+        p.sizeSeed *
+        (
+          0.56 +
+          life *
+          2.65
+        );
 
-      const expansion =
-        0.56 +
-        life * 2.65;
-
-      const width =
-        baseScale * expansion;
-
-      puff.sprite.scale.set(
-        width,
-        width * (1.28 + upperAmount * 0.24),
+      p.sprite.scale.set(
+        scale,
+        scale *
+          (
+            1.28 +
+            upper *
+            0.24
+          ),
         1
       );
 
-      puff.material.rotation =
-        puff.phase +
-        t * puff.rotationSpeed;
+      p.material.rotation =
+        p.phase +
+        t *
+        p.rotationSpeed;
 
-      /* ------------------------------------------------------
-         OPACITY
-
-         - starts almost invisible at the ember
-         - strongest around the lower-middle column
-         - dissolves gradually at the top
-      ------------------------------------------------------ */
-
-      const fadeIn = THREE.MathUtils.smoothstep(
-        life,
-        0,
-        0.075
-      );
+      const fadeIn =
+        THREE.MathUtils.smoothstep(
+          life,
+          0,
+          0.075
+        );
 
       const fadeOut =
         1 -
@@ -451,224 +462,292 @@ AFRAME.registerComponent('incense-smoke', {
           1
         );
 
-      const irregularity =
-        puff.opacitySeed *
-        (
-          0.90 +
-          Math.sin(
-            t * 0.9 +
-            puff.phase
-          ) *
-          0.10
-        );
-
-      puff.material.opacity =
+      p.material.opacity =
         this.data.opacity *
         fadeIn *
         fadeOut *
-        irregularity;
+        p.opacitySeed;
 
-      puff.sprite.visible =
-        puff.material.opacity > 0.002;
+      p.sprite.visible =
+        p.material.opacity >
+        0.002;
     });
   },
 
   remove: function () {
     this.el.sceneEl.removeEventListener(
       'rooms-pause-changed',
-      this.onRoomsPauseChanged
+      this.onPause
     );
 
-    this.puffs.forEach((puff) => {
-      this.sceneObject.remove(puff.sprite);
-      puff.material.dispose();
+    this.puffs.forEach((p) => {
+      this.sceneObject.remove(
+        p.sprite
+      );
+
+      p.material.dispose();
     });
 
-    if (this.smokeTexture) {
-      this.smokeTexture.dispose();
+    if (this.texture) {
+      this.texture.dispose();
     }
-
-    this.puffs = [];
   }
 });
 
 
 /* ============================================================
    OFFERING LAYOUT
-
-   Tries to find Blender objects named like:
-   - bat huong / incense bowl / censer
-   - candle / nen / lamp / den
-
-   If those names do not exist, it estimates positions from the
-   bantho.glb bounding box so the temporary interaction objects
-   remain near the altar instead of appearing elsewhere in room.
 ============================================================ */
 
 AFRAME.registerComponent('offering-layout', {
   schema: {
-    altar: { type: 'selector' },
-    surfaceRatio: { default: 0.62 },
-    pickupSide: { default: -0.28 },
-    flameSide: { default: 0.28 },
-    frontOffset: { default: 0.0 },
-    temporaryFlame: { default: true },
-    debugVisible: { default: false }
+    altar: {
+      type: 'selector'
+    },
+
+    surfaceRatio: {
+      default: 0.62
+    },
+
+    pickupSide: {
+      default: -0.28
+    },
+
+    flameSide: {
+      default: 0.28
+    },
+
+    frontOffset: {
+      default: 0
+    },
+
+    temporaryFlame: {
+      default: true
+    },
+
+    debugVisible: {
+      default: false
+    }
   },
 
   init: function () {
-    this.applyLayout = this.applyLayout.bind(this);
+    this.applyLayout =
+      this.applyLayout.bind(this);
 
-    const altar = this.data.altar;
+    const altar =
+      this.data.altar;
+
     if (!altar) {
-      console.warn('Offering layout: #bantho was not found.');
+      console.warn(
+        'Offering layout: #bantho not found.'
+      );
+
       return;
     }
 
-    altar.addEventListener('model-loaded', this.applyLayout);
+    altar.addEventListener(
+      'model-loaded',
+      this.applyLayout
+    );
 
-    if (altar.getObject3D('mesh')) this.applyLayout();
+    if (
+      altar.getObject3D('mesh')
+    ) {
+      this.applyLayout();
+    }
   },
 
-  setEntityWorldPosition: function (entity, worldPosition) {
-    if (!entity || !worldPosition) return;
+  setWorldPosition: function (
+    entity,
+    worldPosition
+  ) {
+    if (
+      !entity ||
+      !worldPosition
+    ) {
+      return;
+    }
 
-    const parent = entity.object3D.parent;
+    const parent =
+      entity.object3D.parent;
+
     if (!parent) {
-      entity.object3D.position.copy(worldPosition);
+      entity.object3D.position.copy(
+        worldPosition
+      );
+
       return;
     }
 
     parent.updateMatrixWorld(true);
-    const local = parent.worldToLocal(worldPosition.clone());
-    entity.object3D.position.copy(local);
+
+    entity.object3D.position.copy(
+      parent.worldToLocal(
+        worldPosition.clone()
+      )
+    );
   },
 
   applyLayout: function () {
-    const altar = this.data.altar;
-    const root = altar ? altar.getObject3D('mesh') : null;
-    if (!root) return;
+    const root =
+      this.data.altar &&
+      this.data.altar.getObject3D(
+        'mesh'
+      );
 
-    root.updateMatrixWorld(true);
+    if (!root) {
+      return;
+    }
 
-    const altarBox = ritualWorldBox(root);
-    if (!altarBox) return;
+    const altarBox =
+      ritualWorldBox(root);
 
-    const size = altarBox.getSize(new THREE.Vector3());
-    const center = altarBox.getCenter(new THREE.Vector3());
+    if (!altarBox) {
+      return;
+    }
 
-    const bowlObject = ritualFindNamedObject(root, [
-      'bat huong',
-      'bathuong',
-      'incense bowl',
-      'incense burner',
-      'censer',
-      'urn'
-    ]);
+    const size =
+      altarBox.getSize(
+        new THREE.Vector3()
+      );
 
-    const flameObject = ritualFindNamedObject(root, [
-      'candle',
-      'nen',
-      'lamp',
-      'den dau',
-      'oil lamp',
-      'flame',
-      'lua'
-    ]);
+    const center =
+      altarBox.getCenter(
+        new THREE.Vector3()
+      );
 
     const surfaceY =
-      altarBox.min.y + size.y * this.data.surfaceRatio;
+      altarBox.min.y +
+      size.y *
+      this.data.surfaceRatio;
 
-    let bowlPosition;
-
-    if (bowlObject) {
-      const bowlBox = ritualWorldBox(bowlObject);
-
-      bowlPosition = bowlBox
-        ? new THREE.Vector3(
-            (bowlBox.min.x + bowlBox.max.x) * 0.5,
-            bowlBox.max.y + 0.015,
-            (bowlBox.min.z + bowlBox.max.z) * 0.5
-          )
-        : ritualWorldCenter(bowlObject);
-
-      console.log(
-        'Offering layout: bat huong object found:',
-        bowlObject.name
+    const bowlObject =
+      ritualFindNamedObject(
+        root,
+        [
+          'bat huong',
+          'bathuong',
+          'incense bowl',
+          'incense burner',
+          'censer',
+          'urn'
+        ]
       );
-    } else {
-      bowlPosition = new THREE.Vector3(
+
+    const flameObject =
+      ritualFindNamedObject(
+        root,
+        [
+          'candle',
+          'nen',
+          'lamp',
+          'den dau',
+          'oil lamp',
+          'flame',
+          'lua'
+        ]
+      );
+
+    let bowlPosition =
+      new THREE.Vector3(
         center.x,
         surfaceY + 0.035,
-        center.z + this.data.frontOffset
+        center.z +
+        this.data.frontOffset
       );
 
-      console.log(
-        'Offering layout: no named bat huong found; using altar estimate.'
-      );
+    if (bowlObject) {
+      const box =
+        ritualWorldBox(
+          bowlObject
+        );
+
+      bowlPosition =
+        box
+          ? new THREE.Vector3(
+              (
+                box.min.x +
+                box.max.x
+              ) / 2,
+
+              box.max.y +
+              0.015,
+
+              (
+                box.min.z +
+                box.max.z
+              ) / 2
+            )
+          : ritualWorldCenter(
+              bowlObject
+            );
     }
 
-    let flamePosition;
+    let flamePosition =
+      new THREE.Vector3(
+        center.x +
+        size.x *
+        this.data.flameSide,
+
+        surfaceY +
+        0.12,
+
+        center.z +
+        this.data.frontOffset
+      );
 
     if (flameObject) {
-      const flameBox = ritualWorldBox(flameObject);
+      const box =
+        ritualWorldBox(
+          flameObject
+        );
 
-      flamePosition = flameBox
-        ? new THREE.Vector3(
-            (flameBox.min.x + flameBox.max.x) * 0.5,
-            flameBox.max.y + 0.025,
-            (flameBox.min.z + flameBox.max.z) * 0.5
-          )
-        : ritualWorldCenter(flameObject);
+      flamePosition =
+        box
+          ? new THREE.Vector3(
+              (
+                box.min.x +
+                box.max.x
+              ) / 2,
 
-      console.log(
-        'Offering layout: flame/lamp object found:',
-        flameObject.name
-      );
-    } else {
-      flamePosition = new THREE.Vector3(
-        center.x + size.x * this.data.flameSide,
-        surfaceY + 0.12,
-        center.z + this.data.frontOffset
-      );
+              box.max.y +
+              0.025,
 
-      console.log(
-        'Offering layout: no named candle/lamp found; using temporary flame.'
-      );
+              (
+                box.min.z +
+                box.max.z
+              ) / 2
+            )
+          : ritualWorldCenter(
+              flameObject
+            );
     }
 
-    const pickupPosition = new THREE.Vector3(
-      center.x + size.x * this.data.pickupSide,
-      surfaceY + 0.055,
-      center.z + this.data.frontOffset
-    );
+    const pickup =
+      new THREE.Vector3(
+        center.x +
+        size.x *
+        this.data.pickupSide,
 
-    const bowlZone =
-      document.querySelector('#incenseBowlZone');
+        surfaceY +
+        0.055,
 
-    const placedPoint =
-      document.querySelector('#incensePlacedPoint');
+        center.z +
+        this.data.frontOffset
+      );
 
-    const flameZone =
-      document.querySelector('#incenseFlameZone');
-
-    const flameVisual =
-      document.querySelector('#incenseFlameVisual');
-
-    const incense =
-      document.querySelector('#incenseStick');
-
-    this.setEntityWorldPosition(
-      bowlZone,
+    this.setWorldPosition(
+      document.querySelector(
+        '#incenseBowlZone'
+      ),
       bowlPosition
     );
 
-    /*
-      Stick is 0.38m tall.
-      Its CENTER sits 0.19m above the insertion point.
-    */
-    this.setEntityWorldPosition(
-      placedPoint,
+    this.setWorldPosition(
+      document.querySelector(
+        '#incensePlacedPoint'
+      ),
+
       bowlPosition
         .clone()
         .add(
@@ -680,31 +759,50 @@ AFRAME.registerComponent('offering-layout', {
         )
     );
 
-    this.setEntityWorldPosition(
-      flameZone,
+    this.setWorldPosition(
+      document.querySelector(
+        '#incenseFlameZone'
+      ),
       flamePosition
     );
 
-    this.setEntityWorldPosition(
-      flameVisual,
+    this.setWorldPosition(
+      document.querySelector(
+        '#incenseFlameVisual'
+      ),
       flamePosition
     );
 
-    this.setEntityWorldPosition(
+    const incense =
+      document.querySelector(
+        '#incenseStick'
+      );
+
+    this.setWorldPosition(
       incense,
-      pickupPosition
+      pickup
     );
 
     if (
       incense &&
-      !incense.is('grabbed')
+      !(
+        incense.is &&
+        incense.is('grabbed')
+      )
     ) {
       incense.object3D.rotation.set(
         0,
         0,
-        THREE.MathUtils.degToRad(90)
+        THREE.MathUtils.degToRad(
+          90
+        )
       );
     }
+
+    const flameVisual =
+      document.querySelector(
+        '#incenseFlameVisual'
+      );
 
     if (flameVisual) {
       flameVisual.setAttribute(
@@ -716,15 +814,27 @@ AFRAME.registerComponent('offering-layout', {
       );
     }
 
-    const debugVisible =
-      Boolean(this.data.debugVisible);
+    const opacity =
+      this.data.debugVisible
+        ? 0.25
+        : 0;
+
+    const bowlZone =
+      document.querySelector(
+        '#incenseBowlZone'
+      );
+
+    const flameZone =
+      document.querySelector(
+        '#incenseFlameZone'
+      );
 
     if (bowlZone) {
       bowlZone.setAttribute(
         'material',
         `
           color: #00ff88;
-          opacity: ${debugVisible ? 0.25 : 0};
+          opacity: ${opacity};
           transparent: true;
           depthWrite: false
         `
@@ -736,16 +846,12 @@ AFRAME.registerComponent('offering-layout', {
         'material',
         `
           color: #ff7b00;
-          opacity: ${debugVisible ? 0.25 : 0};
+          opacity: ${opacity};
           transparent: true;
           depthWrite: false
         `
       );
     }
-
-    console.log(
-      'Offering interaction positioned near bantho.glb.'
-    );
   },
 
   remove: function () {
@@ -760,7 +866,7 @@ AFRAME.registerComponent('offering-layout', {
 
 
 /* ============================================================
-   INCENSE OFFERING INTERACTION
+   INCENSE RITUAL
 ============================================================ */
 
 AFRAME.registerComponent('incense-offering', {
@@ -829,7 +935,6 @@ AFRAME.registerComponent('incense-offering', {
     this.bowWasDown = false;
     this.lastBowTime = 0;
     this.completed = false;
-    this.warnedPlacementEarly = false;
 
     this.tipWorld =
       new THREE.Vector3();
@@ -871,24 +976,17 @@ AFRAME.registerComponent('incense-offering', {
       );
     }
 
-    if (
-      this.data.tip &&
-      this.data.tip.components['incense-smoke']
-    ) {
+    if (this.data.tip) {
       this.data.tip.setAttribute(
         'incense-smoke',
         'active',
         false
       );
     }
-
-    console.log(
-      'Incense ritual ready: pick up → light → bow 3x → place in bat huong.'
-    );
   },
 
   isHeld: function () {
-    return (
+    return Boolean(
       this.el.is &&
       this.el.is('grabbed')
     );
@@ -902,51 +1000,52 @@ AFRAME.registerComponent('incense-offering', {
   },
 
   onKeyDown: function (event) {
-    /*
-      Desktop test shortcut:
-      B = one completed bow.
-    */
+    if (ritualIsPaused()) {
+      return;
+    }
 
     if (
-      String(event.key || '')
-        .toLowerCase() === 'b' &&
+      String(
+        event.key || ''
+      ).toLowerCase() === 'b' &&
+
       !ritualIsImmersiveXR(
         this.el.sceneEl
-      )
+      ) &&
+
+      this.isLit() &&
+      this.isHeld() &&
+      !this.completed
     ) {
-      if (
-        this.isLit() &&
-        this.isHeld() &&
-        !this.completed
-      ) {
-        this.registerBow();
-      }
+      this.registerBow();
     }
   },
 
   getHeadDownAngle: function () {
-    const cameraEl =
-      document.querySelector('#cam');
+    const camera =
+      document.querySelector(
+        '#cam'
+      );
 
-    if (!cameraEl) {
+    if (!camera) {
       return 0;
     }
 
-    cameraEl.object3D
-      .getWorldQuaternion(
-        this.headQuat
-      );
+    camera.object3D.getWorldQuaternion(
+      this.headQuat
+    );
 
     this.forward
-      .set(0, 0, -1)
+      .set(
+        0,
+        0,
+        -1
+      )
       .applyQuaternion(
         this.headQuat
       )
       .normalize();
 
-    /*
-      Looking down produces a positive number here.
-    */
     return THREE.MathUtils.radToDeg(
       Math.asin(
         THREE.MathUtils.clamp(
@@ -959,11 +1058,16 @@ AFRAME.registerComponent('incense-offering', {
   },
 
   registerBow: function () {
+    if (ritualIsPaused()) {
+      return;
+    }
+
     const now =
       performance.now();
 
     if (
-      now - this.lastBowTime <
+      now -
+      this.lastBowTime <
       this.data.bowCooldown
     ) {
       return;
@@ -977,17 +1081,16 @@ AFRAME.registerComponent('incense-offering', {
     }
 
     this.lastBowTime = now;
-    this.bowCount += 1;
-
-    console.log(
-      `Offering bow ${this.bowCount}/${this.data.requiredBows}`
-    );
+    this.bowCount++;
 
     this.el.emit(
       'offering-bow',
       {
-        count: this.bowCount,
-        total: this.data.requiredBows
+        count:
+          this.bowCount,
+
+        total:
+          this.data.requiredBows
       },
       false
     );
@@ -996,10 +1099,6 @@ AFRAME.registerComponent('incense-offering', {
       this.bowCount >=
       this.data.requiredBows
     ) {
-      console.log(
-        'Offering: bowing complete. Place incense into bat huong.'
-      );
-
       this.el.emit(
         'offering-bows-completed',
         {},
@@ -1008,54 +1107,10 @@ AFRAME.registerComponent('incense-offering', {
     }
   },
 
-  updateBowDetection: function () {
-    if (
-      !ritualIsImmersiveXR(
-        this.el.sceneEl
-      ) ||
-      !this.isHeld() ||
-      !this.isLit() ||
-      this.completed ||
-      this.bowCount >=
-        this.data.requiredBows
-    ) {
-      return;
-    }
-
-    const downAngle =
-      this.getHeadDownAngle();
-
-    /*
-      Phase 1:
-      head goes down.
-    */
-    if (
-      !this.bowWasDown &&
-      downAngle >=
-        this.data.bowDownAngle
-    ) {
-      this.bowWasDown = true;
-      return;
-    }
-
-    /*
-      Phase 2:
-      head returns upright.
-      Only now does it count.
-    */
-    if (
-      this.bowWasDown &&
-      downAngle <=
-        this.data.bowUpAngle
-    ) {
-      this.bowWasDown = false;
-      this.registerBow();
-    }
-  },
-
   lightIncense: function () {
     if (
-      this.state !== 'unlit'
+      this.state !== 'unlit' ||
+      ritualIsPaused()
     ) {
       return;
     }
@@ -1076,22 +1131,18 @@ AFRAME.registerComponent('incense-offering', {
         true
       );
 
-      window.setTimeout(
-        () => {
-          if (this.data.tipFlame) {
-            this.data.tipFlame.setAttribute(
-              'visible',
-              false
-            );
-          }
-        },
+      ritualWait(
         450
-      );
+      ).then(() => {
+        if (this.data.tipFlame) {
+          this.data.tipFlame.setAttribute(
+            'visible',
+            false
+          );
+        }
+      });
     }
 
-    /*
-      Turn on the improved smoke system.
-    */
     if (this.data.tip) {
       this.data.tip.setAttribute(
         'incense-smoke',
@@ -1099,10 +1150,6 @@ AFRAME.registerComponent('incense-offering', {
         true
       );
     }
-
-    console.log(
-      'Incense lit. Smoke started. Bow three times while holding it.'
-    );
 
     this.el.emit(
       'incense-lit',
@@ -1115,6 +1162,7 @@ AFRAME.registerComponent('incense-offering', {
     deltaTime
   ) {
     if (
+      ritualIsPaused() ||
       this.state !== 'unlit' ||
       !this.isHeld() ||
       !this.data.tip ||
@@ -1124,23 +1172,18 @@ AFRAME.registerComponent('incense-offering', {
       return;
     }
 
-    this.data.tip.object3D
-      .getWorldPosition(
-        this.tipWorld
-      );
+    this.data.tip.object3D.getWorldPosition(
+      this.tipWorld
+    );
 
-    this.data.flameZone.object3D
-      .getWorldPosition(
-        this.flameWorld
-      );
-
-    const distance =
-      this.tipWorld.distanceTo(
-        this.flameWorld
-      );
+    this.data.flameZone.object3D.getWorldPosition(
+      this.flameWorld
+    );
 
     if (
-      distance <=
+      this.tipWorld.distanceTo(
+        this.flameWorld
+      ) <=
       this.data.lightDistance
     ) {
       this.lightProgress +=
@@ -1157,8 +1200,43 @@ AFRAME.registerComponent('incense-offering', {
     }
   },
 
+  updateBowDetection: function () {
+    if (
+      ritualIsPaused() ||
+      !ritualIsImmersiveXR(
+        this.el.sceneEl
+      ) ||
+      !this.isHeld() ||
+      !this.isLit() ||
+      this.completed ||
+      this.bowCount >=
+      this.data.requiredBows
+    ) {
+      return;
+    }
+
+    const angle =
+      this.getHeadDownAngle();
+
+    if (
+      !this.bowWasDown &&
+      angle >=
+      this.data.bowDownAngle
+    ) {
+      this.bowWasDown = true;
+    } else if (
+      this.bowWasDown &&
+      angle <=
+      this.data.bowUpAngle
+    ) {
+      this.bowWasDown = false;
+      this.registerBow();
+    }
+  },
+
   updatePlacement: function () {
     if (
+      ritualIsPaused() ||
       !this.isLit() ||
       this.completed ||
       !this.isHeld() ||
@@ -1168,28 +1246,20 @@ AFRAME.registerComponent('incense-offering', {
       return;
     }
 
-    this.data.base.object3D
-      .getWorldPosition(
-        this.baseWorld
-      );
+    this.data.base.object3D.getWorldPosition(
+      this.baseWorld
+    );
 
-    this.data.bowlZone.object3D
-      .getWorldPosition(
-        this.bowlWorld
-      );
-
-    const distance =
-      this.baseWorld.distanceTo(
-        this.bowlWorld
-      );
+    this.data.bowlZone.object3D.getWorldPosition(
+      this.bowlWorld
+    );
 
     if (
-      distance >
+      this.baseWorld.distanceTo(
+        this.bowlWorld
+      ) >
       this.data.placeDistance
     ) {
-      this.warnedPlacementEarly =
-        false;
-
       return;
     }
 
@@ -1197,24 +1267,13 @@ AFRAME.registerComponent('incense-offering', {
       this.bowCount <
       this.data.requiredBows
     ) {
-      if (
-        !this.warnedPlacementEarly
-      ) {
-        console.log(
-          `Offering: ${this.bowCount}/${this.data.requiredBows} bows complete. Finish bowing before placing the incense.`
-        );
-
-        this.warnedPlacementEarly =
-          true;
-      }
-
       return;
     }
 
     this.placeIncense();
   },
 
-  detachFromCurrentHolder: function () {
+  detachFromHolder: function () {
     const grabbable =
       this.el.components[
         'natural-grabbable'
@@ -1239,17 +1298,13 @@ AFRAME.registerComponent('incense-offering', {
       if (
         hand &&
         hand.heldItem ===
-          grabbable
+        grabbable
       ) {
         hand.heldItem = null;
         hand.gripHeld = false;
       }
     }
 
-    /*
-      Move back to scene root while preserving
-      current world transform.
-    */
     if (
       grabbable.reparentPreserveWorld
     ) {
@@ -1274,6 +1329,7 @@ AFRAME.registerComponent('incense-offering', {
     }
 
     if (
+      this.el.is &&
       this.el.is('grabbed')
     ) {
       this.el.removeState(
@@ -1285,50 +1341,39 @@ AFRAME.registerComponent('incense-offering', {
   placeIncense: function () {
     if (
       this.completed ||
-      !this.data.placedPoint
+      !this.data.placedPoint ||
+      ritualIsPaused()
     ) {
       return;
     }
 
-    this.detachFromCurrentHolder();
+    this.detachFromHolder();
 
-    const worldPosition =
+    const pos =
       new THREE.Vector3();
 
-    const worldQuaternion =
+    const quat =
       new THREE.Quaternion();
 
-    this.data.placedPoint
-      .object3D
-      .getWorldPosition(
-        worldPosition
-      );
+    this.data.placedPoint.object3D.getWorldPosition(
+      pos
+    );
 
-    this.data.placedPoint
-      .object3D
-      .getWorldQuaternion(
-        worldQuaternion
-      );
+    this.data.placedPoint.object3D.getWorldQuaternion(
+      quat
+    );
 
-    /*
-      Scene root is the parent after detach,
-      so world = local here.
-    */
     this.el.object3D.position.copy(
-      worldPosition
+      pos
     );
 
     this.el.object3D.quaternion.copy(
-      worldQuaternion
+      quat
     );
 
     this.state = 'placed';
     this.completed = true;
 
-    /*
-      It can no longer be picked back up after
-      the ritual is complete.
-    */
     this.el.classList.remove(
       'item'
     );
@@ -1341,12 +1386,10 @@ AFRAME.registerComponent('incense-offering', {
       'natural-grabbable'
     );
 
-    console.log(
-      'Offering completed. Incense placed in bat huong.'
-    );
-
     const detail = {
-      bows: this.bowCount,
+      bows:
+        this.bowCount,
+
       requiredBows:
         this.data.requiredBows
     };
@@ -1383,7 +1426,8 @@ AFRAME.registerComponent('incense-offering', {
   ) {
     if (
       !deltaTime ||
-      this.completed
+      this.completed ||
+      ritualIsPaused()
     ) {
       return;
     }
@@ -1407,55 +1451,48 @@ AFRAME.registerComponent('incense-offering', {
 
 
 /* ============================================================
-   OFFERING BLACKOUT
-
-   A little after offering-completed:
-   flicker → flicker → blackout → lights return.
-
-   Incense ember/smoke stay visible because they are materials,
-   not A-Frame light components.
+   BLACKOUT AFTER FULL RITUAL
 ============================================================ */
 
-AFRAME.registerComponent(
-  'offering-blackout',
-  {
-
-    schema: {
-      delay: {
-        default: 1400
-      },
-
-      blackoutDuration: {
-        default: 1900
-      }
+AFRAME.registerComponent('offering-blackout', {
+  schema: {
+    delay: {
+      default: 1400
     },
 
-    init: function () {
-      this.hasRun = false;
+    blackoutDuration: {
+      default: 1900
+    }
+  },
 
-      this.lightStates = [];
+  init: function () {
+    this.hasRun = false;
+    this.lightStates = [];
+    this.tvWasOn = false;
+    this.tvComponent = null;
 
-      this.tvWasOn = false;
-
-      this.tvComponent = null;
-
-      this.onOfferingCompleted =
-        this.onOfferingCompleted.bind(this);
-
-      this.el.sceneEl.addEventListener(
-        'offering-completed',
-        this.onOfferingCompleted
+    this.onOfferingCompleted =
+      this.onOfferingCompleted.bind(
+        this
       );
-    },
 
-    captureLights: function () {
-      this.lightStates = [];
+    this.el.sceneEl.addEventListener(
+      'offering-completed',
+      this.onOfferingCompleted
+    );
+  },
 
-      this.el.sceneEl
-        .querySelectorAll('[light]')
-        .forEach((entity) => {
+  captureLights: function () {
+    this.lightStates = [];
+
+    this.el.sceneEl
+      .querySelectorAll(
+        '[light]'
+      )
+      .forEach(
+        (entity) => {
           this.lightStates.push({
-            entity: entity,
+            entity,
 
             light:
               Object.assign(
@@ -1482,195 +1519,816 @@ AFRAME.registerComponent(
                   )
                 : null
           });
-        });
-    },
-
-    lightsOff: function () {
-      this.lightStates.forEach(
-        (state) => {
-
-          if (
-            state.entity.hasAttribute(
-              'flicker'
-            )
-          ) {
-            state.entity.removeAttribute(
-              'flicker'
-            );
-          }
-
-          state.entity.setAttribute(
-            'light',
-            'intensity',
-            0
-          );
         }
       );
-    },
+  },
 
-    lightsOn: function () {
-      this.lightStates.forEach(
-        (state) => {
-
-          if (
-            !state.entity.isConnected
-          ) {
-            return;
-          }
-
-          state.entity.setAttribute(
-            'light',
-            state.light
+  lightsOff: function () {
+    this.lightStates.forEach(
+      (state) => {
+        if (
+          state.entity.hasAttribute(
+            'flicker'
+          )
+        ) {
+          state.entity.removeAttribute(
+            'flicker'
           );
-
-          if (
-            state.hadFlicker &&
-            state.flicker
-          ) {
-            state.entity.setAttribute(
-              'flicker',
-              state.flicker
-            );
-          }
         }
-      );
-    },
 
-    onOfferingCompleted:
-      async function () {
+        state.entity.setAttribute(
+          'light',
+          'intensity',
+          0
+        );
+      }
+    );
+  },
 
-        if (this.hasRun) {
+  lightsOn: function () {
+    this.lightStates.forEach(
+      (state) => {
+        if (
+          !state.entity.isConnected
+        ) {
           return;
         }
 
-        this.hasRun = true;
-
-        await ritualWait(
-          this.data.delay
+        state.entity.setAttribute(
+          'light',
+          state.light
         );
 
-        this.captureLights();
+        if (
+          state.hadFlicker &&
+          state.flicker
+        ) {
+          state.entity.setAttribute(
+            'flicker',
+            state.flicker
+          );
+        }
+      }
+    );
+  },
 
-        /*
-          If the real CRT TV is currently on,
-          turn it off during blackout and remember
-          its previous state.
-        */
+  onOfferingCompleted:
+    async function () {
+      if (this.hasRun) {
+        return;
+      }
 
-        const living =
-          document.querySelector(
-            '#living'
+      this.hasRun = true;
+
+      await ritualWait(
+        this.data.delay
+      );
+
+      this.captureLights();
+
+      const living =
+        document.querySelector(
+          '#living'
+        );
+
+      this.tvComponent =
+        living &&
+        living.components
+          ? living.components[
+              'embedded-tv'
+            ] || null
+          : null;
+
+      this.tvWasOn =
+        Boolean(
+          this.tvComponent &&
+          this.tvComponent.isOn
+        );
+
+      if (
+        this.tvWasOn &&
+        this.tvComponent &&
+        this.tvComponent.setState
+      ) {
+        this.tvComponent.setState(
+          false
+        );
+      }
+
+      this.lightsOff();
+      await ritualWait(90);
+
+      this.lightsOn();
+      await ritualWait(210);
+
+      this.lightsOff();
+      await ritualWait(70);
+
+      this.lightsOn();
+      await ritualWait(135);
+
+      this.lightsOff();
+      await ritualWait(130);
+
+      this.lightsOn();
+      await ritualWait(180);
+
+      this.lightsOff();
+
+      this.el.sceneEl.emit(
+        'offering-blackout-started',
+        {},
+        false
+      );
+
+      await ritualWait(
+        this.data.blackoutDuration
+      );
+
+      this.lightsOn();
+
+      if (
+        this.tvWasOn &&
+        this.tvComponent &&
+        this.tvComponent.setState
+      ) {
+        this.tvComponent.setState(
+          true
+        );
+      }
+
+      this.el.sceneEl.emit(
+        'offering-blackout-finished',
+        {},
+        false
+      );
+    },
+
+  remove: function () {
+    this.el.sceneEl.removeEventListener(
+      'offering-completed',
+      this.onOfferingCompleted
+    );
+  }
+});
+
+
+/* ============================================================
+   TEMPORARY BAN THO CLICK / TRIGGER SMOKE
+============================================================ */
+
+AFRAME.registerComponent(
+  'temporary-offering-table-smoke',
+  {
+    schema: {
+      duration: {
+        default: 4200
+      },
+
+      count: {
+        default: 22
+      },
+
+      height: {
+        default: 0.82
+      },
+
+      speed: {
+        default: 0.19
+      },
+
+      width: {
+        default: 0.15
+      },
+
+      opacity: {
+        default: 0.20
+      },
+
+      size: {
+        default: 0.052
+      },
+
+      color: {
+        default: '#d4d4d4'
+      },
+
+      offsetX: {
+        default: 0
+      },
+
+      offsetY: {
+        default: 0.035
+      },
+
+      offsetZ: {
+        default: 0
+      }
+    },
+
+    init: function () {
+      this.smokeAnchor = null;
+      this.remainingMs = 0;
+      this.lastTriggerTime = 0;
+
+      this.onDesktopClick =
+        this.onDesktopClick.bind(
+          this
+        );
+
+      this.onModelLoaded =
+        this.onModelLoaded.bind(
+          this
+        );
+
+      this.el.addEventListener(
+        'click',
+        this.onDesktopClick
+      );
+
+      this.el.addEventListener(
+        'model-loaded',
+        this.onModelLoaded
+      );
+
+      this.createSmokeAnchor();
+
+      if (
+        this.el.getObject3D(
+          'mesh'
+        )
+      ) {
+        this.onModelLoaded();
+      }
+    },
+
+    createSmokeAnchor:
+      function () {
+        if (this.smokeAnchor) {
+          return;
+        }
+
+        const anchor =
+          document.createElement(
+            'a-entity'
           );
 
-        this.tvComponent =
-          living &&
-          living.components
+        anchor.setAttribute(
+          'id',
+          'temporaryBanthoSmokeAnchor'
+        );
 
-            ? living.components[
-                'embedded-tv'
-              ] || null
+        anchor.setAttribute(
+          'incense-smoke',
+          {
+            active: false,
+            count:
+              this.data.count,
+            height:
+              this.data.height,
+            speed:
+              this.data.speed,
+            width:
+              this.data.width,
+            opacity:
+              this.data.opacity,
+            size:
+              this.data.size,
+            color:
+              this.data.color
+          }
+        );
 
-            : null;
+        this.el.sceneEl.appendChild(
+          anchor
+        );
 
-        this.tvWasOn =
-          Boolean(
-            this.tvComponent &&
-            this.tvComponent.isOn
+        this.smokeAnchor =
+          anchor;
+      },
+
+    onModelLoaded:
+      function () {
+        this.updateSmokePosition();
+      },
+
+    updateSmokePosition:
+      function () {
+        const root =
+          this.el.getObject3D(
+            'mesh'
           );
 
         if (
-          this.tvWasOn &&
-          this.tvComponent.setState
+          !root ||
+          !this.smokeAnchor
         ) {
-          this.tvComponent.setState(
+          return false;
+        }
+
+        const box =
+          ritualWorldBox(
+            root
+          );
+
+        if (!box) {
+          return false;
+        }
+
+        const world =
+          new THREE.Vector3(
+            (
+              box.min.x +
+              box.max.x
+            ) / 2 +
+            this.data.offsetX,
+
+            box.max.y +
+            this.data.offsetY,
+
+            (
+              box.min.z +
+              box.max.z
+            ) / 2 +
+            this.data.offsetZ
+          );
+
+        this.el.sceneEl.object3D.updateMatrixWorld(
+          true
+        );
+
+        this.smokeAnchor.object3D.position.copy(
+          this.el.sceneEl.object3D.worldToLocal(
+            world.clone()
+          )
+        );
+
+        return true;
+      },
+
+    onDesktopClick:
+      function (event) {
+        if (
+          ritualIsPaused() ||
+          ritualIsImmersiveXR(
+            this.el.sceneEl
+          )
+        ) {
+          return;
+        }
+
+        const intersection =
+          event &&
+          event.detail
+            ? event.detail.intersection
+            : null;
+
+        if (
+          intersection &&
+          !ritualObjectBelongsToEntity(
+            intersection.object,
+            this.el
+          )
+        ) {
+          return;
+        }
+
+        if (
+          event &&
+          event.stopPropagation
+        ) {
+          event.stopPropagation();
+        }
+
+        this.triggerSmoke();
+      },
+
+    triggerSmoke:
+      function () {
+        if (
+          ritualIsPaused()
+        ) {
+          return false;
+        }
+
+        const now =
+          performance.now();
+
+        if (
+          now -
+          this.lastTriggerTime <
+          350
+        ) {
+          return false;
+        }
+
+        this.lastTriggerTime =
+          now;
+
+        if (
+          !this.updateSmokePosition()
+        ) {
+          return false;
+        }
+
+        const smoke =
+          this.smokeAnchor
+            .components[
+              'incense-smoke'
+            ];
+
+        if (
+          smoke &&
+          smoke.restartPuffs
+        ) {
+          smoke.restartPuffs();
+        }
+
+        this.smokeAnchor.setAttribute(
+          'incense-smoke',
+          'active',
+          true
+        );
+
+        this.remainingMs =
+          this.data.duration;
+
+        this.el.emit(
+          'temporary-offering-smoke',
+          {},
+          false
+        );
+
+        this.el.sceneEl.emit(
+          'temporary-offering-smoke',
+          {},
+          false
+        );
+
+        console.log(
+          'Temporary bantho smoke triggered.'
+        );
+
+        return true;
+      },
+
+    stopSmoke:
+      function () {
+        this.remainingMs = 0;
+
+        if (
+          this.smokeAnchor
+        ) {
+          this.smokeAnchor.setAttribute(
+            'incense-smoke',
+            'active',
             false
           );
         }
-
-        /* ==================================================
-           UNEVEN HORROR FLICKERING
-        =================================================== */
-
-        this.lightsOff();
-
-        await ritualWait(90);
-
-        this.lightsOn();
-
-        await ritualWait(210);
-
-
-        this.lightsOff();
-
-        await ritualWait(70);
-
-        this.lightsOn();
-
-        await ritualWait(135);
-
-
-        this.lightsOff();
-
-        await ritualWait(130);
-
-        this.lightsOn();
-
-        await ritualWait(180);
-
-
-        /* ==================================================
-           FULL BLACKOUT
-        =================================================== */
-
-        this.lightsOff();
-
-        this.el.sceneEl.emit(
-          'offering-blackout-started',
-          {},
-          false
-        );
-
-        await ritualWait(
-          this.data.blackoutDuration
-        );
-
-
-        /* ==================================================
-           LIGHTS SNAP BACK
-        =================================================== */
-
-        this.lightsOn();
-
-
-        if (
-          this.tvWasOn &&
-          this.tvComponent &&
-          this.tvComponent.setState
-        ) {
-          this.tvComponent.setState(
-            true
-          );
-        }
-
-
-        this.el.sceneEl.emit(
-          'offering-blackout-finished',
-          {},
-          false
-        );
-
-
-        console.log(
-          'Offering blackout finished.'
-        );
       },
 
-    remove: function () {
-      this.el.sceneEl.removeEventListener(
-        'offering-completed',
-        this.onOfferingCompleted
+    tick:
+      function (
+        time,
+        deltaTime
+      ) {
+        if (
+          ritualIsPaused() ||
+          this.remainingMs <= 0 ||
+          !deltaTime
+        ) {
+          return;
+        }
+
+        this.remainingMs -=
+          deltaTime;
+
+        if (
+          this.remainingMs <= 0
+        ) {
+          this.stopSmoke();
+        }
+      },
+
+    remove:
+      function () {
+        this.el.removeEventListener(
+          'click',
+          this.onDesktopClick
+        );
+
+        this.el.removeEventListener(
+          'model-loaded',
+          this.onModelLoaded
+        );
+
+        if (
+          this.smokeAnchor &&
+          this.smokeAnchor.parentNode
+        ) {
+          this.smokeAnchor.parentNode.removeChild(
+            this.smokeAnchor
+          );
+        }
+      }
+  }
+);
+
+
+/* ============================================================
+   QUEST TEMPORARY BAN THO INTERACTOR
+============================================================ */
+
+AFRAME.registerComponent(
+  'vr-offering-table-smoke-interactor',
+  {
+    schema: {
+      pressThreshold: {
+        default: 0.65
+      },
+
+      releaseThreshold: {
+        default: 0.2
+      }
+    },
+
+    init: function () {
+      this.triggerHeld = false;
+
+      this.pressTrigger =
+        this.pressTrigger.bind(
+          this
+        );
+
+      this.releaseTrigger =
+        this.releaseTrigger.bind(
+          this
+        );
+
+      this.onTriggerChanged =
+        this.onTriggerChanged.bind(
+          this
+        );
+
+      this.el.addEventListener(
+        'triggerdown',
+        this.pressTrigger
       );
+
+      this.el.addEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
+
+      this.el.addEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    },
+
+    pressTrigger:
+      function () {
+        if (
+          this.triggerHeld ||
+          ritualIsPaused()
+        ) {
+          return;
+        }
+
+        this.triggerHeld =
+          true;
+
+        this.useOfferingTable();
+      },
+
+    releaseTrigger:
+      function () {
+        this.triggerHeld =
+          false;
+      },
+
+    onTriggerChanged:
+      function (event) {
+        const value =
+          event &&
+          event.detail &&
+          typeof event.detail.value ===
+            'number'
+            ? event.detail.value
+            : null;
+
+        if (
+          value === null
+        ) {
+          return;
+        }
+
+        if (
+          value >=
+            this.data.pressThreshold &&
+          !this.triggerHeld
+        ) {
+          this.pressTrigger();
+        } else if (
+          value <=
+          this.data.releaseThreshold
+        ) {
+          this.releaseTrigger();
+        }
+      },
+
+    useOfferingTable:
+      function () {
+        if (
+          ritualIsPaused()
+        ) {
+          return;
+        }
+
+        const bantho =
+          document.querySelector(
+            '#bantho'
+          );
+
+        const raycaster =
+          this.el.components
+            .raycaster;
+
+        if (
+          !bantho ||
+          !raycaster
+        ) {
+          return;
+        }
+
+        const component =
+          bantho.components[
+            'temporary-offering-table-smoke'
+          ];
+
+        if (!component) {
+          return;
+        }
+
+        if (
+          raycaster.refreshObjects
+        ) {
+          raycaster.refreshObjects();
+        }
+
+        const closest =
+          (
+            raycaster.intersections ||
+            []
+          )[0];
+
+        if (!closest) {
+          return;
+        }
+
+        if (
+          !ritualObjectBelongsToEntity(
+            closest.object,
+            bantho
+          )
+        ) {
+          return;
+        }
+
+        component.triggerSmoke();
+      },
+
+    remove:
+      function () {
+        this.el.removeEventListener(
+          'triggerdown',
+          this.pressTrigger
+        );
+
+        this.el.removeEventListener(
+          'triggerup',
+          this.releaseTrigger
+        );
+
+        this.el.removeEventListener(
+          'triggerchanged',
+          this.onTriggerChanged
+        );
+
+        this.el.removeEventListener(
+          'controllerdisconnected',
+          this.releaseTrigger
+        );
+      }
+  }
+);
+
+
+/* ============================================================
+   AUTO SETUP
+   No index.html edit needed.
+============================================================ */
+
+function setupTemporaryOfferingTableSmoke() {
+  const scene =
+    document.querySelector(
+      'a-scene'
+    );
+
+  const bantho =
+    document.querySelector(
+      '#bantho'
+    );
+
+  const cursor =
+    document.querySelector(
+      'a-cursor'
+    );
+
+  const rightHand =
+    document.querySelector(
+      '#rightHand'
+    );
+
+  if (
+    !scene ||
+    !bantho
+  ) {
+    return;
+  }
+
+  bantho.classList.add(
+    'offering-smoke-interactable'
+  );
+
+  if (
+    !bantho.hasAttribute(
+      'temporary-offering-table-smoke'
+    )
+  ) {
+    bantho.setAttribute(
+      'temporary-offering-table-smoke',
+      ''
+    );
+  }
+
+  ritualAppendRaycasterSelector(
+    cursor,
+    '.offering-smoke-interactable'
+  );
+
+  ritualAppendRaycasterSelector(
+    rightHand,
+    '.offering-smoke-interactable'
+  );
+
+  if (
+    rightHand &&
+    !rightHand.hasAttribute(
+      'vr-offering-table-smoke-interactor'
+    )
+  ) {
+    rightHand.setAttribute(
+      'vr-offering-table-smoke-interactor',
+      ''
+    );
+  }
+
+  console.log(
+    'Temporary bantho smoke interaction ready.'
+  );
+}
+
+
+window.addEventListener(
+  'DOMContentLoaded',
+  () => {
+    const scene =
+      document.querySelector(
+        'a-scene'
+      );
+
+    if (!scene) {
+      return;
     }
 
+    if (
+      scene.hasLoaded
+    ) {
+      setupTemporaryOfferingTableSmoke();
+    } else {
+      scene.addEventListener(
+        'loaded',
+        setupTemporaryOfferingTableSmoke,
+        {
+          once: true
+        }
+      );
+    }
   }
 );

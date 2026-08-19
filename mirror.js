@@ -1,15 +1,65 @@
-  /* ============================================================
+/* ============================================================
    mirror.js
    ROOMS WITHIN
 
    Interactive psychological-horror mirror.
 
-   - No GLB required.
    - Mac: centre crosshair + click.
    - Quest: right-hand laser + trigger.
    - Emits "mirror-inspected".
    - Changes after the incense offering is completed.
+   - All mirror timing respects the Rooms Within pause state.
 ============================================================ */
+
+
+/* ============================================================
+   HELPERS
+============================================================ */
+
+function mirrorGameplayLocked() {
+  return Boolean(
+    window.roomsPaused ||
+    window.roomsInputLocked
+  );
+}
+
+
+function mirrorWait(milliseconds) {
+  if (window.waitRoomsMilliseconds) {
+    return window.waitRoomsMilliseconds(milliseconds);
+  }
+
+  return new Promise((resolve) => {
+    let remaining = Math.max(
+      0,
+      Number(milliseconds) || 0
+    );
+
+    let previous = performance.now();
+
+    function step(now) {
+      const elapsed = Math.max(
+        0,
+        now - previous
+      );
+
+      previous = now;
+
+      if (!mirrorGameplayLocked()) {
+        remaining -= elapsed;
+      }
+
+      if (remaining <= 0) {
+        resolve();
+        return;
+      }
+
+      window.requestAnimationFrame(step);
+    }
+
+    window.requestAnimationFrame(step);
+  });
+}
 
 
 /* ============================================================
@@ -35,28 +85,43 @@ AFRAME.registerComponent('haunted-mirror', {
     }
   },
 
+
   init: function () {
     this.hasOfferingChanged = false;
+    this.offeringChangeStarted = false;
+
     this.isInspecting = false;
     this.lastInspectTime = 0;
-    this.changeTimer = null;
-    this.inspectTimer = null;
+    this.inspectElapsed = 0;
 
-    this.inspect = this.inspect.bind(this);
+    this.baseDistortionX = 0;
+    this.baseDistortionY = 0;
+
+    this.removed = false;
+
+    this.inspect =
+      this.inspect.bind(this);
+
     this.onOfferingCompleted =
       this.onOfferingCompleted.bind(this);
 
-    /* Mac / desktop click. */
     this.el.addEventListener(
       'click',
       this.inspect
     );
 
-    /* Incense ritual completion. */
     this.el.sceneEl.addEventListener(
       'offering-completed',
       this.onOfferingCompleted
     );
+
+    if (this.data.distortion) {
+      this.baseDistortionX =
+        this.data.distortion.object3D.position.x;
+
+      this.baseDistortionY =
+        this.data.distortion.object3D.position.y;
+    }
 
     this.setNormalLook();
   },
@@ -67,10 +132,19 @@ AFRAME.registerComponent('haunted-mirror', {
   ========================================================== */
 
   setNormalLook: function () {
-    const surface = this.data.surface;
-    const distortion = this.data.distortion;
+    const surface =
+      this.data.surface;
+
+    const distortion =
+      this.data.distortion;
 
     if (surface) {
+      surface.object3D.scale.set(
+        1,
+        1,
+        1
+      );
+
       surface.setAttribute(
         'material',
         'color',
@@ -103,6 +177,12 @@ AFRAME.registerComponent('haunted-mirror', {
     }
 
     if (distortion) {
+      distortion.object3D.position.x =
+        this.baseDistortionX;
+
+      distortion.object3D.position.y =
+        this.baseDistortionY;
+
       distortion.setAttribute(
         'visible',
         false
@@ -122,10 +202,19 @@ AFRAME.registerComponent('haunted-mirror', {
   ========================================================== */
 
   setHauntedLook: function () {
-    const surface = this.data.surface;
-    const distortion = this.data.distortion;
+    const surface =
+      this.data.surface;
+
+    const distortion =
+      this.data.distortion;
 
     if (surface) {
+      surface.object3D.scale.set(
+        1,
+        1,
+        1
+      );
+
       surface.setAttribute(
         'material',
         'color',
@@ -174,36 +263,47 @@ AFRAME.registerComponent('haunted-mirror', {
 
   /* ==========================================================
      OFFERING COMPLETED
+
+     The 900 ms delay pauses whenever the game is paused.
   ========================================================== */
 
-  onOfferingCompleted: function () {
-    if (this.hasOfferingChanged) {
+  onOfferingCompleted: async function () {
+    if (
+      this.offeringChangeStarted ||
+      this.hasOfferingChanged
+    ) {
+      return;
+    }
+
+    this.offeringChangeStarted = true;
+
+    await mirrorWait(900);
+
+    if (
+      this.removed ||
+      !this.el.isConnected
+    ) {
       return;
     }
 
     this.hasOfferingChanged = true;
 
-    this.changeTimer = window.setTimeout(
-      () => {
-        this.setHauntedLook();
+    this.setHauntedLook();
 
-        this.el.emit(
-          'mirror-changed',
-          {},
-          false
-        );
+    this.el.emit(
+      'mirror-changed',
+      {},
+      false
+    );
 
-        this.el.sceneEl.emit(
-          'mirror-changed',
-          {},
-          false
-        );
+    this.el.sceneEl.emit(
+      'mirror-changed',
+      {},
+      false
+    );
 
-        console.log(
-          'Mirror changed after offering.'
-        );
-      },
-      900
+    console.log(
+      'Mirror changed after offering.'
     );
   },
 
@@ -213,16 +313,22 @@ AFRAME.registerComponent('haunted-mirror', {
   ========================================================== */
 
   inspect: function (event) {
-    if (window.roomsPaused) {
+    if (mirrorGameplayLocked()) {
       return;
     }
 
-    const now = performance.now();
+    const now =
+      performance.now();
 
     if (
-      now - this.lastInspectTime <
+      now -
+      this.lastInspectTime <
       450
     ) {
+      return;
+    }
+
+    if (this.isInspecting) {
       return;
     }
 
@@ -235,7 +341,7 @@ AFRAME.registerComponent('haunted-mirror', {
       event.stopPropagation();
     }
 
-    this.runInspectionEffect();
+    this.startInspectionEffect();
 
     const detail = {
       afterOffering:
@@ -264,60 +370,136 @@ AFRAME.registerComponent('haunted-mirror', {
 
   /* ==========================================================
      INSPECTION EFFECT
+
+     This no longer uses setTimeout or A-Frame animation timers.
+     The motion is calculated in tick(), so it freezes cleanly
+     while the pause menu is open.
   ========================================================== */
 
-  runInspectionEffect: function () {
-    const surface = this.data.surface;
-    const distortion = this.data.distortion;
-
+  startInspectionEffect: function () {
     if (
       this.isInspecting ||
-      !surface
+      !this.data.surface
     ) {
       return;
     }
 
     this.isInspecting = true;
+    this.inspectElapsed = 0;
+
+    if (this.data.distortion) {
+      this.data.distortion.setAttribute(
+        'visible',
+        this.hasOfferingChanged
+      );
+    }
+  },
+
+
+  updateInspectionEffect: function (
+    deltaTime
+  ) {
+    const surface =
+      this.data.surface;
+
+    const distortion =
+      this.data.distortion;
 
     if (
-      !this.hasOfferingChanged
+      !this.isInspecting ||
+      !surface
     ) {
-      surface.setAttribute(
-        'material',
-        'emissiveIntensity',
-        0.42
+      return;
+    }
+
+    this.inspectElapsed +=
+      deltaTime;
+
+    const duration =
+      Math.max(
+        1,
+        this.data.inspectionDuration
+      );
+
+    const progress =
+      THREE.MathUtils.clamp(
+        this.inspectElapsed /
+        duration,
+        0,
+        1
+      );
+
+    if (!this.hasOfferingChanged) {
+      const pulse =
+        Math.sin(
+          progress *
+          Math.PI *
+          6
+        );
+
+      const amount =
+        Math.max(
+          0,
+          1 - progress
+        );
+
+      surface.object3D.scale.set(
+        1 +
+          pulse *
+          0.012 *
+          amount,
+
+        1 -
+          pulse *
+          0.008 *
+          amount,
+
+        1
       );
 
       surface.setAttribute(
-        'animation__mirrorinspect',
-        `
-          property: scale;
-          from: 1 1 1;
-          to: 1.012 0.992 1;
-          dir: alternate;
-          loop: 3;
-          dur: 130;
-          easing: easeInOutSine
-        `
+        'material',
+        'emissiveIntensity',
+        0.12 +
+          Math.abs(pulse) *
+          0.30 *
+          amount
       );
     } else {
-      surface.setAttribute(
-        'material',
-        'emissiveIntensity',
-        0.75
+      const pulse =
+        Math.sin(
+          progress *
+          Math.PI *
+          10
+        );
+
+      const amount =
+        Math.max(
+          0,
+          1 - progress * 0.55
+        );
+
+      surface.object3D.scale.set(
+        1 +
+          pulse *
+          0.025 *
+          amount,
+
+        1 -
+          pulse *
+          0.025 *
+          amount,
+
+        1
       );
 
       surface.setAttribute(
-        'animation__mirrorinspect',
-        `
-          property: scale;
-          from: 1 1 1;
-          to: 1.025 0.975 1;
-          dir: alternate;
-          loop: 5;
-          dur: 85;
-          easing: easeInOutSine
-        `
+        'material',
+        'emissiveIntensity',
+        0.28 +
+          Math.abs(pulse) *
+          0.47 *
+          amount
       );
 
       if (distortion) {
@@ -327,69 +509,62 @@ AFRAME.registerComponent('haunted-mirror', {
         );
 
         distortion.setAttribute(
-          'animation__distort',
-          `
-            property: material.opacity;
-            from: 0.03;
-            to: 0.17;
-            dir: alternate;
-            loop: 5;
-            dur: 90;
-            easing: easeInOutSine
-          `
+          'material',
+          'opacity',
+          0.045 +
+            Math.abs(pulse) *
+            0.125 *
+            amount
         );
       }
     }
 
-    if (this.inspectTimer) {
-      window.clearTimeout(
-        this.inspectTimer
+    if (progress >= 1) {
+      this.finishInspectionEffect();
+    }
+  },
+
+
+  finishInspectionEffect: function () {
+    const surface =
+      this.data.surface;
+
+    const distortion =
+      this.data.distortion;
+
+    if (surface) {
+      surface.object3D.scale.set(
+        1,
+        1,
+        1
+      );
+
+      surface.setAttribute(
+        'material',
+        'emissiveIntensity',
+        this.hasOfferingChanged
+          ? 0.28
+          : 0.12
       );
     }
 
-    this.inspectTimer = window.setTimeout(
-      () => {
-        surface.removeAttribute(
-          'animation__mirrorinspect'
-        );
+    if (distortion) {
+      distortion.setAttribute(
+        'material',
+        'opacity',
+        this.hasOfferingChanged
+          ? 0.045
+          : 0
+      );
 
-        surface.object3D.scale.set(
-          1,
-          1,
-          1
-        );
+      distortion.setAttribute(
+        'visible',
+        this.hasOfferingChanged
+      );
+    }
 
-        surface.setAttribute(
-          'material',
-          'emissiveIntensity',
-          this.hasOfferingChanged
-            ? 0.28
-            : 0.12
-        );
-
-        if (distortion) {
-          distortion.removeAttribute(
-            'animation__distort'
-          );
-
-          distortion.setAttribute(
-            'material',
-            'opacity',
-            this.hasOfferingChanged
-              ? 0.045
-              : 0
-          );
-
-          distortion.setAttribute(
-            'visible',
-            this.hasOfferingChanged
-          );
-        }
-
-        this.isInspecting = false;
-      },
-      this.data.inspectionDuration
-    );
+    this.inspectElapsed = 0;
+    this.isInspecting = false;
   },
 
 
@@ -397,12 +572,16 @@ AFRAME.registerComponent('haunted-mirror', {
      IDLE HAUNTED MOVEMENT
   ========================================================== */
 
-  tick: function (time) {
+  updateHauntedIdle: function (
+    time
+  ) {
+    const distortion =
+      this.data.distortion;
+
     if (
-      window.roomsPaused ||
       !this.hasOfferingChanged ||
       this.isInspecting ||
-      !this.data.distortion
+      !distortion
     ) {
       return;
     }
@@ -415,20 +594,73 @@ AFRAME.registerComponent('haunted-mirror', {
 
     const swayX =
       Math.sin(
-        seconds * speed
+        seconds *
+        speed
       ) * 0.004;
 
     const swayY =
       Math.sin(
-        seconds * 1.17 * speed +
+        seconds *
+        1.17 *
+        speed +
         1.4
       ) * 0.0025;
 
-    this.data.distortion.object3D.position.x =
+    distortion.object3D.position.x =
+      this.baseDistortionX +
       swayX;
 
-    this.data.distortion.object3D.position.y =
+    distortion.object3D.position.y =
+      this.baseDistortionY +
       swayY;
+  },
+
+
+  /* ==========================================================
+     FRAME UPDATE
+  ========================================================== */
+
+  tick: function (
+    time,
+    deltaTime
+  ) {
+    if (
+      mirrorGameplayLocked() ||
+      !deltaTime
+    ) {
+      return;
+    }
+
+    if (this.isInspecting) {
+      this.updateInspectionEffect(
+        deltaTime
+      );
+
+      return;
+    }
+
+    this.updateHauntedIdle(
+      time
+    );
+  },
+
+
+  /* ==========================================================
+     PAUSE / PLAY LIFECYCLE
+  ========================================================== */
+
+  pause: function () {
+    /*
+      Nothing needs to be manually cancelled.
+      Every moving/timed part is pause-aware.
+    */
+  },
+
+
+  play: function () {
+    /*
+      tick() simply resumes from the same inspection elapsed time.
+    */
   },
 
 
@@ -437,6 +669,8 @@ AFRAME.registerComponent('haunted-mirror', {
   ========================================================== */
 
   remove: function () {
+    this.removed = true;
+
     this.el.removeEventListener(
       'click',
       this.inspect
@@ -447,17 +681,7 @@ AFRAME.registerComponent('haunted-mirror', {
       this.onOfferingCompleted
     );
 
-    if (this.changeTimer) {
-      window.clearTimeout(
-        this.changeTimer
-      );
-    }
-
-    if (this.inspectTimer) {
-      window.clearTimeout(
-        this.inspectTimer
-      );
-    }
+    this.finishInspectionEffect();
   }
 });
 
@@ -466,163 +690,169 @@ AFRAME.registerComponent('haunted-mirror', {
    QUEST MIRROR INTERACTION
 ============================================================ */
 
-AFRAME.registerComponent('vr-mirror-interactor', {
-  schema: {
-    pressThreshold: {
-      default: 0.65
+AFRAME.registerComponent(
+  'vr-mirror-interactor',
+  {
+    schema: {
+      pressThreshold: {
+        default: 0.65
+      },
+
+      releaseThreshold: {
+        default: 0.2
+      }
     },
 
-    releaseThreshold: {
-      default: 0.2
-    }
-  },
 
-  init: function () {
-    this.triggerHeld = false;
+    init: function () {
+      this.triggerHeld = false;
 
-    this.pressTrigger =
-      this.pressTrigger.bind(this);
+      this.pressTrigger =
+        this.pressTrigger.bind(this);
 
-    this.releaseTrigger =
-      this.releaseTrigger.bind(this);
+      this.releaseTrigger =
+        this.releaseTrigger.bind(this);
 
-    this.onTriggerChanged =
-      this.onTriggerChanged.bind(this);
+      this.onTriggerChanged =
+        this.onTriggerChanged.bind(this);
 
-    this.el.addEventListener(
-      'triggerdown',
-      this.pressTrigger
-    );
-
-    this.el.addEventListener(
-      'triggerup',
-      this.releaseTrigger
-    );
-
-    this.el.addEventListener(
-      'triggerchanged',
-      this.onTriggerChanged
-    );
-
-    this.el.addEventListener(
-      'controllerdisconnected',
-      this.releaseTrigger
-    );
-  },
-
-
-  pressTrigger: function () {
-    if (
-      this.triggerHeld ||
-      window.roomsPaused
-    ) {
-      return;
-    }
-
-    this.triggerHeld = true;
-    this.useMirror();
-  },
-
-
-  releaseTrigger: function () {
-    this.triggerHeld = false;
-  },
-
-
-  onTriggerChanged: function (event) {
-    const value =
-      event &&
-      event.detail &&
-      typeof event.detail.value === 'number'
-        ? event.detail.value
-        : null;
-
-    if (value === null) {
-      return;
-    }
-
-    if (
-      value >=
-        this.data.pressThreshold &&
-      !this.triggerHeld
-    ) {
-      this.pressTrigger();
-    } else if (
-      value <=
-      this.data.releaseThreshold
-    ) {
-      this.releaseTrigger();
-    }
-  },
-
-
-  useMirror: function () {
-    if (window.roomsPaused) {
-      return;
-    }
-
-    const raycaster =
-      this.el.components.raycaster;
-
-    const mirror =
-      document.querySelector(
-        '#mirror'
+      this.el.addEventListener(
+        'triggerdown',
+        this.pressTrigger
       );
 
-    if (
-      !raycaster ||
-      !mirror
-    ) {
-      return;
+      this.el.addEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
+
+      this.el.addEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    },
+
+
+    pressTrigger: function () {
+      if (
+        this.triggerHeld ||
+        mirrorGameplayLocked()
+      ) {
+        return;
+      }
+
+      this.triggerHeld = true;
+
+      this.useMirror();
+    },
+
+
+    releaseTrigger: function () {
+      this.triggerHeld = false;
+    },
+
+
+    onTriggerChanged: function (event) {
+      const value =
+        event &&
+        event.detail &&
+        typeof event.detail.value ===
+          'number'
+          ? event.detail.value
+          : null;
+
+      if (value === null) {
+        return;
+      }
+
+      if (
+        value >=
+          this.data.pressThreshold &&
+        !this.triggerHeld
+      ) {
+        this.pressTrigger();
+      } else if (
+        value <=
+        this.data.releaseThreshold
+      ) {
+        this.releaseTrigger();
+      }
+    },
+
+
+    useMirror: function () {
+      if (mirrorGameplayLocked()) {
+        return;
+      }
+
+      const raycaster =
+        this.el.components.raycaster;
+
+      const mirror =
+        document.querySelector(
+          '#mirror'
+        );
+
+      if (
+        !raycaster ||
+        !mirror
+      ) {
+        return;
+      }
+
+      if (
+        raycaster.refreshObjects
+      ) {
+        raycaster.refreshObjects();
+      }
+
+      const intersection =
+        raycaster.getIntersection
+          ? raycaster.getIntersection(
+              mirror
+            )
+          : null;
+
+      if (!intersection) {
+        return;
+      }
+
+      const component =
+        mirror.components[
+          'haunted-mirror'
+        ];
+
+      if (component) {
+        component.inspect();
+      }
+    },
+
+
+    remove: function () {
+      this.el.removeEventListener(
+        'triggerdown',
+        this.pressTrigger
+      );
+
+      this.el.removeEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
+
+      this.el.removeEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+      this.el.removeEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
     }
-
-    if (
-      raycaster.refreshObjects
-    ) {
-      raycaster.refreshObjects();
-    }
-
-    const intersection =
-      raycaster.getIntersection
-        ? raycaster.getIntersection(
-            mirror
-          )
-        : null;
-
-    if (!intersection) {
-      return;
-    }
-
-    const component =
-      mirror.components[
-        'haunted-mirror'
-      ];
-
-    if (component) {
-      component.inspect();
-    }
-  },
-
-
-  remove: function () {
-    this.el.removeEventListener(
-      'triggerdown',
-      this.pressTrigger
-    );
-
-    this.el.removeEventListener(
-      'triggerup',
-      this.releaseTrigger
-    );
-
-    this.el.removeEventListener(
-      'triggerchanged',
-      this.onTriggerChanged
-    );
-
-    this.el.removeEventListener(
-      'controllerdisconnected',
-      this.releaseTrigger
-    );
   }
-});
+);

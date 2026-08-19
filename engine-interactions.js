@@ -32,6 +32,22 @@ function isImmersiveXRScene(scene) {
 
 
 /* ============================================================
+   GAMEPLAY INPUT LOCK
+
+   ui-scare.js exposes window.roomsInputLocked while the pause
+   menu is open. Every gameplay interaction in this file checks
+   this helper before changing the world.
+============================================================ */
+
+function roomsGameplayInputLocked() {
+  return Boolean(
+    window.roomsInputLocked ||
+    window.roomsPaused
+  );
+}
+
+
+/* ============================================================
    THREE.JS / A-FRAME HELPER
 
    Checks whether a raycast object belongs to a particular
@@ -166,6 +182,10 @@ AFRAME.registerComponent('door-hinge', {
     this.el.addEventListener(
       'activate-object',
       (event) => {
+        if (roomsGameplayInputLocked()) {
+          return;
+        }
+
         const hitObject =
           event.detail && event.detail.object
             ? event.detail.object
@@ -178,7 +198,10 @@ AFRAME.registerComponent('door-hinge', {
     this.el.addEventListener(
       'click',
       (event) => {
-        if (isImmersiveXRScene(this.el.sceneEl)) {
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(this.el.sceneEl)
+        ) {
           return;
         }
 
@@ -316,7 +339,10 @@ AFRAME.registerComponent('door-hinge', {
     target.addEventListener(
       'click',
       (event) => {
-        if (isImmersiveXRScene(this.el.sceneEl)) {
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(this.el.sceneEl)
+        ) {
           return;
         }
 
@@ -495,6 +521,10 @@ AFRAME.registerComponent('door-hinge', {
 
 
   activatePart: function (hitObject) {
+    if (roomsGameplayInputLocked()) {
+      return false;
+    }
+
     const now = performance.now();
 
     if (now - this.lastActivation < 250) {
@@ -611,7 +641,10 @@ AFRAME.registerComponent('door-hinge', {
 
 
   tick: function (time, deltaTime) {
-    if (!deltaTime) {
+    if (
+      roomsGameplayInputLocked() ||
+      !deltaTime
+    ) {
       return;
     }
 
@@ -695,7 +728,10 @@ AFRAME.registerComponent('vr-door-interactor', {
 
 
   pressTrigger: function (event) {
-    if (this.triggerHeld) {
+    if (
+      this.triggerHeld ||
+      roomsGameplayInputLocked()
+    ) {
       return;
     }
 
@@ -747,6 +783,10 @@ AFRAME.registerComponent('vr-door-interactor', {
 
 
   useDoor: function () {
+    if (roomsGameplayInputLocked()) {
+      return;
+    }
+
     const raycaster = this.el.components.raycaster;
     const door = document.querySelector('#door');
     const closeTarget =
@@ -988,7 +1028,10 @@ AFRAME.registerComponent('embedded-tv', {
 
 
   onDesktopClick: function (event) {
-    if (isImmersiveXRScene(this.el.sceneEl)) {
+    if (
+      roomsGameplayInputLocked() ||
+      isImmersiveXRScene(this.el.sceneEl)
+    ) {
       return;
     }
 
@@ -1037,6 +1080,10 @@ AFRAME.registerComponent('embedded-tv', {
 
 
   toggleFromIntersection: function (intersection) {
+    if (roomsGameplayInputLocked()) {
+      return false;
+    }
+
     if (
       !intersection ||
       !intersection.object ||
@@ -1526,7 +1573,11 @@ AFRAME.registerComponent('embedded-tv', {
 
 
   tick: function (time) {
-    if (!this.isOn || !this.screenMaterial) {
+    if (
+      roomsGameplayInputLocked() ||
+      !this.isOn ||
+      !this.screenMaterial
+    ) {
       return;
     }
 
@@ -1633,7 +1684,10 @@ AFRAME.registerComponent('vr-tv-interactor', {
 
 
   pressTrigger: function () {
-    if (this.triggerHeld) {
+    if (
+      this.triggerHeld ||
+      roomsGameplayInputLocked()
+    ) {
       return;
     }
 
@@ -1673,6 +1727,10 @@ AFRAME.registerComponent('vr-tv-interactor', {
 
 
   useTV: function () {
+    if (roomsGameplayInputLocked()) {
+      return;
+    }
+
     const living = document.querySelector('#living');
 
     if (!living) {
@@ -1820,7 +1878,10 @@ AFRAME.registerComponent('natural-grabbable', {
     this.el.addEventListener(
       'click',
       () => {
-        if (isImmersiveXRScene(this.el.sceneEl)) {
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(this.el.sceneEl)
+        ) {
           return;
         }
 
@@ -1875,7 +1936,10 @@ AFRAME.registerComponent('natural-grabbable', {
 
 
   grab: function (handEntity) {
-    if (this.heldBy) {
+    if (
+      roomsGameplayInputLocked() ||
+      this.heldBy
+    ) {
       return false;
     }
 
@@ -2036,6 +2100,7 @@ AFRAME.registerComponent('natural-grabbable', {
 
   tick: function (time, deltaTime) {
     if (
+      roomsGameplayInputLocked() ||
       this.heldBy ||
       !this.isMoving ||
       !deltaTime
@@ -2229,7 +2294,10 @@ AFRAME.registerComponent('natural-grab-hand', {
 
 
   beginGrip: function () {
-    if (this.gripHeld) {
+    if (
+      roomsGameplayInputLocked() ||
+      this.gripHeld
+    ) {
       return;
     }
 
@@ -2290,7 +2358,10 @@ AFRAME.registerComponent('natural-grab-hand', {
 
 
   grabNearest: function () {
-    if (this.heldItem) {
+    if (
+      roomsGameplayInputLocked() ||
+      this.heldItem
+    ) {
       return;
     }
 
@@ -2327,8 +2398,13 @@ AFRAME.registerComponent('natural-grab-hand', {
     const released = this.heldItem;
     this.heldItem = null;
 
+    const releaseVelocity =
+      roomsGameplayInputLocked()
+        ? new THREE.Vector3()
+        : this.smoothedVelocity.clone();
+
     released.release(
-      this.smoothedVelocity.clone()
+      releaseVelocity
     );
   },
 
