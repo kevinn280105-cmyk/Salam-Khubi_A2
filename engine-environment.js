@@ -1,443 +1,565 @@
 /* ============================================================
    engine-environment.js
-   Environment, teleport floors, collision and head movement
+   ROOMS WITHIN
+
+   Environment + movement + collision.
+
+   Fixes in this version:
+   - Flicker now behaves like irregular horror-light events instead
+     of constantly breathing with sine waves.
+   - Flicker, head bob and collision logic respect the pause state.
+   - Resume does not create a movement/collision jump.
+   - Existing component names and index.html attributes are preserved.
 ============================================================ */
 
 
 /* ============================================================
-   LIGHT FLICKER
+   SHARED PAUSE CHECK
+============================================================ */
+
+function roomsEnvironmentPaused() {
+  return Boolean(
+    window.roomsPaused ||
+    window.roomsInputLocked
+  );
+}
+
+
+/* ============================================================
+   IRREGULAR HORROR FLICKER
+
+   Mostly stable.
+   Occasionally:
+   - tiny single dip
+   - double flicker
+   - short chaotic flutter
+   - rare near-blackout
+
+   min / max still mean light-intensity range, so the current
+   index.html settings continue to work.
 ============================================================ */
 
 AFRAME.registerComponent('flicker', {
   schema: {
-    min: {
-      default: 0.8
-    },
-
-    max: {
-      default: 1.2
-    },
-
-    speed: {
-      default: 0.5
-    }
+    min: { default: 0.8 },
+    max: { default: 1.2 },
+    speed: { default: 0.5 }
   },
-
 
   init: function () {
-    this.seed =
-      Math.random() * 1000;
+    const light = this.el.getAttribute('light') || {};
+
+    const originalIntensity =
+      typeof light.intensity === 'number'
+        ? light.intensity
+        : this.data.max;
+
+    this.stableIntensity = THREE.MathUtils.clamp(
+      originalIntensity,
+      Math.min(this.data.min, this.data.max),
+      Math.max(this.data.min, this.data.max)
+    );
+
+    this.sequence = [];
+    this.sequenceIndex = 0;
+    this.stepRemaining = 0;
+    this.nextEventRemaining = this.randomEventDelay();
+    this.componentPaused = false;
+
+    this.applyIntensity(this.stableIntensity);
   },
 
+  randomBetween: function (minimum, maximum) {
+    return (
+      minimum +
+      Math.random() * (maximum - minimum)
+    );
+  },
 
-  tick: function (timeMs) {
-    const time =
-      (
-        timeMs *
-        0.001 *
-        this.data.speed
-      ) +
-      this.seed;
-
-
+  randomEventDelay: function () {
     /*
-      Mix several sine waves together
-      so the light does not flicker in
-      an obvious repeating pattern.
+      Keep the room calm most of the time.
+      The old speed value gently changes frequency without making
+      low speed values wait for an extremely long time.
     */
-    const noise = (
-      Math.sin(
-        time * 6.1
-      ) +
-      Math.sin(
-        time * 2.3
-      ) +
-      Math.sin(
-        time * 11.7
-      )
-    ) / 3;
+    const speed = THREE.MathUtils.clamp(
+      Number(this.data.speed) || 0.5,
+      0.1,
+      1.5
+    );
 
+    const frequencyScale = THREE.MathUtils.clamp(
+      0.55 / speed,
+      0.72,
+      1.35
+    );
 
-    const intensity =
-      this.data.min +
-      (
-        (noise + 1) / 2
-      ) *
-      (
-        this.data.max -
-        this.data.min
-      );
+    return this.randomBetween(3000, 11000) * frequencyScale;
+  },
 
-
+  applyIntensity: function (value) {
     this.el.setAttribute(
       'light',
       'intensity',
-      intensity
+      Math.max(0, value)
+    );
+  },
+
+  normalDip: function (strengthMinimum, strengthMaximum) {
+    const strength = this.randomBetween(
+      strengthMinimum,
+      strengthMaximum
+    );
+
+    return THREE.MathUtils.clamp(
+      this.stableIntensity * strength,
+      Math.min(this.data.min, this.data.max),
+      Math.max(this.data.min, this.data.max)
+    );
+  },
+
+  buildSingleFlicker: function () {
+    return [
+      {
+        intensity: this.normalDip(0.78, 0.94),
+        duration: this.randomBetween(45, 90)
+      },
+      {
+        intensity: this.stableIntensity,
+        duration: this.randomBetween(70, 150)
+      }
+    ];
+  },
+
+  buildDoubleFlicker: function () {
+    return [
+      {
+        intensity: this.normalDip(0.66, 0.88),
+        duration: this.randomBetween(40, 80)
+      },
+      {
+        intensity: this.stableIntensity,
+        duration: this.randomBetween(45, 100)
+      },
+      {
+        intensity: this.normalDip(0.58, 0.84),
+        duration: this.randomBetween(35, 75)
+      },
+      {
+        intensity: this.stableIntensity,
+        duration: this.randomBetween(90, 180)
+      }
+    ];
+  },
+
+  buildChaoticFlicker: function () {
+    const steps = [];
+    const count = Math.floor(this.randomBetween(5, 9));
+
+    for (let i = 0; i < count; i++) {
+      const useStableFlash = Math.random() < 0.28;
+
+      steps.push({
+        intensity: useStableFlash
+          ? this.stableIntensity
+          : this.randomBetween(
+              Math.min(this.data.min, this.data.max),
+              Math.max(this.data.min, this.data.max)
+            ),
+        duration: this.randomBetween(28, 85)
+      });
+    }
+
+    steps.push({
+      intensity: this.stableIntensity,
+      duration: this.randomBetween(110, 220)
+    });
+
+    return steps;
+  },
+
+  buildNearBlackout: function () {
+    return [
+      {
+        intensity: this.normalDip(0.58, 0.76),
+        duration: this.randomBetween(45, 80)
+      },
+      {
+        intensity: Math.max(
+          0.02,
+          this.stableIntensity * this.randomBetween(0.015, 0.065)
+        ),
+        duration: this.randomBetween(75, 150)
+      },
+      {
+        intensity: this.stableIntensity,
+        duration: this.randomBetween(140, 240)
+      }
+    ];
+  },
+
+  beginRandomEvent: function () {
+    const roll = Math.random();
+
+    if (roll < 0.60) {
+      this.sequence = this.buildSingleFlicker();
+    } else if (roll < 0.85) {
+      this.sequence = this.buildDoubleFlicker();
+    } else if (roll < 0.95) {
+      this.sequence = this.buildChaoticFlicker();
+    } else {
+      this.sequence = this.buildNearBlackout();
+    }
+
+    this.sequenceIndex = 0;
+    this.startCurrentStep();
+  },
+
+  startCurrentStep: function () {
+    if (
+      !this.sequence ||
+      this.sequenceIndex >= this.sequence.length
+    ) {
+      this.sequence = [];
+      this.sequenceIndex = 0;
+      this.stepRemaining = 0;
+      this.applyIntensity(this.stableIntensity);
+      this.nextEventRemaining = this.randomEventDelay();
+      return;
+    }
+
+    const step = this.sequence[this.sequenceIndex];
+
+    this.applyIntensity(step.intensity);
+    this.stepRemaining = Math.max(1, step.duration);
+  },
+
+  tick: function (time, deltaTime) {
+    if (
+      !deltaTime ||
+      this.componentPaused ||
+      roomsEnvironmentPaused()
+    ) {
+      return;
+    }
+
+    if (this.sequence.length) {
+      this.stepRemaining -= deltaTime;
+
+      if (this.stepRemaining <= 0) {
+        this.sequenceIndex += 1;
+        this.startCurrentStep();
+      }
+
+      return;
+    }
+
+    this.nextEventRemaining -= deltaTime;
+
+    if (this.nextEventRemaining <= 0) {
+      this.beginRandomEvent();
+    }
+  },
+
+  pause: function () {
+    this.componentPaused = true;
+  },
+
+  play: function () {
+    this.componentPaused = false;
+  },
+
+  remove: function () {
+    this.applyIntensity(this.stableIntensity);
+  }
+});
+
+
+/* ============================================================
+   MODEL LOAD STATUS
+============================================================ */
+
+AFRAME.registerComponent('model-status', {
+  schema: {
+    name: { default: '3D model' }
+  },
+
+  init: function () {
+    this.onModelLoaded = this.onModelLoaded.bind(this);
+    this.onModelError = this.onModelError.bind(this);
+
+    this.el.addEventListener(
+      'model-loaded',
+      this.onModelLoaded
+    );
+
+    this.el.addEventListener(
+      'model-error',
+      this.onModelError
+    );
+  },
+
+  onModelLoaded: function () {
+    console.log(
+      `${this.data.name} loaded successfully.`
+    );
+
+    const root = this.el.getObject3D('mesh');
+
+    if (!root) {
+      return;
+    }
+
+    root.updateMatrixWorld(true);
+
+    const box =
+      new THREE.Box3().setFromObject(root);
+
+    if (box.isEmpty()) {
+      return;
+    }
+
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+
+    console.log(
+      `  -> ${this.data.name} world bounding box center:`,
+      center
+        .toArray()
+        .map((number) => number.toFixed(2))
+    );
+  },
+
+  onModelError: function (event) {
+    console.error(
+      `${this.data.name} failed to load.`,
+      event.detail
+    );
+  },
+
+  remove: function () {
+    this.el.removeEventListener(
+      'model-loaded',
+      this.onModelLoaded
+    );
+
+    this.el.removeEventListener(
+      'model-error',
+      this.onModelError
     );
   }
 });
 
 
 /* ============================================================
-   MODEL STATUS / DEBUGGING
-
-   Prints information into the browser console
-   when a GLB loads or fails.
+   CREATE TELEPORT FLOORS FROM NAMED BLENDER OBJECTS
 ============================================================ */
 
-AFRAME.registerComponent(
-  'model-status',
-  {
-    schema: {
-      name: {
-        default: '3D model'
-      }
-    },
-
-
-    init: function () {
-
-      /*
-        Successful model load.
-      */
-      this.el.addEventListener(
-        'model-loaded',
-        () => {
-
-          console.log(
-            `${this.data.name} loaded successfully.`
-          );
-
-
-          const root =
-            this.el.getObject3D(
-              'mesh'
-            );
-
-
-          if (root) {
-
-            root.updateMatrixWorld(
-              true
-            );
-
-
-            const box =
-              new THREE.Box3()
-                .setFromObject(
-                  root
-                );
-
-
-            if (!box.isEmpty()) {
-
-              const center =
-                new THREE.Vector3();
-
-
-              box.getCenter(
-                center
-              );
-
-
-              console.log(
-                `  -> ${this.data.name} world bounding box center:`,
-                center
-                  .toArray()
-                  .map(
-                    (number) =>
-                      number.toFixed(2)
-                  )
-              );
-            }
-          }
-        }
-      );
-
-
-      /*
-        Failed model load.
-      */
-      this.el.addEventListener(
-        'model-error',
-        (event) => {
-
-          console.error(
-            `${this.data.name} failed to load.`,
-            event.detail
-          );
-        }
-      );
+AFRAME.registerComponent('tag-floors', {
+  schema: {
+    floorNames: {
+      type: 'array',
+      default: [
+        'san nha phong khach',
+        'san nha phong an',
+        'san nha TOILET',
+        'san giat do',
+        'SAN PHONG NGU'
+      ]
     }
+  },
+
+  init: function () {
+    this.generatedPlanes = [];
+    this.onModelLoaded = this.onModelLoaded.bind(this);
+
+    this.el.addEventListener(
+      'model-loaded',
+      this.onModelLoaded
+    );
+
+    if (this.el.getObject3D('mesh')) {
+      this.onModelLoaded();
+    }
+  },
+
+  getContainer: function () {
+    let container =
+      document.querySelector(
+        '#generated-teleport-floors'
+      );
+
+    if (!container) {
+      container = document.createElement('a-entity');
+
+      container.setAttribute(
+        'id',
+        'generated-teleport-floors'
+      );
+
+      this.el.sceneEl.appendChild(container);
+    }
+
+    return container;
+  },
+
+  clearGeneratedPlanes: function () {
+    this.generatedPlanes.forEach((plane) => {
+      if (
+        plane &&
+        plane.parentNode
+      ) {
+        plane.parentNode.removeChild(
+          plane
+        );
+      }
+    });
+
+    this.generatedPlanes = [];
+  },
+
+  onModelLoaded: function () {
+    const root =
+      this.el.getObject3D(
+        'mesh'
+      );
+
+    if (!root) {
+      return;
+    }
+
+    this.clearGeneratedPlanes();
+
+    root.updateMatrixWorld(true);
+
+    const container =
+      this.getContainer();
+
+    this.data.floorNames.forEach(
+      (name) => {
+        const object =
+          root.getObjectByName(
+            name
+          );
+
+        if (!object) {
+          return;
+        }
+
+        object.updateMatrixWorld(
+          true
+        );
+
+        const box =
+          new THREE.Box3()
+            .setFromObject(
+              object
+            );
+
+        if (box.isEmpty()) {
+          return;
+        }
+
+        const size =
+          new THREE.Vector3();
+
+        const center =
+          new THREE.Vector3();
+
+        box.getSize(size);
+        box.getCenter(center);
+
+        const plane =
+          document.createElement(
+            'a-plane'
+          );
+
+        plane.setAttribute(
+          'class',
+          'floor'
+        );
+
+        plane.setAttribute(
+          'rotation',
+          '-90 0 0'
+        );
+
+        plane.setAttribute(
+          'width',
+          Math.max(
+            size.x,
+            0.1
+          )
+        );
+
+        plane.setAttribute(
+          'height',
+          Math.max(
+            size.z,
+            0.1
+          )
+        );
+
+        plane.setAttribute(
+          'position',
+          `${center.x} ${box.min.y + 0.02} ${center.z}`
+        );
+
+        plane.setAttribute(
+          'material',
+          `
+            opacity: 0;
+            transparent: true;
+            depthWrite: false
+          `
+        );
+
+        container.appendChild(
+          plane
+        );
+
+        this.generatedPlanes.push(
+          plane
+        );
+      }
+    );
+  },
+
+  remove: function () {
+    this.el.removeEventListener(
+      'model-loaded',
+      this.onModelLoaded
+    );
+
+    this.clearGeneratedPlanes();
   }
-);
+});
 
 
 /* ============================================================
-   AUTOMATIC TELEPORT FLOORS
-
-   Looks inside imported Blender models for floor objects
-   with these names.
-
-   Then it creates invisible A-Frame teleport planes over them.
-============================================================ */
-
-AFRAME.registerComponent(
-  'tag-floors',
-  {
-    schema: {
-      floorNames: {
-        type: 'array',
-
-        default: [
-          'san nha phong khach',
-          'san nha phong an',
-          'san nha TOILET',
-          'san giat do',
-          'SAN PHONG NGU'
-        ]
-      }
-    },
-
-
-    init: function () {
-
-      this.el.addEventListener(
-        'model-loaded',
-        () => {
-
-          const root =
-            this.el.getObject3D(
-              'mesh'
-            );
-
-
-          if (!root) {
-            return;
-          }
-
-
-          root.updateMatrixWorld(
-            true
-          );
-
-
-          /*
-            All generated invisible teleport
-            planes live inside one container.
-          */
-          let container =
-            document.querySelector(
-              '#generated-teleport-floors'
-            );
-
-
-          if (!container) {
-
-            container =
-              document.createElement(
-                'a-entity'
-              );
-
-
-            container.setAttribute(
-              'id',
-              'generated-teleport-floors'
-            );
-
-
-            this.el.sceneEl
-              .appendChild(
-                container
-              );
-          }
-
-
-          /*
-            Find each named Blender floor.
-          */
-          this.data.floorNames
-            .forEach(
-              (name) => {
-
-                const object =
-                  root.getObjectByName(
-                    name
-                  );
-
-
-                /*
-                  That room model simply does
-                  not contain this floor name.
-                */
-                if (!object) {
-                  return;
-                }
-
-
-                object.updateMatrixWorld(
-                  true
-                );
-
-
-                const box =
-                  new THREE.Box3()
-                    .setFromObject(
-                      object
-                    );
-
-
-                if (box.isEmpty()) {
-                  return;
-                }
-
-
-                const size =
-                  new THREE.Vector3();
-
-
-                const center =
-                  new THREE.Vector3();
-
-
-                box.getSize(
-                  size
-                );
-
-
-                box.getCenter(
-                  center
-                );
-
-
-                /*
-                  Create invisible teleport plane.
-                */
-                const plane =
-                  document
-                    .createElement(
-                      'a-plane'
-                    );
-
-
-                plane.setAttribute(
-                  'class',
-                  'floor'
-                );
-
-
-                /*
-                  A-Frame planes normally stand vertically,
-                  so rotate it flat.
-                */
-                plane.setAttribute(
-                  'rotation',
-                  '-90 0 0'
-                );
-
-
-                plane.setAttribute(
-                  'width',
-                  Math.max(
-                    size.x,
-                    0.1
-                  )
-                );
-
-
-                plane.setAttribute(
-                  'height',
-                  Math.max(
-                    size.z,
-                    0.1
-                  )
-                );
-
-
-                /*
-                  Place it slightly above the
-                  actual model floor.
-                */
-                plane.setAttribute(
-                  'position',
-                  `${center.x} ${box.min.y + 0.02} ${center.z}`
-                );
-
-
-                /*
-                  Invisible but still usable
-                  by blink-controls.
-                */
-                plane.setAttribute(
-                  'material',
-                  'opacity: 0; transparent: true; depthWrite: false'
-                );
-
-
-                container.appendChild(
-                  plane
-                );
-              }
-            );
-        }
-      );
-    }
-  }
-);
-
-
-/* ============================================================
-   PLAYER COLLISION SYSTEM
-
-   Prevents the player from simply walking
-   through walls, furniture and other GLBs.
+   QUEST / PLAYER ROOM COLLIDER
 ============================================================ */
 
 AFRAME.registerComponent(
   'quest-room-collider',
   {
     schema: {
-
-      /*
-        By default every entity that loads
-        a GLB can become a collider.
-      */
       objects: {
-        default:
-          '[gltf-model]'
+        default: '[gltf-model]'
       },
 
-
-      /*
-        Approximate player body radius.
-      */
       radius: {
         default: 0.32
       },
 
-
-      /*
-        Small extra safety gap between
-        player and geometry.
-      */
       skin: {
         default: 0.035
       },
 
-
-      /*
-        Large movements are split into
-        smaller collision steps.
-      */
       maxSubstep: {
         default: 0.12
       },
 
-
-      /*
-        Movement larger than this is treated
-        like teleporting instead of walking.
-      */
       teleportDistance: {
         default: 0.75
       }
@@ -445,115 +567,95 @@ AFRAME.registerComponent(
 
 
     init: function () {
-
-      this.colliderMeshes =
-        [];
-
+      this.colliderMeshes = [];
 
       this.lastPosition =
-        this.el.object3D
-          .position
-          .clone();
-
+        this.el.object3D.position.clone();
 
       this.raycaster =
         new THREE.Raycaster();
 
-
       this.from =
         new THREE.Vector3();
-
 
       this.to =
         new THREE.Vector3();
 
-
       this.delta =
         new THREE.Vector3();
-
 
       this.direction =
         new THREE.Vector3();
 
-
       this.side =
         new THREE.Vector3();
-
 
       this.origin =
         new THREE.Vector3();
 
-
       this.safePosition =
         new THREE.Vector3();
-
 
       this.step =
         new THREE.Vector3();
 
-
       this.testPosition =
         new THREE.Vector3();
 
+      this.componentPaused = false;
+      this.modelListeners = [];
 
       this.refreshColliders =
+        this.refreshColliders.bind(
+          this
+        );
+
+      this.resetPosition =
+        this.resetPosition.bind(
+          this
+        );
+
+
+      this.el.sceneEl.addEventListener(
+        'loaded',
         this.refreshColliders
-          .bind(this);
+      );
 
 
-      /*
-        Build collider list after scene load.
-      */
-      this.el.sceneEl
-        .addEventListener(
-          'loaded',
-          this.refreshColliders
-        );
+      this.el.sceneEl.addEventListener(
+        'enter-vr',
+        this.resetPosition
+      );
 
 
-      /*
-        When entering or leaving VR,
-        reset the remembered position.
-      */
-      this.el.sceneEl
-        .addEventListener(
-          'enter-vr',
-          () =>
-            this.resetPosition()
-        );
+      this.el.sceneEl.addEventListener(
+        'exit-vr',
+        this.resetPosition
+      );
 
 
-      this.el.sceneEl
-        .addEventListener(
-          'exit-vr',
-          () =>
-            this.resetPosition()
-        );
-
-
-      /*
-        Refresh whenever one of the GLB
-        entities finishes loading.
-      */
       this.el.sceneEl
         .querySelectorAll(
           this.data.objects
         )
         .forEach(
           (entity) => {
+            const handler =
+              this.refreshColliders;
 
             entity.addEventListener(
               'model-loaded',
-              this.refreshColliders
+              handler
             );
+
+            this.modelListeners.push({
+              entity,
+              handler
+            });
           }
         );
 
 
-      /*
-        Backup refresh in case a load event
-        happens before the listener is ready.
-      */
       window.setTimeout(
         this.refreshColliders,
         1000
@@ -561,392 +663,323 @@ AFRAME.registerComponent(
     },
 
 
-    /* ======================================================
-       RESET MOVEMENT REFERENCE
-    ====================================================== */
-
     resetPosition: function () {
-
       this.lastPosition.copy(
         this.el.object3D.position
       );
     },
 
 
-    /* ======================================================
-       BUILD COLLIDER MESH LIST
-    ====================================================== */
+    refreshColliders: function () {
+      const meshes = [];
 
-    refreshColliders:
-      function () {
-
-        const meshes =
-          [];
-
-
-        this.el.sceneEl
-          .querySelectorAll(
-            this.data.objects
-          )
-          .forEach(
-            (entity) => {
-
-              const root =
-                entity.getObject3D(
-                  'mesh'
-                );
-
-
-              if (!root) {
-                return;
-              }
-
-
-              root.traverse(
-                (node) => {
-
-                  if (
-                    node.isMesh &&
-                    node.geometry &&
-                    node.visible
-                  ) {
-
-                    /*
-                      Remember which A-Frame
-                      entity owns this mesh.
-                    */
-                    node.userData
-                      .collisionEntity =
-                      entity;
-
-
-                    meshes.push(
-                      node
-                    );
-                  }
-                }
+      this.el.sceneEl
+        .querySelectorAll(
+          this.data.objects
+        )
+        .forEach(
+          (entity) => {
+            const root =
+              entity.getObject3D(
+                'mesh'
               );
+
+            if (!root) {
+              return;
             }
-          );
 
+            root.traverse(
+              (node) => {
+                if (
+                  node.isMesh &&
+                  node.geometry &&
+                  node.visible
+                ) {
+                  node.userData
+                    .collisionEntity =
+                    entity;
 
-        this.colliderMeshes =
-          meshes;
-
-
-        console.log(
-          `Player collision loaded ${meshes.length} mesh collider(s).`
-        );
-      },
-
-
-    /* ======================================================
-       CHECK WHETHER MOVEMENT IS BLOCKED
-
-       We cast rays at several heights and
-       sideways offsets to approximate a body.
-    ====================================================== */
-
-    isBlocked:
-      function (
-        from,
-        to
-      ) {
-
-        if (
-          !this.colliderMeshes.length
-        ) {
-          return false;
-        }
-
-
-        this.delta.subVectors(
-          to,
-          from
-        );
-
-
-        /*
-          Ignore vertical movement.
-          This system is mainly preventing
-          horizontal wall penetration.
-        */
-        this.delta.y = 0;
-
-
-        const distance =
-          this.delta.length();
-
-
-        if (
-          distance < 0.0001
-        ) {
-          return false;
-        }
-
-
-        this.direction
-          .copy(
-            this.delta
-          )
-          .normalize();
-
-
-        /*
-          Vector pointing sideways relative
-          to walking direction.
-        */
-        this.side.set(
-          -this.direction.z,
-          0,
-          this.direction.x
-        );
-
-
-        /*
-          Check near:
-          - legs
-          - torso
-          - upper body
-        */
-        const heights = [
-          0.22,
-          0.85,
-          1.42
-        ];
-
-
-        /*
-          Check:
-          - left side
-          - centre
-          - right side
-        */
-        const sideOffsets = [
-          -this.data.radius *
-            0.72,
-
-          0,
-
-          this.data.radius *
-            0.72
-        ];
-
-
-        const rayLength =
-          distance +
-          this.data.radius +
-          this.data.skin;
-
-
-        for (
-          let heightIndex = 0;
-          heightIndex <
-            heights.length;
-          heightIndex++
-        ) {
-
-
-          for (
-            let sideIndex = 0;
-            sideIndex <
-              sideOffsets.length;
-            sideIndex++
-          ) {
-
-
-            this.origin
-              .copy(
-                from
-              )
-              .addScaledVector(
-                this.side,
-                sideOffsets[
-                  sideIndex
-                ]
-              );
-
-
-            this.origin.y +=
-              heights[
-                heightIndex
-              ];
-
-
-            /*
-              Move ray origin very slightly
-              forward to avoid self-contact
-              problems.
-            */
-            this.origin
-              .addScaledVector(
-                this.direction,
-                0.004
-              );
-
-
-            this.raycaster.set(
-              this.origin,
-              this.direction
-            );
-
-
-            this.raycaster.near =
-              0;
-
-
-            this.raycaster.far =
-              rayLength;
-
-
-            const hits =
-              this.raycaster
-                .intersectObjects(
-                  this.colliderMeshes,
-                  false
-                );
-
-
-            const blockingHit =
-              hits.find(
-                (hit) => {
-
-                  const owner =
-                    hit.object &&
-                    hit.object.userData
-
-                      ? hit.object
-                          .userData
-                          .collisionEntity
-
-                      : null;
-
-
-                  /*
-                    Do not collide with an
-                    object the player is
-                    currently holding.
-                  */
-                  if (
-                    owner &&
-                    owner.is &&
-                    owner.is(
-                      'grabbed'
-                    )
-                  ) {
-                    return false;
-                  }
-
-
-                  return (
-                    hit.distance <=
-                    rayLength
+                  meshes.push(
+                    node
                   );
                 }
+              }
+            );
+          }
+        );
+
+      this.colliderMeshes =
+        meshes;
+
+      console.log(
+        `Player collision loaded ${meshes.length} mesh collider(s).`
+      );
+    },
+
+
+    isBlocked: function (
+      from,
+      to
+    ) {
+      if (
+        !this.colliderMeshes.length
+      ) {
+        return false;
+      }
+
+
+      this.delta.subVectors(
+        to,
+        from
+      );
+
+      this.delta.y = 0;
+
+
+      const distance =
+        this.delta.length();
+
+
+      if (
+        distance <
+        0.0001
+      ) {
+        return false;
+      }
+
+
+      this.direction
+        .copy(
+          this.delta
+        )
+        .normalize();
+
+
+      this.side.set(
+        -this.direction.z,
+        0,
+        this.direction.x
+      );
+
+
+      const heights = [
+        0.22,
+        0.85,
+        1.42
+      ];
+
+
+      const sideOffsets = [
+        -this.data.radius * 0.72,
+        0,
+        this.data.radius * 0.72
+      ];
+
+
+      const rayLength =
+        distance +
+        this.data.radius +
+        this.data.skin;
+
+
+      for (
+        let heightIndex = 0;
+        heightIndex <
+        heights.length;
+        heightIndex++
+      ) {
+        for (
+          let sideIndex = 0;
+          sideIndex <
+          sideOffsets.length;
+          sideIndex++
+        ) {
+          this.origin
+            .copy(
+              from
+            )
+            .addScaledVector(
+              this.side,
+              sideOffsets[
+                sideIndex
+              ]
+            );
+
+
+          this.origin.y +=
+            heights[
+              heightIndex
+            ];
+
+
+          this.origin
+            .addScaledVector(
+              this.direction,
+              0.004
+            );
+
+
+          this.raycaster.set(
+            this.origin,
+            this.direction
+          );
+
+
+          this.raycaster.near =
+            0;
+
+
+          this.raycaster.far =
+            rayLength;
+
+
+          const hits =
+            this.raycaster
+              .intersectObjects(
+                this.colliderMeshes,
+                false
               );
 
 
-            if (blockingHit) {
-              return true;
-            }
+          const blockingHit =
+            hits.find(
+              (hit) => {
+                const owner =
+                  hit.object &&
+                  hit.object
+                    .userData
+                    ? hit.object
+                        .userData
+                        .collisionEntity
+                    : null;
+
+
+                if (
+                  owner &&
+                  owner.is &&
+                  owner.is(
+                    'grabbed'
+                  )
+                ) {
+                  return false;
+                }
+
+
+                return (
+                  hit.distance <=
+                  rayLength
+                );
+              }
+            );
+
+
+          if (
+            blockingHit
+          ) {
+            return true;
           }
         }
+      }
 
 
-        return false;
-      },
+      return false;
+    },
 
 
-    /* ======================================================
-       MOVE WITH WALL SLIDING
+    moveWithSliding: function (
+      start,
+      desired
+    ) {
+      this.delta.subVectors(
+        desired,
+        start
+      );
 
-       Instead of completely stopping the
-       player, try X and Z separately.
+      this.delta.y = 0;
 
-       This lets the player naturally slide
-       along walls.
-    ====================================================== */
 
-    moveWithSliding:
-      function (
-        start,
-        desired
+      const distance =
+        this.delta.length();
+
+
+      if (
+        distance <
+        0.0001
       ) {
+        this.safePosition.copy(
+          desired
+        );
 
-        this.delta.subVectors(
-          desired,
-          start
+        return this.safePosition;
+      }
+
+
+      const steps =
+        Math.max(
+          1,
+          Math.ceil(
+            distance /
+            this.data.maxSubstep
+          )
         );
 
 
-        this.delta.y =
-          0;
+      this.step
+        .copy(
+          this.delta
+        )
+        .divideScalar(
+          steps
+        );
 
 
-        const distance =
-          this.delta.length();
+      this.safePosition.copy(
+        start
+      );
+
+
+      for (
+        let index = 0;
+        index <
+        steps;
+        index++
+      ) {
+        this.testPosition
+          .copy(
+            this.safePosition
+          )
+          .add(
+            this.step
+          );
 
 
         if (
-          distance < 0.0001
+          !this.isBlocked(
+            this.safePosition,
+            this.testPosition
+          )
         ) {
-
           this.safePosition.copy(
-            desired
+            this.testPosition
           );
 
-
-          return (
-            this.safePosition
-          );
+          continue;
         }
 
 
-        /*
-          Break larger movements into
-          smaller collision checks.
-        */
-        const steps =
-          Math.max(
-            1,
-            Math.ceil(
-              distance /
-              this.data.maxSubstep
-            )
-          );
-
-
-        this.step
-          .copy(
-            this.delta
-          )
-          .divideScalar(
-            steps
-          );
-
-
-        this.safePosition.copy(
-          start
-        );
-
-
-        for (
-          let index = 0;
-          index < steps;
-          index++
+        if (
+          Math.abs(
+            this.step.x
+          ) >
+          0.0001
         ) {
+          this.testPosition.copy(
+            this.safePosition
+          );
 
 
-          /*
-            First try the complete movement.
-          */
-          this.testPosition
-            .copy(
-              this.safePosition
-            )
-            .add(
-              this.step
-            );
+          this.testPosition.x +=
+            this.step.x;
 
 
           if (
@@ -955,480 +988,405 @@ AFRAME.registerComponent(
               this.testPosition
             )
           ) {
-
-            this.safePosition.copy(
-              this.testPosition
-            );
-
-
-            continue;
-          }
-
-
-          /*
-            Full movement was blocked.
-
-            Try only X.
-          */
-          if (
-            Math.abs(
-              this.step.x
-            ) >
-            0.0001
-          ) {
-
-            this.testPosition.copy(
-              this.safePosition
-            );
-
-
-            this.testPosition.x +=
-              this.step.x;
-
-
-            if (
-              !this.isBlocked(
-                this.safePosition,
-                this.testPosition
-              )
-            ) {
-
-              this.safePosition.x =
-                this.testPosition.x;
-            }
-          }
-
-
-          /*
-            Then try only Z.
-          */
-          if (
-            Math.abs(
-              this.step.z
-            ) >
-            0.0001
-          ) {
-
-            this.testPosition.copy(
-              this.safePosition
-            );
-
-
-            this.testPosition.z +=
-              this.step.z;
-
-
-            if (
-              !this.isBlocked(
-                this.safePosition,
-                this.testPosition
-              )
-            ) {
-
-              this.safePosition.z =
-                this.testPosition.z;
-            }
+            this.safePosition.x =
+              this.testPosition.x;
           }
         }
 
 
-        /*
-          Keep whatever Y movement the
-          movement-controls system produced.
-        */
-        this.safePosition.y =
-          desired.y;
+        if (
+          Math.abs(
+            this.step.z
+          ) >
+          0.0001
+        ) {
+          this.testPosition.copy(
+            this.safePosition
+          );
 
 
-        return (
-          this.safePosition
+          this.testPosition.z +=
+            this.step.z;
+
+
+          if (
+            !this.isBlocked(
+              this.safePosition,
+              this.testPosition
+            )
+          ) {
+            this.safePosition.z =
+              this.testPosition.z;
+          }
+        }
+      }
+
+
+      this.safePosition.y =
+        desired.y;
+
+
+      return this.safePosition;
+    },
+
+
+    tick: function () {
+      if (
+        this.componentPaused ||
+        roomsEnvironmentPaused()
+      ) {
+        return;
+      }
+
+
+      const current =
+        this.el.object3D.position;
+
+
+      this.from.copy(
+        this.lastPosition
+      );
+
+
+      this.to.copy(
+        current
+      );
+
+
+      const horizontalDistance =
+        Math.hypot(
+          this.to.x -
+            this.from.x,
+
+          this.to.z -
+            this.from.z
         );
-      },
 
 
-    /* ======================================================
-       PLAYER MOVEMENT UPDATE
-    ====================================================== */
-
-    tick:
-      function () {
-
-        const current =
-          this.el.object3D.position;
-
-
-        this.from.copy(
-          this.lastPosition
-        );
-
-
-        this.to.copy(
+      if (
+        horizontalDistance >
+        this.data
+          .teleportDistance
+      ) {
+        this.lastPosition.copy(
           current
         );
 
-
-        /*
-          Measure horizontal movement.
-        */
-        const horizontalDistance =
-          Math.hypot(
-            this.to.x -
-              this.from.x,
-
-            this.to.z -
-              this.from.z
-          );
-
-
-        /*
-          Large jump = probably teleport.
-
-          Do not run wall-sliding correction
-          across the whole teleport distance.
-        */
-        if (
-          horizontalDistance >
-          this.data
-            .teleportDistance
-        ) {
-
-          this.lastPosition.copy(
-            current
-          );
-
-
-          return;
-        }
-
-
-        /*
-          No meaningful movement.
-        */
-        if (
-          horizontalDistance <
-          0.0001
-        ) {
-
-          this.lastPosition.y =
-            current.y;
-
-
-          return;
-        }
-
-
-        /*
-          Correct attempted movement.
-        */
-        const corrected =
-          this.moveWithSliding(
-            this.from,
-            this.to
-          );
-
-
-        current.x =
-          corrected.x;
-
-
-        current.z =
-          corrected.z;
-
-
-        /*
-          Store final legal position.
-        */
-        this.lastPosition.set(
-          corrected.x,
-          current.y,
-          corrected.z
-        );
+        return;
       }
+
+
+      if (
+        horizontalDistance <
+        0.0001
+      ) {
+        this.lastPosition.y =
+          current.y;
+
+        return;
+      }
+
+
+      const corrected =
+        this.moveWithSliding(
+          this.from,
+          this.to
+        );
+
+
+      current.x =
+        corrected.x;
+
+
+      current.z =
+        corrected.z;
+
+
+      this.lastPosition.set(
+        corrected.x,
+        current.y,
+        corrected.z
+      );
+    },
+
+
+    pause: function () {
+      this.componentPaused =
+        true;
+    },
+
+
+    play: function () {
+      this.componentPaused =
+        false;
+
+      this.resetPosition();
+    },
+
+
+    remove: function () {
+      this.el.sceneEl
+        .removeEventListener(
+          'loaded',
+          this.refreshColliders
+        );
+
+
+      this.el.sceneEl
+        .removeEventListener(
+          'enter-vr',
+          this.resetPosition
+        );
+
+
+      this.el.sceneEl
+        .removeEventListener(
+          'exit-vr',
+          this.resetPosition
+        );
+
+
+      this.modelListeners.forEach(
+        ({
+          entity,
+          handler
+        }) => {
+          entity.removeEventListener(
+            'model-loaded',
+            handler
+          );
+        }
+      );
+
+
+      this.modelListeners = [];
+    }
   }
 );
 
 
 /* ============================================================
-   HEAD BOB / WALKING SWAY
+   HEAD BOB
 
-   IMPORTANT FIX:
-
-   The old code used:
-
-   scene.is('vr-mode')
-
-   That can also be true during Mac fullscreen.
-
-   Now only an actual immersive WebXR headset
-   gets the reduced VR head movement.
-
-   Mac fullscreen keeps the normal subtle
-   desktop walking movement.
+   Mac fullscreen keeps normal desktop head bob.
+   Real immersive headset gets the smaller vrMultiplier.
 ============================================================ */
 
-AFRAME.registerComponent(
-  'head-bob',
-  {
-    schema: {
-
-      verticalAmount: {
-        default: 0.026
-      },
-
-
-      sideAmount: {
-        default: 0.014
-      },
-
-
-      speed: {
-        default: 8.5
-      },
-
-
-      /*
-        VR needs much weaker artificial
-        head movement because strong
-        head bob can feel uncomfortable
-        inside a headset.
-      */
-      vrMultiplier: {
-        default: 0.3
-      }
+AFRAME.registerComponent('head-bob', {
+  schema: {
+    verticalAmount: {
+      default: 0.026
     },
 
+    sideAmount: {
+      default: 0.014
+    },
 
-    init: function () {
+    speed: {
+      default: 8.5
+    },
 
-      /*
-        Remember original camera location.
-      */
-      this.baseX =
-        this.el.object3D
-          .position.x;
-
-
-      this.baseY =
-        this.el.object3D
-          .position.y;
+    vrMultiplier: {
+      default: 0.3
+    }
+  },
 
 
-      this.phase =
-        0;
+  init: function () {
+    this.baseX =
+      this.el.object3D.position.x;
+
+    this.baseY =
+      this.el.object3D.position.y;
+
+    this.phase = 0;
+
+    this.rig =
+      document.querySelector(
+        '#rig'
+      );
+
+    this.previousRigPosition =
+      new THREE.Vector3();
+
+    this.currentRigPosition =
+      new THREE.Vector3();
+
+    this.componentPaused =
+      false;
 
 
-      this.rig =
-        document.querySelector(
-          '#rig'
+    if (this.rig) {
+      this.rig.object3D
+        .getWorldPosition(
+          this.previousRigPosition
+        );
+    }
+  },
+
+
+  resetMovementSample: function () {
+    if (!this.rig) {
+      return;
+    }
+
+
+    this.rig.object3D
+      .getWorldPosition(
+        this.previousRigPosition
+      );
+  },
+
+
+  tick: function (
+    time,
+    deltaTime
+  ) {
+    if (
+      !deltaTime ||
+      !this.rig ||
+      this.componentPaused ||
+      roomsEnvironmentPaused()
+    ) {
+      return;
+    }
+
+
+    this.rig.object3D
+      .getWorldPosition(
+        this.currentRigPosition
+      );
+
+
+    const deltaX =
+      this.currentRigPosition.x -
+      this.previousRigPosition.x;
+
+
+    const deltaZ =
+      this.currentRigPosition.z -
+      this.previousRigPosition.z;
+
+
+    const distance =
+      Math.sqrt(
+        deltaX * deltaX +
+        deltaZ * deltaZ
+      );
+
+
+    const isWalking =
+      distance > 0.0001 &&
+      distance < 0.5;
+
+
+    const immersiveXR =
+      Boolean(
+        this.el.sceneEl &&
+        this.el.sceneEl.renderer &&
+        this.el.sceneEl.renderer.xr &&
+        this.el.sceneEl.renderer.xr
+          .isPresenting
+      );
+
+
+    const movementScale =
+      immersiveXR
+        ? this.data
+            .vrMultiplier
+        : 1;
+
+
+    if (isWalking) {
+      this.phase +=
+        deltaTime *
+        0.001 *
+        this.data.speed;
+
+
+      const targetX =
+        this.baseX +
+        Math.sin(
+          this.phase
+        ) *
+        this.data.sideAmount *
+        movementScale;
+
+
+      const targetY =
+        this.baseY +
+        Math.sin(
+          this.phase * 2
+        ) *
+        this.data
+          .verticalAmount *
+        movementScale;
+
+
+      this.el.object3D
+        .position.x =
+        THREE.MathUtils.lerp(
+          this.el.object3D
+            .position.x,
+
+          targetX,
+
+          0.32
         );
 
 
-      this.previousRigPosition =
-        new THREE.Vector3();
-
-
-      this.currentRigPosition =
-        new THREE.Vector3();
-
-
-      if (this.rig) {
-
-        this.rig.object3D
-          .getWorldPosition(
-            this.previousRigPosition
-          );
-      }
-    },
-
-
-    tick:
-      function (
-        time,
-        deltaTime
-      ) {
-
-        if (
-          !deltaTime ||
-          !this.rig
-        ) {
-          return;
-        }
-
-
-        /*
-          Current rig position.
-        */
-        this.rig.object3D
-          .getWorldPosition(
-            this.currentRigPosition
-          );
-
-
-        const deltaX =
-          this.currentRigPosition.x -
-          this.previousRigPosition.x;
-
-
-        const deltaZ =
-          this.currentRigPosition.z -
-          this.previousRigPosition.z;
-
-
-        const distance =
-          Math.sqrt(
-            deltaX * deltaX +
-            deltaZ * deltaZ
-          );
-
-
-        /*
-          Ignore extremely tiny movement
-          and large teleport jumps.
-        */
-        const isWalking =
-          distance > 0.0001 &&
-          distance < 0.5;
-
-
-        /*
-          REAL headset detection.
-
-          Mac fullscreen is NOT counted
-          as immersive VR here.
-        */
-        const immersiveXR =
-          Boolean(
-            this.el.sceneEl &&
-            this.el.sceneEl.renderer &&
-            this.el.sceneEl.renderer.xr &&
-            this.el.sceneEl.renderer.xr
-              .isPresenting
-          );
-
-
-        /*
-          Desktop:
-            scale = 1
-
-          Quest:
-            scale = 0.3
-        */
-        const movementScale =
-          immersiveXR
-
-            ? this.data
-                .vrMultiplier
-
-            : 1;
-
-
-        if (isWalking) {
-
-          /*
-            Advance walking cycle.
-          */
-          this.phase +=
-            deltaTime *
-            0.001 *
-            this.data.speed;
-
-
-          /*
-            Gentle left/right sway.
-          */
-          const targetX =
-            this.baseX +
-            Math.sin(
-              this.phase
-            ) *
-            this.data
-              .sideAmount *
-            movementScale;
-
-
-          /*
-            Vertical footstep movement.
-
-            phase * 2 means two vertical
-            movements for each full
-            left/right walking cycle.
-          */
-          const targetY =
-            this.baseY +
-            Math.sin(
-              this.phase * 2
-            ) *
-            this.data
-              .verticalAmount *
-            movementScale;
-
-
-          /*
-            Smoothly move toward target
-            instead of snapping.
-          */
+      this.el.object3D
+        .position.y =
+        THREE.MathUtils.lerp(
           this.el.object3D
-            .position.x =
-            THREE.MathUtils.lerp(
-              this.el.object3D
-                .position.x,
+            .position.y,
 
-              targetX,
+          targetY,
 
-              0.32
-            );
-
-
+          0.32
+        );
+    } else {
+      this.el.object3D
+        .position.x =
+        THREE.MathUtils.lerp(
           this.el.object3D
-            .position.y =
-            THREE.MathUtils.lerp(
-              this.el.object3D
-                .position.y,
+            .position.x,
 
-              targetY,
+          this.baseX,
 
-              0.32
-            );
+          0.14
+        );
 
-        } else {
 
-          /*
-            Not walking:
-            gently return camera to its
-            normal position.
-          */
+      this.el.object3D
+        .position.y =
+        THREE.MathUtils.lerp(
           this.el.object3D
-            .position.x =
-            THREE.MathUtils.lerp(
-              this.el.object3D
-                .position.x,
+            .position.y,
 
-              this.baseX,
+          this.baseY,
 
-              0.14
-            );
+          0.14
+        );
+    }
 
 
-          this.el.object3D
-            .position.y =
-            THREE.MathUtils.lerp(
-              this.el.object3D
-                .position.y,
-
-              this.baseY,
-
-              0.14
-            );
-        }
+    this.previousRigPosition.copy(
+      this.currentRigPosition
+    );
+  },
 
 
-        /*
-          Save position for next frame.
-        */
-        this.previousRigPosition
-          .copy(
-            this.currentRigPosition
-          );
-      }
+  pause: function () {
+    this.componentPaused =
+      true;
+  },
+
+
+  play: function () {
+    this.componentPaused =
+      false;
+
+    this.resetMovementSample();
   }
-);
+});
