@@ -1,21 +1,59 @@
 /* ============================================================
    ui-scare.js — ROOMS WITHIN
-   Final Mac + Quest pause/settings fix.
+
+   Mac + Quest pause/settings + tutorial + jumpscare.
+
+   Intended UI behaviour:
+   - Normal desktop browser:
+     pause controls stay hidden.
+   - Desktop/Mac A-Frame fullscreen:
+     use the HTML pause button + HTML pause menu.
+   - Real immersive WebXR / Meta Quest:
+     use the 3D VR pause button + 3D VR pause panel.
+
+   Important:
+   A-Frame's "vr-mode" is NOT enough to prove that a real headset
+   session is active. Real immersive VR is detected with
+   renderer.xr.isPresenting / renderer.xr.getSession().
+============================================================ */
+
+
+/* ============================================================
+   GLOBAL PAUSE STATE
 ============================================================ */
 
 let roomsPaused = false;
+
 window.roomsPaused = false;
 window.roomsInputLocked = false;
 
+
+/* ============================================================
+   MODE DETECTION
+============================================================ */
+
 function hasImmersiveXRSession(scene) {
   try {
-    if (!scene || !scene.renderer || !scene.renderer.xr) return false;
+    if (
+      !scene ||
+      !scene.renderer ||
+      !scene.renderer.xr
+    ) {
+      return false;
+    }
 
     const xr = scene.renderer.xr;
 
-    if (xr.getSession && xr.getSession()) return true;
+    if (
+      xr.getSession &&
+      xr.getSession()
+    ) {
+      return true;
+    }
 
-    return Boolean(xr.isPresenting);
+    return Boolean(
+      xr.isPresenting
+    );
   } catch (error) {
     console.warn(
       'Could not read XR session state:',
@@ -46,11 +84,43 @@ function isDesktopAFrameVR(scene) {
 
 
 function shouldUse3DPauseUI(scene) {
+  /*
+    FIX:
+    Only a REAL immersive XR session gets the 3D Quest UI.
+
+    Desktop A-Frame fullscreen must NOT come here.
+  */
+  return hasImmersiveXRSession(
+    scene
+  );
+}
+
+
+function shouldUseDesktopPauseUI(scene) {
+  if (
+    !scene ||
+    hasImmersiveXRSession(scene)
+  ) {
+    return false;
+  }
+
   return Boolean(
-    hasImmersiveXRSession(scene) ||
     isDesktopAFrameVR(scene) ||
     isBrowserFullscreen()
   );
+}
+
+
+function getPauseUIMode(scene) {
+  if (shouldUse3DPauseUI(scene)) {
+    return 'immersive-vr';
+  }
+
+  if (shouldUseDesktopPauseUI(scene)) {
+    return 'desktop-fullscreen';
+  }
+
+  return 'normal-desktop';
 }
 
 
@@ -60,25 +130,26 @@ function shouldUse3DPauseUI(scene) {
 
 function waitRoomsMilliseconds(milliseconds) {
   return new Promise((resolve) => {
-    let remaining =
-      Math.max(
-        0,
-        Number(milliseconds) || 0
-      );
+    let remaining = Math.max(
+      0,
+      Number(milliseconds) || 0
+    );
 
     let previous =
       performance.now();
 
     function step(now) {
-      const elapsed =
-        Math.max(
-          0,
-          now - previous
-        );
+      const elapsed = Math.max(
+        0,
+        now - previous
+      );
 
       previous = now;
 
-      if (!window.roomsPaused) {
+      if (
+        !window.roomsPaused &&
+        !window.roomsInputLocked
+      ) {
         remaining -= elapsed;
       }
 
@@ -103,7 +174,7 @@ window.waitRoomsMilliseconds =
 
 
 /* ============================================================
-   SOUND LABEL
+   SOUND LABELS
 ============================================================ */
 
 function updatePauseSoundLabels() {
@@ -113,23 +184,19 @@ function updatePauseSoundLabels() {
     const state =
       window.getRoomsAudioState();
 
-    muted =
-      Boolean(
-        state &&
-        state.muted
-      );
+    muted = Boolean(
+      state && state.muted
+    );
   } else if (
     typeof window.roomsMuted ===
     'boolean'
   ) {
-    muted =
-      window.roomsMuted;
+    muted = window.roomsMuted;
   }
 
-  const text =
-    muted
-      ? 'SOUND: OFF'
-      : 'SOUND: ON';
+  const text = muted
+    ? 'SOUND: OFF'
+    : 'SOUND: ON';
 
   const screenButton =
     document.querySelector(
@@ -142,8 +209,7 @@ function updatePauseSoundLabels() {
     );
 
   if (screenButton) {
-    screenButton.textContent =
-      text;
+    screenButton.textContent = text;
   }
 
   if (vrLabel) {
@@ -156,7 +222,7 @@ function updatePauseSoundLabels() {
 
 
 /* ============================================================
-   AUDIO
+   AUDIO PAUSE / RESUME
 ============================================================ */
 
 function pauseRoomsAudio() {
@@ -164,19 +230,17 @@ function pauseRoomsAudio() {
     .querySelectorAll(
       '.spatial-sound'
     )
-    .forEach(
-      (entity) => {
-        const sound =
-          entity.components.sound;
+    .forEach((entity) => {
+      const sound =
+        entity.components.sound;
 
-        if (
-          sound &&
-          sound.pauseSound
-        ) {
-          sound.pauseSound();
-        }
+      if (
+        sound &&
+        sound.pauseSound
+      ) {
+        sound.pauseSound();
       }
-    );
+    });
 
   const footstep =
     document.querySelector(
@@ -211,8 +275,8 @@ function resumeRoomsAudio() {
    RAYCASTER FILTER
 
    While paused:
-   world objects cannot be clicked.
-   Only .vr-control remains clickable.
+   - normal world interactions are blocked.
+   - VR pause controls remain targetable.
 ============================================================ */
 
 function saveRaycasterObjects(entity) {
@@ -244,9 +308,7 @@ function setRaycasterForPause(
     return;
   }
 
-  saveRaycasterObjects(
-    entity
-  );
+  saveRaycasterObjects(entity);
 
   entity.setAttribute(
     'raycaster',
@@ -290,6 +352,7 @@ function setComponentPaused(
       'function'
   ) {
     component.pause();
+    return;
   }
 
   if (
@@ -302,28 +365,18 @@ function setComponentPaused(
 }
 
 
-function pauseWorldComponents(
-  paused
-) {
+function pauseWorldComponents(paused) {
   const rig =
-    document.querySelector(
-      '#rig'
-    );
+    document.querySelector('#rig');
 
   const cam =
-    document.querySelector(
-      '#cam'
-    );
+    document.querySelector('#cam');
 
   const door =
-    document.querySelector(
-      '#door'
-    );
+    document.querySelector('#door');
 
   const living =
-    document.querySelector(
-      '#living'
-    );
+    document.querySelector('#living');
 
   const incense =
     document.querySelector(
@@ -336,9 +389,7 @@ function pauseWorldComponents(
     );
 
   const mirror =
-    document.querySelector(
-      '#mirror'
-    );
+    document.querySelector('#mirror');
 
   if (rig) {
     setComponentPaused(
@@ -358,27 +409,21 @@ function pauseWorldComponents(
 
   if (cam) {
     setComponentPaused(
-      cam.components[
-        'head-bob'
-      ],
+      cam.components['head-bob'],
       paused
     );
   }
 
   if (door) {
     setComponentPaused(
-      door.components[
-        'door-hinge'
-      ],
+      door.components['door-hinge'],
       paused
     );
   }
 
   if (living) {
     setComponentPaused(
-      living.components[
-        'embedded-tv'
-      ],
+      living.components['embedded-tv'],
       paused
     );
   }
@@ -393,9 +438,23 @@ function pauseWorldComponents(
   }
 
   if (incenseTip) {
+    /*
+      Current incense.js smoke component.
+    */
     setComponentPaused(
       incenseTip.components[
         'incense-smoke'
+      ],
+      paused
+    );
+
+    /*
+      Safe compatibility if the separate
+      incense-smoke.js file is used later.
+    */
+    setComponentPaused(
+      incenseTip.components[
+        'realistic-incense-smoke'
       ],
       paused
     );
@@ -411,50 +470,44 @@ function pauseWorldComponents(
   }
 
   document
-    .querySelectorAll(
-      '[flicker]'
-    )
-    .forEach(
-      (entity) => {
-        setComponentPaused(
-          entity.components.flicker,
-          paused
-        );
-      }
-    );
+    .querySelectorAll('[flicker]')
+    .forEach((entity) => {
+      setComponentPaused(
+        entity.components.flicker,
+        paused
+      );
+    });
 }
 
 
 /* ============================================================
-   PAUSE / RESUME
+   PAUSE / RESUME GAMEPLAY
 ============================================================ */
 
-function setRoomsPaused(
-  paused
-) {
-  roomsPaused =
-    Boolean(paused);
+function setRoomsPaused(paused) {
+  roomsPaused = Boolean(paused);
 
-  window.roomsPaused =
-    roomsPaused;
+  window.roomsPaused = roomsPaused;
 
+  /*
+    ui-scare.js is the only current file
+    that writes this global.
+
+    Other systems read it, so keeping it
+    synchronized with pause is safe for
+    the current project.
+  */
   window.roomsInputLocked =
     roomsPaused;
 
   const scene =
-    document.querySelector(
-      'a-scene'
-    );
+    document.querySelector('a-scene');
 
   const rig =
-    document.querySelector(
-      '#rig'
-    );
+    document.querySelector('#rig');
 
   const cam =
-    document.querySelector(
-      '#cam'
-    );
+    document.querySelector('#cam');
 
   const leftHand =
     document.querySelector(
@@ -466,35 +519,48 @@ function setRoomsPaused(
       '#rightHand'
     );
 
-  const cursor =
-    cam
-      ? cam.querySelector(
-          'a-cursor'
-        )
-      : null;
+  const cursor = cam
+    ? cam.querySelector('a-cursor')
+    : null;
 
-  /* Movement */
+  const immersiveXR =
+    hasImmersiveXRSession(scene);
+
+
+  /* ----------------------------------------------------------
+     MOVEMENT
+
+     FIX:
+     In real Quest VR, smooth movement must
+     stay OFF even after closing the pause
+     menu.
+
+     Teleport remains the comfort method.
+  ---------------------------------------------------------- */
 
   if (rig) {
     rig.setAttribute(
       'movement-controls',
       'enabled',
-      !roomsPaused
+      roomsPaused
+        ? false
+        : !immersiveXR
     );
   }
 
-  /*
-    Keep Quest head tracking.
 
-    On Mac, freeze looking while
-    pause menu is open.
-  */
+  /* ----------------------------------------------------------
+     LOOK CONTROLS
+
+     Keep real headset tracking alive.
+
+     Freeze desktop mouse-look while the
+     HTML pause menu is open.
+  ---------------------------------------------------------- */
 
   if (
     cam &&
-    !hasImmersiveXRSession(
-      scene
-    )
+    !immersiveXR
   ) {
     cam.setAttribute(
       'look-controls',
@@ -503,7 +569,10 @@ function setRoomsPaused(
     );
   }
 
-  /* Quest teleport */
+
+  /* ----------------------------------------------------------
+     QUEST TELEPORT
+  ---------------------------------------------------------- */
 
   if (leftHand) {
     leftHand.setAttribute(
@@ -512,6 +581,11 @@ function setRoomsPaused(
       !roomsPaused
     );
   }
+
+
+  /* ----------------------------------------------------------
+     INTERACTION RAYCASTERS
+  ---------------------------------------------------------- */
 
   setRaycasterForPause(
     cursor,
@@ -523,9 +597,19 @@ function setRoomsPaused(
     roomsPaused
   );
 
+
+  /* ----------------------------------------------------------
+     WORLD ANIMATION / SYSTEMS
+  ---------------------------------------------------------- */
+
   pauseWorldComponents(
     roomsPaused
   );
+
+
+  /* ----------------------------------------------------------
+     AUDIO
+  ---------------------------------------------------------- */
 
   if (roomsPaused) {
     pauseRoomsAudio();
@@ -533,12 +617,16 @@ function setRoomsPaused(
     resumeRoomsAudio();
   }
 
+
+  /* ----------------------------------------------------------
+     BROADCAST PAUSE STATE
+  ---------------------------------------------------------- */
+
   if (scene) {
     scene.emit(
       'rooms-pause-changed',
       {
-        paused:
-          roomsPaused
+        paused: roomsPaused
       },
       false
     );
@@ -547,7 +635,7 @@ function setRoomsPaused(
 
 
 /* ============================================================
-   UI VISIBILITY
+   UI VISIBILITY HELPERS
 ============================================================ */
 
 function set3DPauseButtonVisible(
@@ -584,95 +672,164 @@ function set3DPausePanelVisible(
 }
 
 
-function closeDesktopHTMLPauseUI() {
+function setDesktopPauseButtonVisible(
+  visible
+) {
   const button =
     document.querySelector(
       '#screenPauseButton'
     );
 
+  if (!button) {
+    return;
+  }
+
+  button.classList.toggle(
+    'is-visible',
+    Boolean(visible)
+  );
+}
+
+
+function setDesktopPauseOverlayVisible(
+  visible
+) {
   const overlay =
     document.querySelector(
       '#screenPauseMenuOverlay'
     );
 
-  if (button) {
-    button.classList.remove(
-      'is-visible'
-    );
+  if (!overlay) {
+    return;
   }
 
-  if (overlay) {
-    overlay.classList.remove(
-      'is-open'
-    );
+  overlay.classList.toggle(
+    'is-open',
+    Boolean(visible)
+  );
+}
+
+
+function hideAllPauseUI() {
+  set3DPauseButtonVisible(false);
+  set3DPausePanelVisible(false);
+
+  setDesktopPauseButtonVisible(false);
+  setDesktopPauseOverlayVisible(false);
+}
+
+
+function syncPauseUI() {
+  const scene =
+    document.querySelector('a-scene');
+
+  if (!scene) {
+    hideAllPauseUI();
+    return;
   }
+
+  const mode =
+    getPauseUIMode(scene);
+
+  /*
+    META QUEST / REAL WEBXR
+  */
+  if (mode === 'immersive-vr') {
+    setDesktopPauseButtonVisible(
+      false
+    );
+
+    setDesktopPauseOverlayVisible(
+      false
+    );
+
+    set3DPauseButtonVisible(
+      !roomsPaused
+    );
+
+    set3DPausePanelVisible(
+      roomsPaused
+    );
+
+    return;
+  }
+
+
+  /*
+    MAC / DESKTOP A-FRAME FULLSCREEN
+  */
+  if (
+    mode ===
+    'desktop-fullscreen'
+  ) {
+    set3DPauseButtonVisible(false);
+    set3DPausePanelVisible(false);
+
+    setDesktopPauseButtonVisible(
+      !roomsPaused
+    );
+
+    setDesktopPauseOverlayVisible(
+      roomsPaused
+    );
+
+    return;
+  }
+
+
+  /*
+    NORMAL DESKTOP BROWSER
+
+    No pause controls should appear.
+  */
+  hideAllPauseUI();
 }
 
 
 /* ============================================================
-   OPEN / CLOSE MENU
+   OPEN / CLOSE PAUSE MENU
 ============================================================ */
 
 function toggleRoomsPauseMenu(
   forceOpen
 ) {
   const scene =
-    document.querySelector(
-      'a-scene'
-    );
+    document.querySelector('a-scene');
 
   if (!scene) {
     return;
   }
 
-  const use3DMenu =
-    shouldUse3DPauseUI(
-      scene
-    );
+  const mode =
+    getPauseUIMode(scene);
 
-  const screenOverlay =
-    document.querySelector(
-      '#screenPauseMenuOverlay'
-    );
+  /*
+    The visible pause controls only exist in:
+
+    - desktop fullscreen
+    - real immersive VR
+
+    This protects normal desktop browsing
+    from accidentally opening a hidden
+    pause overlay through an old event.
+  */
+  if (
+    mode === 'normal-desktop' &&
+    forceOpen !== false
+  ) {
+    return;
+  }
 
   const shouldOpen =
-    typeof forceOpen ===
-    'boolean'
+    typeof forceOpen === 'boolean'
       ? forceOpen
       : !roomsPaused;
-
-  if (use3DMenu) {
-    closeDesktopHTMLPauseUI();
-
-    set3DPausePanelVisible(
-      shouldOpen
-    );
-
-    set3DPauseButtonVisible(
-      !shouldOpen
-    );
-  } else {
-    set3DPausePanelVisible(
-      false
-    );
-
-    set3DPauseButtonVisible(
-      false
-    );
-
-    if (screenOverlay) {
-      screenOverlay
-        .classList
-        .toggle(
-          'is-open',
-          shouldOpen
-        );
-    }
-  }
 
   setRoomsPaused(
     shouldOpen
   );
+
+  syncPauseUI();
 
   updatePauseSoundLabels();
 }
@@ -693,15 +850,13 @@ function restartRoomsWithin() {
 
 async function exitRoomsWithin() {
   if (roomsPaused) {
-    toggleRoomsPauseMenu(
-      false
-    );
+    setRoomsPaused(false);
   }
 
+  hideAllPauseUI();
+
   const scene =
-    document.querySelector(
-      'a-scene'
-    );
+    document.querySelector('a-scene');
 
   if (
     scene &&
@@ -730,18 +885,15 @@ async function exitRoomsWithin() {
 
   try {
     if (
-      document.fullscreenElement
+      document.fullscreenElement &&
+      document.exitFullscreen
     ) {
-      await document
-        .exitFullscreen();
+      await document.exitFullscreen();
     } else if (
-      document
-        .webkitFullscreenElement &&
-      document
-        .webkitExitFullscreen
+      document.webkitFullscreenElement &&
+      document.webkitExitFullscreen
     ) {
-      document
-        .webkitExitFullscreen();
+      document.webkitExitFullscreen();
     }
   } catch (error) {
     console.error(
@@ -749,8 +901,17 @@ async function exitRoomsWithin() {
       error
     );
   }
+
+  window.setTimeout(
+    syncPauseUI,
+    50
+  );
 }
 
+
+/* ============================================================
+   GLOBAL EXPORTS
+============================================================ */
 
 window.toggleRoomsPauseMenu =
   toggleRoomsPauseMenu;
@@ -767,9 +928,15 @@ window.updatePauseSoundLabels =
 window.setRoomsPaused =
   setRoomsPaused;
 
+window.syncRoomsPauseUI =
+  syncPauseUI;
+
 
 /* ============================================================
-   CAMERA CORNER GEAR
+   CAMERA-CORNER 3D GEAR
+
+   Used only in real immersive VR after
+   the UI-mode fix.
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -812,14 +979,13 @@ AFRAME.registerComponent(
     tick: function (time) {
       if (
         time -
-        this.lastUpdate <
+          this.lastUpdate <
         150
       ) {
         return;
       }
 
-      this.lastUpdate =
-        time;
+      this.lastUpdate = time;
 
       const cameraEl =
         document.querySelector(
@@ -828,10 +994,9 @@ AFRAME.registerComponent(
 
       const camera =
         cameraEl
-          ? cameraEl
-              .getObject3D(
-                'camera'
-              )
+          ? cameraEl.getObject3D(
+              'camera'
+            )
           : null;
 
       if (!camera) {
@@ -842,11 +1007,9 @@ AFRAME.registerComponent(
         this.data.distance;
 
       const fov =
-        THREE.MathUtils
-          .degToRad(
-            camera.fov ||
-            60
-          );
+        THREE.MathUtils.degToRad(
+          camera.fov || 60
+        );
 
       const halfHeight =
         Math.tan(
@@ -897,422 +1060,48 @@ AFRAME.registerComponent(
           ? -yMagnitude
           : yMagnitude;
 
-      this.el.object3D
-        .position
-        .set(
-          x,
-          y,
-          -distance
-        );
+      this.el.object3D.position.set(
+        x,
+        y,
+        -distance
+      );
     }
   }
 );
 
 
 /* ============================================================
-   MAC FULLSCREEN MOUSE -> 3D UI
+   DESKTOP VR UI POINTER — COMPATIBILITY COMPONENT
 
-   This is separate from the centre crosshair.
+   The old version used mouse raycasting
+   against the 3D Quest menu in Mac
+   fullscreen.
 
-   World:
-   centre crosshair + click
+   That is intentionally no longer needed
+   because Mac fullscreen now uses the HTML
+   menu.
 
-   Pause/settings:
-   normal mouse/trackpad pointer
+   The component stays registered because
+   the current index.html still includes:
+
+   desktop-vr-ui-pointer
 ============================================================ */
 
 AFRAME.registerComponent(
   'desktop-vr-ui-pointer',
   {
     init: function () {
-      this.raycaster =
-        new THREE.Raycaster();
-
-      this.pointer =
-        new THREE.Vector2();
-
-      this.onPointerMove =
-        this.onPointerMove
-          .bind(this);
-
-      this.onPointerDown =
-        this.onPointerDown
-          .bind(this);
-
-      document.addEventListener(
-        'pointermove',
-        this.onPointerMove,
-        true
-      );
-
-      document.addEventListener(
-        'pointerdown',
-        this.onPointerDown,
-        true
-      );
+      /*
+        Intentionally empty.
+      */
     },
-
-
-    isActive: function () {
-      return Boolean(
-        !hasImmersiveXRSession(
-          this.el
-        ) &&
-        (
-          isDesktopAFrameVR(
-            this.el
-          ) ||
-          isBrowserFullscreen()
-        )
-      );
-    },
-
-
-    getCanvas: function () {
-      return (
-        this.el &&
-        this.el.renderer
-          ? this.el.renderer
-              .domElement
-          : null
-      );
-    },
-
-
-    setPointerFromEvent:
-      function (event) {
-        const canvas =
-          this.getCanvas();
-
-        if (!canvas) {
-          return false;
-        }
-
-        const rect =
-          canvas
-            .getBoundingClientRect();
-
-        if (
-          !rect.width ||
-          !rect.height
-        ) {
-          return false;
-        }
-
-        this.pointer.x =
-          (
-            (
-              event.clientX -
-              rect.left
-            ) /
-            rect.width
-          ) *
-          2 -
-          1;
-
-        this.pointer.y =
-          -(
-            (
-              event.clientY -
-              rect.top
-            ) /
-            rect.height
-          ) *
-          2 +
-          1;
-
-        return true;
-      },
-
-
-    getCamera: function () {
-      const cameraEl =
-        document.querySelector(
-          '#cam'
-        );
-
-      return cameraEl
-        ? cameraEl
-            .getObject3D(
-              'camera'
-            )
-        : null;
-    },
-
-
-    elementIsVisible:
-      function (element) {
-        if (!element) {
-          return false;
-        }
-
-        if (
-          element.getAttribute(
-            'visible'
-          ) === false
-        ) {
-          return false;
-        }
-
-        return Boolean(
-          element.object3D &&
-          element.object3D
-            .visible !== false
-        );
-      },
-
-
-    hitElement:
-      function (element) {
-        if (
-          !this.elementIsVisible(
-            element
-          ) ||
-          !element.object3D
-        ) {
-          return null;
-        }
-
-        const hits =
-          this.raycaster
-            .intersectObject(
-              element.object3D,
-              true
-            );
-
-        return hits.length
-          ? hits[0]
-          : null;
-      },
-
-
-    getHitControl:
-      function () {
-        const controls =
-          roomsPaused
-            ? [
-                document.querySelector(
-                  '#vrResumeButton'
-                ),
-
-                document.querySelector(
-                  '#vrSoundButton'
-                ),
-
-                document.querySelector(
-                  '#vrRestartButton'
-                ),
-
-                document.querySelector(
-                  '#vrExitButton'
-                )
-              ]
-            : [
-                document.querySelector(
-                  '#vrPauseButton'
-                )
-              ];
-
-        let closest =
-          null;
-
-        controls.forEach(
-          (element) => {
-            const hit =
-              this.hitElement(
-                element
-              );
-
-            if (!hit) {
-              return;
-            }
-
-            if (
-              !closest ||
-              hit.distance <
-              closest.hit.distance
-            ) {
-              closest = {
-                element,
-                hit
-              };
-            }
-          }
-        );
-
-        return closest;
-      },
-
-
-    prepareRay:
-      function (event) {
-        if (
-          !this.isActive() ||
-          !this
-            .setPointerFromEvent(
-              event
-            )
-        ) {
-          return false;
-        }
-
-        const camera =
-          this.getCamera();
-
-        if (!camera) {
-          return false;
-        }
-
-        camera.updateMatrixWorld(
-          true
-        );
-
-        this.raycaster
-          .setFromCamera(
-            this.pointer,
-            camera
-          );
-
-        return true;
-      },
-
-
-    onPointerMove:
-      function (event) {
-        if (
-          !this.prepareRay(
-            event
-          )
-        ) {
-          return;
-        }
-
-        const canvas =
-          this.getCanvas();
-
-        const hit =
-          this.getHitControl();
-
-        if (canvas) {
-          canvas.style.cursor =
-            hit
-              ? 'pointer'
-              : 'default';
-        }
-      },
-
-
-    onPointerDown:
-      function (event) {
-        if (
-          event.button !==
-            undefined &&
-          event.button !== 0
-        ) {
-          return;
-        }
-
-        if (
-          !this.prepareRay(
-            event
-          )
-        ) {
-          return;
-        }
-
-        const result =
-          this.getHitControl();
-
-        if (!result) {
-          return;
-        }
-
-        /*
-          Prevent this UI click
-          from also clicking a
-          world object at the
-          centre crosshair.
-        */
-
-        event.preventDefault();
-        event.stopPropagation();
-
-        const id =
-          result.element.id;
-
-        if (
-          id ===
-          'vrPauseButton'
-        ) {
-          toggleRoomsPauseMenu();
-          return;
-        }
-
-        if (
-          id ===
-          'vrResumeButton'
-        ) {
-          toggleRoomsPauseMenu(
-            false
-          );
-
-          return;
-        }
-
-        if (
-          id ===
-          'vrSoundButton'
-        ) {
-          if (
-            window
-              .toggleRoomsMute
-          ) {
-            window
-              .toggleRoomsMute();
-          }
-
-          window.setTimeout(
-            updatePauseSoundLabels,
-            0
-          );
-
-          return;
-        }
-
-        if (
-          id ===
-          'vrRestartButton'
-        ) {
-          restartRoomsWithin();
-          return;
-        }
-
-        if (
-          id ===
-          'vrExitButton'
-        ) {
-          exitRoomsWithin();
-        }
-      },
-
 
     remove: function () {
-      document
-        .removeEventListener(
-          'pointermove',
-          this.onPointerMove,
-          true
-        );
-
-      document
-        .removeEventListener(
-          'pointerdown',
-          this.onPointerDown,
-          true
-        );
-
       const canvas =
-        this.getCanvas();
+        this.el &&
+        this.el.renderer
+          ? this.el.renderer.domElement
+          : null;
 
       if (canvas) {
         canvas.style.cursor = '';
@@ -1323,7 +1112,7 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
-   QUEST RIGHT HAND -> PAUSE UI
+   QUEST RIGHT HAND -> 3D PAUSE UI
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1341,20 +1130,22 @@ AFRAME.registerComponent(
 
 
     init: function () {
-      this.triggerHeld =
-        false;
+      this.triggerHeld = false;
 
       this.pressTrigger =
-        this.pressTrigger
-          .bind(this);
+        this.pressTrigger.bind(
+          this
+        );
 
       this.releaseTrigger =
-        this.releaseTrigger
-          .bind(this);
+        this.releaseTrigger.bind(
+          this
+        );
 
       this.onTriggerChanged =
-        this.onTriggerChanged
-          .bind(this);
+        this.onTriggerChanged.bind(
+          this
+        );
 
       this.el.addEventListener(
         'triggerdown',
@@ -1378,84 +1169,94 @@ AFRAME.registerComponent(
     },
 
 
-    pressTrigger:
-      function (event) {
-        if (
-          this.triggerHeld
-        ) {
-          return;
-        }
+    pressTrigger: function (event) {
+      if (this.triggerHeld) {
+        return;
+      }
 
-        if (
-          event &&
-          event.stopPropagation
-        ) {
-          event.stopPropagation();
-        }
+      /*
+        This interactor is ONLY for genuine
+        immersive VR.
 
-        this.triggerHeld =
-          true;
+        It should not steal trigger presses
+        in desktop mode.
+      */
+      if (
+        !hasImmersiveXRSession(
+          this.el.sceneEl
+        )
+      ) {
+        return;
+      }
 
-        this.useUI();
-      },
+      if (
+        event &&
+        event.stopPropagation
+      ) {
+        event.stopPropagation();
+      }
+
+      this.triggerHeld = true;
+
+      this.useUI();
+    },
 
 
-    releaseTrigger:
-      function () {
-        this.triggerHeld =
-          false;
-      },
+    releaseTrigger: function () {
+      this.triggerHeld = false;
+    },
 
 
-    onTriggerChanged:
-      function (event) {
-        const value =
-          event &&
-          event.detail &&
-          typeof event
-            .detail.value ===
+    onTriggerChanged: function (
+      event
+    ) {
+      const value =
+        event &&
+        event.detail &&
+        typeof event.detail.value ===
           'number'
-            ? event.detail.value
-            : null;
+          ? event.detail.value
+          : null;
 
-        if (
-          value === null
-        ) {
-          return;
-        }
+      if (value === null) {
+        return;
+      }
 
-        if (
-          value >=
-            this.data
-              .pressThreshold &&
-          !this.triggerHeld
-        ) {
-          this.pressTrigger();
-        } else if (
-          value <=
-          this.data
-            .releaseThreshold
-        ) {
-          this.releaseTrigger();
-        }
-      },
+      if (
+        value >=
+          this.data.pressThreshold &&
+        !this.triggerHeld
+      ) {
+        this.pressTrigger();
+      } else if (
+        value <=
+        this.data.releaseThreshold
+      ) {
+        this.releaseTrigger();
+      }
+    },
 
 
     useUI: function () {
+      if (
+        !hasImmersiveXRSession(
+          this.el.sceneEl
+        )
+      ) {
+        return;
+      }
+
       const raycaster =
-        this.el.components
-          .raycaster;
+        this.el.components.raycaster;
 
       if (!raycaster) {
         return;
       }
 
       if (
-        raycaster
-          .refreshObjects
+        raycaster.refreshObjects
       ) {
-        raycaster
-          .refreshObjects();
+        raycaster.refreshObjects();
       }
 
       const hit =
@@ -1473,6 +1274,7 @@ AFRAME.registerComponent(
               element
             );
         };
+
 
       const pauseButton =
         document.querySelector(
@@ -1504,12 +1306,12 @@ AFRAME.registerComponent(
           '#vrExitButton'
         );
 
-      if (
-        hit(pauseButton)
-      ) {
+
+      if (hit(pauseButton)) {
         toggleRoomsPauseMenu();
         return;
       }
+
 
       if (
         !pausePanel ||
@@ -1520,9 +1322,8 @@ AFRAME.registerComponent(
         return;
       }
 
-      if (
-        hit(resumeButton)
-      ) {
+
+      if (hit(resumeButton)) {
         toggleRoomsPauseMenu(
           false
         );
@@ -1530,14 +1331,12 @@ AFRAME.registerComponent(
         return;
       }
 
-      if (
-        hit(soundButton)
-      ) {
+
+      if (hit(soundButton)) {
         if (
           window.toggleRoomsMute
         ) {
-          window
-            .toggleRoomsMute();
+          window.toggleRoomsMute();
         }
 
         window.setTimeout(
@@ -1548,16 +1347,15 @@ AFRAME.registerComponent(
         return;
       }
 
-      if (
-        hit(restartButton)
-      ) {
+
+      if (hit(restartButton)) {
         restartRoomsWithin();
+
         return;
       }
 
-      if (
-        hit(exitButton)
-      ) {
+
+      if (hit(exitButton)) {
         exitRoomsWithin();
       }
     },
@@ -1589,39 +1387,41 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
-   UI FLOW
+   UI FLOW MANAGER
 ============================================================ */
 
 AFRAME.registerComponent(
   'ui-flow-manager',
   {
     init: function () {
-      this.hasEnteredVR =
-        false;
-
       this.sync =
         this.sync.bind(this);
 
       this.updateAudioUI =
-        this.updateAudioUI
-          .bind(this);
+        this.updateAudioUI.bind(
+          this
+        );
 
       this.onEnterVR =
-        this.onEnterVR
-          .bind(this);
+        this.onEnterVR.bind(
+          this
+        );
 
       this.onExitVR =
-        this.onExitVR
-          .bind(this);
+        this.onExitVR.bind(
+          this
+        );
 
       this.onFullscreenChange =
-        this
-          .onFullscreenChange
-          .bind(this);
+        this.onFullscreenChange.bind(
+          this
+        );
 
       this.onKeyDown =
-        this.onKeyDown
-          .bind(this);
+        this.onKeyDown.bind(
+          this
+        );
+
 
       this.el.addEventListener(
         'enter-vr',
@@ -1638,53 +1438,47 @@ AFRAME.registerComponent(
         this.updateAudioUI
       );
 
-      document
-        .addEventListener(
-          'fullscreenchange',
-          this
-            .onFullscreenChange
-        );
 
-      document
-        .addEventListener(
-          'webkitfullscreenchange',
-          this
-            .onFullscreenChange
-        );
+      document.addEventListener(
+        'fullscreenchange',
+        this.onFullscreenChange
+      );
 
-      document
-        .addEventListener(
-          'keydown',
-          this.onKeyDown
-        );
+      document.addEventListener(
+        'webkitfullscreenchange',
+        this.onFullscreenChange
+      );
 
-      /*
-        Automatically activate
-        Mac mouse -> 3D UI.
-      */
+      document.addEventListener(
+        'keydown',
+        this.onKeyDown
+      );
 
-      if (
-        !this.el
-          .hasAttribute(
-            'desktop-vr-ui-pointer'
-          )
-      ) {
-        this.el.setAttribute(
-          'desktop-vr-ui-pointer',
-          ''
-        );
-      }
 
       this.sync();
+
       this.updateAudioUI();
     },
 
 
     onEnterVR: function () {
-      this.hasEnteredVR =
-        true;
+      /*
+        On Quest, A-Frame may emit enter-vr
+        slightly before renderer.xr.isPresenting
+        becomes true.
 
-      this.sync();
+        Hide everything first, then re-check
+        after the XR session settles.
+
+        Desktop fullscreen will resolve to
+        the HTML UI.
+      */
+
+      hideAllPauseUI();
+
+      window.requestAnimationFrame(
+        this.sync
+      );
 
       window.setTimeout(
         this.sync,
@@ -1704,14 +1498,11 @@ AFRAME.registerComponent(
 
 
     onExitVR: function () {
-      this.hasEnteredVR =
-        false;
-
       if (roomsPaused) {
-        toggleRoomsPauseMenu(
-          false
-        );
+        setRoomsPaused(false);
       }
+
+      hideAllPauseUI();
 
       this.sync();
 
@@ -1724,94 +1515,81 @@ AFRAME.registerComponent(
 
     onFullscreenChange:
       function () {
+        /*
+          If fullscreen closes while paused,
+          resume the game so the normal browser
+          page cannot be left invisibly locked.
+        */
+
+        const mode =
+          getPauseUIMode(
+            this.el
+          );
+
+        if (
+          mode ===
+            'normal-desktop' &&
+          roomsPaused
+        ) {
+          setRoomsPaused(false);
+        }
+
         this.sync();
       },
 
 
-    onKeyDown:
-      function (event) {
-        const desktopMode =
-          !hasImmersiveXRSession(
-            this.el
-          ) &&
-          (
-            isDesktopAFrameVR(
-              this.el
-            ) ||
-            isBrowserFullscreen() ||
-            this.hasEnteredVR
-          );
+    onKeyDown: function (event) {
+      /*
+        Keyboard pause is for desktop only.
+        Do not respond to keyboard events
+        while inside genuine Quest WebXR.
+      */
+      if (
+        hasImmersiveXRSession(
+          this.el
+        )
+      ) {
+        return;
+      }
 
-        /*
-          Backup keyboard:
-          ESC or P
-        */
+      const desktopPauseMode =
+        shouldUseDesktopPauseUI(
+          this.el
+        );
 
-        if (
-          desktopMode &&
-          (
-            event.key ===
-              'Escape' ||
-            String(
-              event.key || ''
-            ).toLowerCase() ===
-              'p'
-          )
-        ) {
-          event.preventDefault();
+      if (!desktopPauseMode) {
+        return;
+      }
 
-          toggleRoomsPauseMenu();
-        }
-      },
+      const key =
+        String(
+          event.key || ''
+        ).toLowerCase();
+
+      /*
+        P is the reliable desktop fallback.
+
+        Escape is also supported where the
+        browser allows it.
+      */
+      if (
+        key === 'p' ||
+        event.key === 'Escape'
+      ) {
+        event.preventDefault();
+
+        toggleRoomsPauseMenu();
+      }
+    },
 
 
     sync: function () {
-      const immersive =
-        hasImmersiveXRSession(
+      syncPauseUI();
+
+      const mode =
+        getPauseUIMode(
           this.el
         );
-
-      const desktopVR =
-        isDesktopAFrameVR(
-          this.el
-        );
-
-      const fullscreen =
-        isBrowserFullscreen();
-
-      const show3DUI =
-        Boolean(
-          immersive ||
-          desktopVR ||
-          (
-            this.hasEnteredVR &&
-            !immersive
-          ) ||
-          (
-            fullscreen &&
-            !immersive
-          )
-        );
-
-      /*
-        Hide old HTML overlay
-        in fullscreen.
-
-        Use the 3D version
-        instead.
-      */
-
-      closeDesktopHTMLPauseUI();
-
-      set3DPauseButtonVisible(
-        show3DUI &&
-        !roomsPaused
-      );
-
-      set3DPausePanelVisible(
-        show3DUI &&
-        roomsPaused
-      );
 
       const canvas =
         this.el.renderer
@@ -1819,41 +1597,48 @@ AFRAME.registerComponent(
               .domElement
           : null;
 
-      if (
-        canvas &&
-        !immersive &&
-        show3DUI
-      ) {
-        canvas.style.cursor =
-          'default';
+      if (canvas) {
+        if (
+          mode ===
+          'desktop-fullscreen'
+        ) {
+          canvas.style.cursor =
+            roomsPaused
+              ? 'default'
+              : '';
+        } else {
+          canvas.style.cursor = '';
+        }
       }
 
       console.log(
         'Pause UI mode:',
         {
+          mode,
+
           immersiveXR:
-            immersive,
+            hasImmersiveXRSession(
+              this.el
+            ),
 
           desktopAFrameVR:
-            desktopVR,
+            isDesktopAFrameVR(
+              this.el
+            ),
 
           browserFullscreen:
-            fullscreen,
+            isBrowserFullscreen(),
 
-          hasEnteredVR:
-            this.hasEnteredVR,
-
-          show3DUI:
-            show3DUI
+          paused:
+            roomsPaused
         }
       );
     },
 
 
-    updateAudioUI:
-      function () {
-        updatePauseSoundLabels();
-      },
+    updateAudioUI: function () {
+      updatePauseSoundLabels();
+    },
 
 
     remove: function () {
@@ -1872,16 +1657,15 @@ AFRAME.registerComponent(
         this.updateAudioUI
       );
 
+
       document.removeEventListener(
         'fullscreenchange',
-        this
-          .onFullscreenChange
+        this.onFullscreenChange
       );
 
       document.removeEventListener(
         'webkitfullscreenchange',
-        this
-          .onFullscreenChange
+        this.onFullscreenChange
       );
 
       document.removeEventListener(
@@ -1966,8 +1750,7 @@ AFRAME.registerComponent(
         return;
       }
 
-      this.hasTriggered =
-        false;
+      this.hasTriggered = false;
 
       manager.addEventListener(
         'all-clues-collected',
@@ -1980,33 +1763,32 @@ AFRAME.registerComponent(
 
 
     trigger: async function () {
-      if (
-        this.hasTriggered
-      ) {
+      if (this.hasTriggered) {
         return;
       }
 
-      this.hasTriggered =
-        true;
+      this.hasTriggered = true;
 
       /*
-        If triggered during pause,
-        wait for unpaused time.
+        If story completion happens while
+        paused, the scare sequence does not
+        advance until gameplay is resumed.
       */
 
       await waitRoomsMilliseconds(
         1
       );
 
+
       const scareSteps =
         document.querySelector(
           '#scareFootstepAudio'
         );
 
+
       if (scareSteps) {
         const audioState =
-          window
-            .getRoomsAudioState
+          window.getRoomsAudioState
             ? window
                 .getRoomsAudioState()
             : {
@@ -2019,11 +1801,9 @@ AFRAME.registerComponent(
             ? 0
             : 0.35 *
               (
-                audioState
-                  .volume !==
-                undefined
-                  ? audioState
-                      .volume
+                audioState.volume !==
+                  undefined
+                  ? audioState.volume
                   : 1
               );
 
@@ -2042,14 +1822,17 @@ AFRAME.registerComponent(
           );
       }
 
+
       await waitRoomsMilliseconds(
         500
       );
+
 
       const character =
         document.querySelector(
           '#scare-character'
         );
+
 
       if (character) {
         character.setAttribute(
@@ -2058,9 +1841,11 @@ AFRAME.registerComponent(
         );
       }
 
+
       await waitRoomsMilliseconds(
         1800
       );
+
 
       if (character) {
         character.setAttribute(
@@ -2068,6 +1853,7 @@ AFRAME.registerComponent(
           false
         );
       }
+
 
       if (scareSteps) {
         scareSteps.pause();

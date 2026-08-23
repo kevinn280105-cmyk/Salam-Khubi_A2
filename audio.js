@@ -1,15 +1,16 @@
 /* ============================================================
-   audio.js
-   ROOMS WITHIN
+   audio.js — ROOMS WITHIN
+   FULL REPLACEMENT
 
-   Handles:
-   - Positional ambience
-   - TV static
-   - Real TV sound position
-   - Master volume
-   - Mute / unmute
-   - Pause-menu audio behaviour
-   - Footstep audio
+   Goals:
+   - Reliable sound on Mac + Meta Quest Browser.
+   - Native HTMLAudioElement ambience.
+   - User-gesture audio unlock through ENABLE SOUND.
+   - Distance fading for fan, rain, fluorescent hum and TV static.
+   - Quieter player footsteps.
+   - Pause / resume / mute support.
+   - TV static follows the learned CRT screen position.
+   - Clear debug information for presentation testing.
 ============================================================ */
 
 
@@ -21,108 +22,145 @@ let roomsMasterVolume = 1.0;
 let roomsMuted = false;
 let roomsTVOn = false;
 let roomsTVWorldPosition = null;
+let roomsAudioUnlocked = false;
 
-/* ui-scare.js can use this as a fallback. */
 window.roomsMuted = roomsMuted;
+window.roomsAudioUnlocked = roomsAudioUnlocked;
 
 
 /* ============================================================
    SOUND DEFINITIONS
+
+   These are estimated world positions.
+
+   The TV position is replaced automatically by
+   engine-interactions.js after the CRT screen is learned.
 ============================================================ */
 
 const ROOM_SOUND_DEFINITIONS = [
   {
     id: 'fanSound',
     src: 'sounds/73347__noisecollector__noisy_ceiling_fan.mp3',
-    position: new THREE.Vector3(-3.5, 2.4, -1),
-    volume: 0.075,
+    position: new THREE.Vector3(-3.5, 2.4, -1.0),
+    baseVolume: 0.24,
+    fullVolumeDistance: 2.2,
+    maxDistance: 11.0,
     loop: true,
-    startAutomatically: true,
-    refDistance: 1.5,
-    maxDistance: 12,
-    rolloffFactor: 1.25
+    startAutomatically: true
   },
 
   {
     id: 'rainSound',
     src: 'sounds/bedroom-rain.wav',
-    position: new THREE.Vector3(-2, 1.6, -3),
-    volume: 0.060,
+    position: new THREE.Vector3(-2.0, 1.6, -3.0),
+    baseVolume: 0.20,
+    fullVolumeDistance: 2.5,
+    maxDistance: 12.0,
     loop: true,
-    startAutomatically: true,
-    refDistance: 1.4,
-    maxDistance: 11,
-    rolloffFactor: 1.25
+    startAutomatically: true
   },
 
   {
     id: 'fluorescentSound',
     src: 'sounds/fluorescent-light.wav',
     position: new THREE.Vector3(2.5, 2.5, 1.5),
-    volume: 0.045,
+    baseVolume: 0.14,
+    fullVolumeDistance: 2.0,
+    maxDistance: 9.0,
     loop: true,
-    startAutomatically: true,
-    refDistance: 1.2,
-    maxDistance: 9,
-    rolloffFactor: 1.4
+    startAutomatically: true
   },
 
   {
     id: 'tvStaticSound',
     src: 'sounds/tv-static.mp3',
-    position: new THREE.Vector3(0, 1, 0),
-    volume: 0.025,
+    position: new THREE.Vector3(0, 1.2, 0),
+    baseVolume: 0.18,
+    fullVolumeDistance: 1.6,
+    maxDistance: 7.0,
     loop: true,
-    startAutomatically: false,
-    refDistance: 0.8,
-    maxDistance: 7,
-    rolloffFactor: 1.6
+    startAutomatically: false
   }
 ];
 
 
 /* ============================================================
-   HELPERS
+   GENERAL HELPERS
 ============================================================ */
 
-function getRoomSoundDefinition(id) {
-  return ROOM_SOUND_DEFINITIONS.find(
-    (definition) => definition.id === id
-  ) || null;
+function clamp01(value) {
+  return Math.max(
+    0,
+    Math.min(
+      1,
+      Number(value) || 0
+    )
+  );
 }
 
 
-function getFinalVolume(definition) {
-  if (!definition || roomsMuted) {
-    return 0;
-  }
+function getRoomSoundDefinition(id) {
+  return (
+    ROOM_SOUND_DEFINITIONS.find(
+      (definition) =>
+        definition.id === id
+    ) || null
+  );
+}
 
-  return THREE.MathUtils.clamp(
-    definition.volume * roomsMasterVolume,
-    0,
-    1
+
+function getScene() {
+  return document.querySelector(
+    'a-scene'
+  );
+}
+
+
+function getCameraEntity() {
+  return (
+    document.querySelector('#cam') ||
+    document.querySelector('[camera]')
   );
 }
 
 
 function isRoomsPauseMenuOpen() {
+  if (
+    window.roomsPaused ||
+    window.roomsInputLocked
+  ) {
+    return true;
+  }
+
   const desktopOverlay =
-    document.querySelector('#screenPauseMenuOverlay');
+    document.querySelector(
+      '#screenPauseMenuOverlay'
+    );
 
   if (
     desktopOverlay &&
-    desktopOverlay.classList.contains('is-open')
+    desktopOverlay.classList.contains(
+      'is-open'
+    )
   ) {
     return true;
   }
 
   const vrPanel =
-    document.querySelector('#vrPausePanel');
+    document.querySelector(
+      '#vrPausePanel'
+    );
 
   if (vrPanel) {
-    const visible = vrPanel.getAttribute('visible');
+    const visible =
+      vrPanel.getAttribute(
+        'visible'
+      );
 
-    if (visible === true || visible === 'true') {
+    if (
+      visible === true ||
+      visible === 'true'
+    ) {
       return true;
     }
   }
@@ -131,360 +169,967 @@ function isRoomsPauseMenuOpen() {
 }
 
 
-function getRoomsAudioContext() {
-  try {
-    if (
-      typeof THREE !== 'undefined' &&
-      THREE.AudioContext &&
-      THREE.AudioContext.getContext
-    ) {
-      return THREE.AudioContext.getContext();
-    }
-  } catch (error) {
-    console.warn(
-      'Could not get THREE audio context:',
-      error
-    );
-  }
-
-  const scene = document.querySelector('a-scene');
-
+function getPlayerFootstepVolume(
+  baseVolume = 0.11
+) {
   if (
-    scene &&
-    scene.audioListener &&
-    scene.audioListener.context
+    roomsMuted ||
+    !roomsAudioUnlocked
   ) {
-    return scene.audioListener.context;
+    return 0;
   }
 
-  return null;
-}
-
-
-function getPlayerFootstepVolume() {
-  return roomsMuted
-    ? 0
-    : 0.18 * roomsMasterVolume;
+  return clamp01(
+    Number(baseVolume || 0) *
+    roomsMasterVolume
+  );
 }
 
 
 function getScareFootstepVolume() {
-  return roomsMuted
-    ? 0
-    : 0.35 * roomsMasterVolume;
+  if (
+    roomsMuted ||
+    !roomsAudioUnlocked
+  ) {
+    return 0;
+  }
+
+  return clamp01(
+    0.30 *
+    roomsMasterVolume
+  );
+}
+
+
+function getMediaErrorDescription(
+  audio
+) {
+  if (
+    !audio ||
+    !audio.error
+  ) {
+    return null;
+  }
+
+  const code =
+    audio.error.code;
+
+  if (code === 1) {
+    return 'MEDIA_ERR_ABORTED';
+  }
+
+  if (code === 2) {
+    return 'MEDIA_ERR_NETWORK';
+  }
+
+  if (code === 3) {
+    return 'MEDIA_ERR_DECODE';
+  }
+
+  if (code === 4) {
+    return 'MEDIA_ERR_SRC_NOT_SUPPORTED';
+  }
+
+  return `MEDIA_ERROR_${code}`;
 }
 
 
 /* ============================================================
-   POSITIONAL AUDIO MANAGER
+   MANUAL DISTANCE FADING
+
+   Volume stays at full strength inside fullVolumeDistance,
+   then smoothly fades to zero at maxDistance.
 ============================================================ */
 
-AFRAME.registerComponent('spatial-audio-manager', {
-  init: function () {
-    this.emitters = new Map();
-    this.desiredPlaying = new Set();
-    this.created = false;
-
-    this.createEmitters =
-      this.createEmitters.bind(this);
-
-    if (this.el.hasLoaded) {
-      this.createEmitters();
-    } else {
-      this.el.addEventListener(
-        'loaded',
-        this.createEmitters,
-        { once: true }
-      );
-    }
-  },
-
-
-  createEmitters: function () {
-    if (this.created) {
-      return;
-    }
-
-    this.created = true;
-
-    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
-      const emitter = document.createElement('a-entity');
-
-      emitter.setAttribute('id', definition.id);
-      emitter.classList.add('spatial-sound');
-
-      emitter.setAttribute(
-        'position',
-        {
-          x: definition.position.x,
-          y: definition.position.y,
-          z: definition.position.z
-        }
-      );
-
-      emitter.setAttribute(
-        'sound',
-        {
-          src: `url(${definition.src})`,
-          autoplay: false,
-          loop: definition.loop,
-          positional: true,
-          volume: getFinalVolume(definition),
-          distanceModel: 'inverse',
-          refDistance: definition.refDistance,
-          maxDistance: definition.maxDistance,
-          rolloffFactor: definition.rolloffFactor
-        }
-      );
-
-      emitter.addEventListener(
-        'sound-loaded',
-        () => {
-          if (
-            this.desiredPlaying.has(definition.id) &&
-            this.el.audioUnlocked &&
-            !roomsMuted &&
-            !isRoomsPauseMenuOpen()
-          ) {
-            const sound = emitter.components.sound;
-
-            if (sound && sound.playSound) {
-              try {
-                sound.playSound();
-              } catch (error) {
-                console.warn(
-                  `Could not start ${definition.id}:`,
-                  error
-                );
-              }
-            }
-          }
-        }
-      );
-
-      this.el.appendChild(emitter);
-      this.emitters.set(definition.id, emitter);
-    });
-
-    if (roomsTVWorldPosition) {
-      this.setEmitterPosition(
-        'tvStaticSound',
-        roomsTVWorldPosition
-      );
-    }
-
-    this.updateVolumes();
-  },
-
-
-  getEmitter: function (id) {
-    return this.emitters.get(id) || null;
-  },
-
-
-  startEmitter: function (id) {
-    this.desiredPlaying.add(id);
-
-    if (
-      !this.el.audioUnlocked ||
-      roomsMuted ||
-      isRoomsPauseMenuOpen()
-    ) {
-      return;
-    }
-
-    const emitter = this.getEmitter(id);
-
-    if (!emitter) {
-      return;
-    }
-
-    const sound = emitter.components.sound;
-
-    if (!sound || !sound.playSound) {
-      return;
-    }
-
-    try {
-      sound.playSound();
-    } catch (error) {
-      console.warn(
-        `Sound ${id} is not ready yet.`,
-        error
-      );
-    }
-  },
-
-
-  stopEmitter: function (id) {
-    this.desiredPlaying.delete(id);
-
-    const emitter = this.getEmitter(id);
-
-    if (!emitter) {
-      return;
-    }
-
-    const sound = emitter.components.sound;
-
-    if (!sound) {
-      return;
-    }
-
-    try {
-      if (sound.stopSound) {
-        sound.stopSound();
-      } else if (sound.pauseSound) {
-        sound.pauseSound();
-      }
-    } catch (error) {
-      console.warn(
-        `Could not stop ${id}:`,
-        error
-      );
-    }
-  },
-
-
-  silenceEmitterWithoutChangingIntent: function (id) {
-    const emitter = this.getEmitter(id);
-
-    if (!emitter) {
-      return;
-    }
-
-    const sound = emitter.components.sound;
-
-    if (!sound) {
-      return;
-    }
-
-    try {
-      if (sound.pauseSound) {
-        sound.pauseSound();
-      } else if (sound.stopSound) {
-        sound.stopSound();
-      }
-    } catch (error) {
-      console.warn(
-        `Could not pause ${id}:`,
-        error
-      );
-    }
-  },
-
-
-  playNormalAmbience: function () {
-    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
-      if (definition.startAutomatically) {
-        this.startEmitter(definition.id);
-      }
-    });
-  },
-
-
-  stopAll: function () {
-    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
-      this.stopEmitter(definition.id);
-    });
-  },
-
-
-  pauseAllWithoutChangingIntent: function () {
-    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
-      this.silenceEmitterWithoutChangingIntent(
-        definition.id
-      );
-    });
-  },
-
-
-  updateVolumes: function () {
-    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
-      const emitter = this.getEmitter(definition.id);
-
-      if (!emitter) {
-        return;
-      }
-
-      emitter.setAttribute(
-        'sound',
-        'volume',
-        getFinalVolume(definition)
-      );
-    });
-  },
-
-
-  setEmitterPosition: function (id, worldPosition) {
-    const definition = getRoomSoundDefinition(id);
-
-    if (!definition || !worldPosition) {
-      return;
-    }
-
-    definition.position.set(
-      Number(worldPosition.x) || 0,
-      Number(worldPosition.y) || 0,
-      Number(worldPosition.z) || 0
-    );
-
-    const emitter = this.getEmitter(id);
-
-    if (!emitter) {
-      return;
-    }
-
-    emitter.object3D.position.copy(
-      definition.position
-    );
-  },
-
-
-  applyPlaybackState: function () {
-    this.updateVolumes();
-
-    if (
-      !this.el.audioUnlocked ||
-      roomsMuted ||
-      isRoomsPauseMenuOpen()
-    ) {
-      this.pauseAllWithoutChangingIntent();
-      return;
-    }
-
-    ROOM_SOUND_DEFINITIONS.forEach((definition) => {
-      if (definition.startAutomatically) {
-        this.desiredPlaying.add(definition.id);
-      }
-    });
-
-    if (roomsTVOn) {
-      this.desiredPlaying.add('tvStaticSound');
-    } else {
-      this.desiredPlaying.delete('tvStaticSound');
-      this.stopEmitter('tvStaticSound');
-    }
-
-    this.desiredPlaying.forEach((id) => {
-      this.startEmitter(id);
-    });
+function getDistanceGain(
+  distance,
+  definition
+) {
+  if (!definition) {
+    return 0;
   }
-});
+
+  const d =
+    Math.max(
+      0,
+      Number(distance) || 0
+    );
+
+  if (
+    d <=
+    definition.fullVolumeDistance
+  ) {
+    return 1;
+  }
+
+  if (
+    d >=
+    definition.maxDistance
+  ) {
+    return 0;
+  }
+
+  const range =
+    Math.max(
+      0.001,
+      definition.maxDistance -
+      definition.fullVolumeDistance
+    );
+
+  const normalized =
+    clamp01(
+      (
+        d -
+        definition.fullVolumeDistance
+      ) /
+      range
+    );
+
+  /*
+    Smoothstep:
+    avoids a harsh linear volume edge.
+  */
+
+  const smooth =
+    normalized *
+    normalized *
+    (
+      3 -
+      2 * normalized
+    );
+
+  return 1 - smooth;
+}
 
 
 /* ============================================================
-   GET MANAGER
+   NATIVE AUDIO MANAGER
+============================================================ */
+
+AFRAME.registerComponent(
+  'spatial-audio-manager',
+  {
+    init: function () {
+      this.tracks =
+        new Map();
+
+      this.desiredPlaying =
+        new Set();
+
+      this.created =
+        false;
+
+      this.lastDistanceUpdate =
+        0;
+
+      this.playerWorldPosition =
+        new THREE.Vector3();
+
+      this.createTracks =
+        this.createTracks.bind(
+          this
+        );
+
+      this.onPauseChanged =
+        this.onPauseChanged.bind(
+          this
+        );
+
+      this.onVisibilityChange =
+        this.onVisibilityChange.bind(
+          this
+        );
+
+      this.el.addEventListener(
+        'rooms-pause-changed',
+        this.onPauseChanged
+      );
+
+      document.addEventListener(
+        'visibilitychange',
+        this.onVisibilityChange
+      );
+
+      if (
+        this.el.hasLoaded
+      ) {
+        this.createTracks();
+      } else {
+        this.el.addEventListener(
+          'loaded',
+          this.createTracks,
+          {
+            once: true
+          }
+        );
+      }
+    },
+
+
+    createTracks: function () {
+      if (
+        this.created
+      ) {
+        return;
+      }
+
+      this.created =
+        true;
+
+      ROOM_SOUND_DEFINITIONS
+        .forEach(
+          (definition) => {
+            const audio =
+              document.createElement(
+                'audio'
+              );
+
+            audio.id =
+              definition.id;
+
+            audio.src =
+              definition.src;
+
+            audio.preload =
+              'auto';
+
+            audio.loop =
+              Boolean(
+                definition.loop
+              );
+
+            audio.playsInline =
+              true;
+
+            audio.setAttribute(
+              'playsinline',
+              ''
+            );
+
+            audio.setAttribute(
+              'webkit-playsinline',
+              ''
+            );
+
+            audio.volume =
+              0;
+
+            audio.style.display =
+              'none';
+
+            const track = {
+              definition,
+              audio,
+
+              lastDistance:
+                Infinity,
+
+              lastGain:
+                0,
+
+              unlockSucceeded:
+                false,
+
+              loadReady:
+                false,
+
+              playError:
+                null
+            };
+
+            audio.addEventListener(
+              'loadeddata',
+              () => {
+                track.loadReady =
+                  true;
+
+                console.log(
+                  `Audio loaded: ${definition.id}`
+                );
+              },
+              {
+                once: true
+              }
+            );
+
+            audio.addEventListener(
+              'canplay',
+              () => {
+                track.loadReady =
+                  true;
+              },
+              {
+                once: true
+              }
+            );
+
+            audio.addEventListener(
+              'error',
+              () => {
+                const description =
+                  getMediaErrorDescription(
+                    audio
+                  );
+
+                console.error(
+                  `Audio failed to load: ${definition.src}`,
+                  description
+                );
+              }
+            );
+
+            document.body.appendChild(
+              audio
+            );
+
+            /*
+              Explicit load helps Quest begin fetching the files
+              before ENABLE SOUND is pressed.
+            */
+
+            try {
+              audio.load();
+            } catch (error) {
+              console.warn(
+                `Could not preload ${definition.id}:`,
+                error
+              );
+            }
+
+            this.tracks.set(
+              definition.id,
+              track
+            );
+
+            if (
+              definition
+                .startAutomatically
+            ) {
+              this.desiredPlaying.add(
+                definition.id
+              );
+            }
+          }
+        );
+
+      if (
+        roomsTVWorldPosition
+      ) {
+        this.setEmitterPosition(
+          'tvStaticSound',
+          roomsTVWorldPosition
+        );
+      }
+
+      this.updateVolumes(
+        true
+      );
+    },
+
+
+    getTrack: function (id) {
+      return (
+        this.tracks.get(id) ||
+        null
+      );
+    },
+
+
+    getPlayerPosition:
+      function () {
+        const camera =
+          getCameraEntity();
+
+        if (!camera) {
+          return null;
+        }
+
+        camera.object3D
+          .getWorldPosition(
+            this.playerWorldPosition
+          );
+
+        return this
+          .playerWorldPosition;
+      },
+
+
+    calculateTrackVolume:
+      function (
+        track,
+        playerPosition
+      ) {
+        if (
+          !track ||
+          !track.definition ||
+          roomsMuted ||
+          !roomsAudioUnlocked ||
+          isRoomsPauseMenuOpen() ||
+          document.hidden
+        ) {
+          return 0;
+        }
+
+        const definition =
+          track.definition;
+
+        if (
+          !playerPosition
+        ) {
+          track.lastDistance =
+            null;
+
+          track.lastGain =
+            1;
+
+          return clamp01(
+            definition.baseVolume *
+            roomsMasterVolume
+          );
+        }
+
+        const distance =
+          playerPosition
+            .distanceTo(
+              definition.position
+            );
+
+        const distanceGain =
+          getDistanceGain(
+            distance,
+            definition
+          );
+
+        track.lastDistance =
+          distance;
+
+        track.lastGain =
+          distanceGain;
+
+        return clamp01(
+          definition.baseVolume *
+          roomsMasterVolume *
+          distanceGain
+        );
+      },
+
+
+    updateVolumes:
+      function (force) {
+        const playerPosition =
+          this.getPlayerPosition();
+
+        this.tracks
+          .forEach(
+            (track) => {
+              const audio =
+                track.audio;
+
+              if (!audio) {
+                return;
+              }
+
+              const targetVolume =
+                this.calculateTrackVolume(
+                  track,
+                  playerPosition
+                );
+
+              if (
+                force ||
+                Math.abs(
+                  audio.volume -
+                  targetVolume
+                ) >
+                0.006
+              ) {
+                audio.volume =
+                  targetVolume;
+              }
+            }
+          );
+      },
+
+
+    playTrack:
+      function (id) {
+        this.desiredPlaying.add(
+          id
+        );
+
+        if (
+          !roomsAudioUnlocked ||
+          roomsMuted ||
+          isRoomsPauseMenuOpen() ||
+          document.hidden
+        ) {
+          return false;
+        }
+
+        const track =
+          this.getTrack(id);
+
+        if (
+          !track ||
+          !track.audio
+        ) {
+          return false;
+        }
+
+        const audio =
+          track.audio;
+
+        if (
+          !audio.paused
+        ) {
+          return true;
+        }
+
+        try {
+          const promise =
+            audio.play();
+
+          if (
+            promise &&
+            typeof promise.then ===
+              'function'
+          ) {
+            promise
+              .then(
+                () => {
+                  track.playError =
+                    null;
+                }
+              )
+              .catch(
+                (error) => {
+                  track.playError =
+                    String(
+                      error &&
+                      error.message
+                        ? error.message
+                        : error
+                    );
+
+                  console.warn(
+                    `Could not start ${id}:`,
+                    error
+                  );
+                }
+              );
+          }
+
+          return true;
+        } catch (error) {
+          track.playError =
+            String(
+              error &&
+              error.message
+                ? error.message
+                : error
+            );
+
+          console.warn(
+            `Could not start ${id}:`,
+            error
+          );
+
+          return false;
+        }
+      },
+
+
+    stopTrack: function (id) {
+      this.desiredPlaying.delete(
+        id
+      );
+
+      const track =
+        this.getTrack(id);
+
+      if (
+        !track ||
+        !track.audio
+      ) {
+        return;
+      }
+
+      track.audio.pause();
+
+      try {
+        track.audio.currentTime =
+          0;
+      } catch (error) {
+        /*
+          Ignore seek errors before metadata exists.
+        */
+      }
+    },
+
+
+    pauseTrackWithoutChangingIntent:
+      function (id) {
+        const track =
+          this.getTrack(id);
+
+        if (
+          !track ||
+          !track.audio
+        ) {
+          return;
+        }
+
+        track.audio.pause();
+      },
+
+
+    pauseAllWithoutChangingIntent:
+      function () {
+        this.tracks
+          .forEach(
+            (track, id) => {
+              this
+                .pauseTrackWithoutChangingIntent(
+                  id
+                );
+            }
+          );
+      },
+
+
+    playNormalAmbience:
+      function () {
+        ROOM_SOUND_DEFINITIONS
+          .forEach(
+            (definition) => {
+              if (
+                definition
+                  .startAutomatically
+              ) {
+                this.desiredPlaying.add(
+                  definition.id
+                );
+              }
+            }
+          );
+
+        this.applyPlaybackState();
+      },
+
+
+    setEmitterPosition:
+      function (
+        id,
+        worldPosition
+      ) {
+        const definition =
+          getRoomSoundDefinition(
+            id
+          );
+
+        if (
+          !definition ||
+          !worldPosition
+        ) {
+          return;
+        }
+
+        definition.position.set(
+          Number(
+            worldPosition.x
+          ) || 0,
+
+          Number(
+            worldPosition.y
+          ) || 0,
+
+          Number(
+            worldPosition.z
+          ) || 0
+        );
+
+        this.updateVolumes(
+          true
+        );
+      },
+
+
+    applyPlaybackState:
+      function () {
+        /*
+          Make desired state explicit every time.
+        */
+
+        ROOM_SOUND_DEFINITIONS
+          .forEach(
+            (definition) => {
+              if (
+                definition
+                  .startAutomatically
+              ) {
+                this.desiredPlaying.add(
+                  definition.id
+                );
+              }
+            }
+          );
+
+        if (
+          roomsTVOn
+        ) {
+          this.desiredPlaying.add(
+            'tvStaticSound'
+          );
+        } else {
+          this.desiredPlaying.delete(
+            'tvStaticSound'
+          );
+
+          const tvTrack =
+            this.getTrack(
+              'tvStaticSound'
+            );
+
+          if (
+            tvTrack &&
+            tvTrack.audio
+          ) {
+            tvTrack.audio.pause();
+
+            try {
+              tvTrack.audio.currentTime =
+                0;
+            } catch (error) {
+              /*
+                Ignore seek errors before metadata exists.
+              */
+            }
+          }
+        }
+
+        this.updateVolumes(
+          true
+        );
+
+        if (
+          !roomsAudioUnlocked ||
+          roomsMuted ||
+          isRoomsPauseMenuOpen() ||
+          document.hidden
+        ) {
+          this.pauseAllWithoutChangingIntent();
+
+          return;
+        }
+
+        this.desiredPlaying
+          .forEach(
+            (id) => {
+              this.playTrack(
+                id
+              );
+            }
+          );
+      },
+
+
+    onPauseChanged:
+      function () {
+        this.applyPlaybackState();
+      },
+
+
+    onVisibilityChange:
+      function () {
+        this.applyPlaybackState();
+      },
+
+
+    tick: function (time) {
+      /*
+        Distance calculations do not need to run at 90 Hz.
+
+        125 ms = roughly eight spatial-volume updates per second,
+        which is smooth enough while saving Quest CPU.
+      */
+
+      if (
+        time -
+        this.lastDistanceUpdate <
+        125
+      ) {
+        return;
+      }
+
+      this.lastDistanceUpdate =
+        time;
+
+      this.updateVolumes(
+        false
+      );
+    },
+
+
+    remove: function () {
+      this.el.removeEventListener(
+        'rooms-pause-changed',
+        this.onPauseChanged
+      );
+
+      document.removeEventListener(
+        'visibilitychange',
+        this.onVisibilityChange
+      );
+
+      this.tracks
+        .forEach(
+          (track) => {
+            if (
+              !track.audio
+            ) {
+              return;
+            }
+
+            track.audio.pause();
+
+            track.audio.removeAttribute(
+              'src'
+            );
+
+            try {
+              track.audio.load();
+            } catch (error) {
+              /*
+                Ignore teardown load errors.
+              */
+            }
+
+            if (
+              track.audio.parentNode
+            ) {
+              track.audio
+                .parentNode
+                .removeChild(
+                  track.audio
+                );
+            }
+          }
+        );
+
+      this.tracks.clear();
+
+      this.desiredPlaying.clear();
+    }
+  }
+);
+
+
+/* ============================================================
+   GET AUDIO MANAGER
 ============================================================ */
 
 function getSpatialAudioManager() {
-  const scene = document.querySelector('a-scene');
+  const scene =
+    getScene();
 
   if (!scene) {
     return null;
   }
 
-  return scene.components['spatial-audio-manager'] || null;
+  return (
+    scene.components[
+      'spatial-audio-manager'
+    ] || null
+  );
+}
+
+
+/* ============================================================
+   UNLOCK ONE AUDIO ELEMENT
+
+   Chrome / Quest Browser require playback to begin from a real
+   user gesture.
+
+   We briefly play at zero volume, then pause. This authorizes
+   the element for later gameplay playback.
+============================================================ */
+
+async function unlockAudioElement(
+  audio
+) {
+  if (!audio) {
+    return false;
+  }
+
+  const previousVolume =
+    audio.volume;
+
+  const previousMuted =
+    audio.muted;
+
+  audio.muted =
+    false;
+
+  audio.volume =
+    0;
+
+  try {
+    const result =
+      audio.play();
+
+    if (
+      result &&
+      typeof result.then ===
+        'function'
+    ) {
+      await result;
+    }
+
+    audio.pause();
+
+    try {
+      audio.currentTime =
+        0;
+    } catch (error) {
+      /*
+        Ignore seek errors before metadata exists.
+      */
+    }
+
+    audio.volume =
+      previousVolume;
+
+    audio.muted =
+      previousMuted;
+
+    return true;
+
+  } catch (error) {
+    audio.pause();
+
+    try {
+      audio.currentTime =
+        0;
+    } catch (seekError) {
+      /*
+        Ignore seek errors before metadata exists.
+      */
+    }
+
+    audio.volume =
+      previousVolume;
+
+    audio.muted =
+      previousMuted;
+
+    console.warn(
+      'Audio unlock failed:',
+      audio.id || audio.src,
+      error
+    );
+
+    return false;
+  }
 }
 
 
@@ -493,102 +1138,305 @@ function getSpatialAudioManager() {
 ============================================================ */
 
 async function enableSound() {
-  const scene = document.querySelector('a-scene');
-  const button = document.querySelector('#soundButton');
+  const scene =
+    getScene();
+
+  const button =
+    document.querySelector(
+      '#soundButton'
+    );
 
   if (!scene) {
     console.error(
       'Cannot enable sound: a-scene was not found.'
     );
-    return;
+
+    return false;
+  }
+
+  if (
+    roomsAudioUnlocked
+  ) {
+    applyRoomsAudioSettings();
+
+    if (button) {
+      button.textContent =
+        'SOUND ENABLED';
+
+      button.disabled =
+        true;
+
+      window.setTimeout(
+        () => {
+          button.style.display =
+            'none';
+        },
+
+        300
+      );
+    }
+
+    return true;
   }
 
   if (button) {
-    button.textContent = 'STARTING SOUND...';
-    button.disabled = true;
+    button.textContent =
+      'STARTING SOUND...';
+
+    button.disabled =
+      true;
   }
 
-  const context = getRoomsAudioContext();
+  const manager =
+    getSpatialAudioManager();
+
+  if (!manager) {
+    console.error(
+      'Cannot enable sound: spatial-audio-manager is not ready.'
+    );
+
+    if (button) {
+      button.textContent =
+        'TRY SOUND AGAIN';
+
+      button.disabled =
+        false;
+    }
+
+    return false;
+  }
 
   if (
-    context &&
-    context.state === 'suspended'
+    !manager.created
   ) {
-    try {
-      await context.resume();
-    } catch (error) {
-      console.warn(
-        'Audio context could not resume:',
-        error
-      );
-    }
+    manager.createTracks();
   }
 
-  scene.audioUnlocked = true;
+  const unlockEntries =
+    [];
+
+  manager.tracks
+    .forEach(
+      (track, id) => {
+        if (
+          track.audio
+        ) {
+          unlockEntries.push({
+            id,
+
+            audio:
+              track.audio,
+
+            track
+          });
+        }
+      }
+    );
 
   const footstep =
-    document.querySelector('#footstepAudio');
-
-  if (footstep) {
-    footstep.volume = getPlayerFootstepVolume();
-
-    try {
-      const promise = footstep.play();
-
-      if (promise && promise.then) {
-        await promise;
-      }
-
-      footstep.pause();
-      footstep.currentTime = 0;
-    } catch (error) {
-      footstep.pause();
-      footstep.currentTime = 0;
-    }
-  }
+    document.querySelector(
+      '#footstepAudio'
+    );
 
   const scareFootstep =
-    document.querySelector('#scareFootstepAudio');
+    document.querySelector(
+      '#scareFootstepAudio'
+    );
 
-  if (scareFootstep) {
+  if (footstep) {
+    unlockEntries.push({
+      id:
+        'footstepAudio',
+
+      audio:
+        footstep,
+
+      track:
+        null
+    });
+  }
+
+  if (
+    scareFootstep
+  ) {
+    unlockEntries.push({
+      id:
+        'scareFootstepAudio',
+
+      audio:
+        scareFootstep,
+
+      track:
+        null
+    });
+  }
+
+  /*
+    All play() calls begin from the ENABLE SOUND user action.
+  */
+
+  const results =
+    await Promise.all(
+      unlockEntries.map(
+        async (entry) => {
+          const success =
+            await unlockAudioElement(
+              entry.audio
+            );
+
+          if (
+            entry.track
+          ) {
+            entry.track
+              .unlockSucceeded =
+              success;
+          }
+
+          return {
+            id:
+              entry.id,
+
+            success
+          };
+        }
+      )
+    );
+
+  const successCount =
+    results.filter(
+      (result) =>
+        result.success
+    ).length;
+
+  const failureCount =
+    results.length -
+    successCount;
+
+
+  /*
+    FIX:
+
+    Old version always marked audio as unlocked even if all
+    playback attempts failed.
+
+    Now at least one real audio element must unlock.
+  */
+
+  if (
+    successCount === 0
+  ) {
+    roomsAudioUnlocked =
+      false;
+
+    window.roomsAudioUnlocked =
+      false;
+
+    scene.audioUnlocked =
+      false;
+
+    console.error(
+      'Sound could not be unlocked. Check browser permission and sound-file paths.',
+
+      results
+    );
+
+    if (button) {
+      button.textContent =
+        'TRY SOUND AGAIN';
+
+      button.disabled =
+        false;
+    }
+
+    return false;
+  }
+
+
+  roomsAudioUnlocked =
+    true;
+
+  window.roomsAudioUnlocked =
+    true;
+
+  scene.audioUnlocked =
+    true;
+
+
+  if (footstep) {
+    footstep.loop =
+      true;
+
+    footstep.volume =
+      getPlayerFootstepVolume();
+  }
+
+
+  if (
+    scareFootstep
+  ) {
+    scareFootstep.loop =
+      false;
+
     scareFootstep.volume =
       getScareFootstepVolume();
   }
 
-  const manager = getSpatialAudioManager();
 
-  if (manager) {
-    manager.playNormalAmbience();
+  manager
+    .playNormalAmbience();
 
-    if (roomsTVOn) {
-      manager.startEmitter(
-        'tvStaticSound'
-      );
-    }
 
-    manager.applyPlaybackState();
-  }
+  manager
+    .applyPlaybackState();
+
 
   updateRoomsVolumeUI();
 
+
   scene.emit(
     'audio-settings-changed',
+
     getRoomsAudioState(),
+
     false
   );
+
 
   if (button) {
     button.textContent =
       'SOUND ENABLED';
 
-    window.setTimeout(() => {
-      button.style.display = 'none';
-    }, 800);
+    button.disabled =
+      true;
+
+    window.setTimeout(
+      () => {
+        button.style.display =
+          'none';
+      },
+
+      900
+    );
   }
 
+
   console.log(
-    'Rooms Within audio enabled.'
+    `Rooms Within audio enabled. ${successCount}/${results.length} audio element(s) unlocked.`,
+
+    results
   );
+
+
+  if (
+    failureCount > 0
+  ) {
+    console.warn(
+      `${failureCount} audio element(s) did not unlock. Use getRoomsAudioDebug() to identify them.`
+    );
+  }
+
+
+  return true;
 }
 
 
@@ -596,11 +1444,13 @@ async function enableSound() {
    TV STATE
 ============================================================ */
 
-function setRoomsTVState(shouldBeOn) {
-  roomsTVOn = Boolean(shouldBeOn);
-
-  const scene =
-    document.querySelector('a-scene');
+function setRoomsTVState(
+  shouldBeOn
+) {
+  roomsTVOn =
+    Boolean(
+      shouldBeOn
+    );
 
   const manager =
     getSpatialAudioManager();
@@ -609,28 +1459,19 @@ function setRoomsTVState(shouldBeOn) {
     return;
   }
 
-  if (!roomsTVOn) {
-    manager.stopEmitter(
-      'tvStaticSound'
-    );
-
-    return;
-  }
-
   if (
-    scene &&
-    scene.audioUnlocked &&
-    !roomsMuted &&
-    !isRoomsPauseMenuOpen()
+    roomsTVOn
   ) {
-    manager.startEmitter(
-      'tvStaticSound'
-    );
-  } else {
     manager.desiredPlaying.add(
       'tvStaticSound'
     );
+  } else {
+    manager.desiredPlaying.delete(
+      'tvStaticSound'
+    );
   }
+
+  manager.applyPlaybackState();
 }
 
 
@@ -638,16 +1479,28 @@ function setRoomsTVState(shouldBeOn) {
    REAL TV SOUND POSITION
 ============================================================ */
 
-function setRoomsTVPosition(worldPosition) {
-  if (!worldPosition) {
+function setRoomsTVPosition(
+  worldPosition
+) {
+  if (
+    !worldPosition
+  ) {
     return;
   }
 
   roomsTVWorldPosition =
     new THREE.Vector3(
-      Number(worldPosition.x) || 0,
-      Number(worldPosition.y) || 0,
-      Number(worldPosition.z) || 0
+      Number(
+        worldPosition.x
+      ) || 0,
+
+      Number(
+        worldPosition.y
+      ) || 0,
+
+      Number(
+        worldPosition.z
+      ) || 0
     );
 
   const manager =
@@ -661,11 +1514,15 @@ function setRoomsTVPosition(worldPosition) {
   }
 
   console.log(
-    'TV static sound moved to real CRT position:',
+    'TV static sound position:',
+
     roomsTVWorldPosition
       .toArray()
-      .map((value) =>
-        value.toFixed(2)
+      .map(
+        (value) =>
+          value.toFixed(
+            2
+          )
       )
   );
 }
@@ -675,16 +1532,20 @@ function setRoomsTVPosition(worldPosition) {
    MASTER VOLUME
 ============================================================ */
 
-function changeRoomsVolume(amount) {
+function changeRoomsVolume(
+  amount
+) {
   roomsMasterVolume =
-    THREE.MathUtils.clamp(
+    clamp01(
       roomsMasterVolume +
-      Number(amount || 0),
-      0,
-      1
+      Number(
+        amount || 0
+      )
     );
 
   applyRoomsAudioSettings();
+
+  return roomsMasterVolume;
 }
 
 
@@ -693,7 +1554,8 @@ function changeRoomsVolume(amount) {
 ============================================================ */
 
 function toggleRoomsMute() {
-  roomsMuted = !roomsMuted;
+  roomsMuted =
+    !roomsMuted;
 
   window.roomsMuted =
     roomsMuted;
@@ -709,25 +1571,24 @@ function toggleRoomsMute() {
 ============================================================ */
 
 function getRoomsAudioState() {
-  const scene =
-    document.querySelector('a-scene');
-
   return {
-    muted: roomsMuted,
-    volume: roomsMasterVolume,
-    tvOn: roomsTVOn,
-    unlocked: Boolean(
-      scene &&
-      scene.audioUnlocked
-    )
+    muted:
+      roomsMuted,
+
+    volume:
+      roomsMasterVolume,
+
+    tvOn:
+      roomsTVOn,
+
+    unlocked:
+      roomsAudioUnlocked
   };
 }
 
 
 /* ============================================================
-   APPLY SETTINGS
-
-   ui-scare.js calls this when you Resume.
+   APPLY AUDIO SETTINGS
 ============================================================ */
 
 function applyRoomsAudioSettings() {
@@ -739,7 +1600,9 @@ function applyRoomsAudioSettings() {
   }
 
   const footstep =
-    document.querySelector('#footstepAudio');
+    document.querySelector(
+      '#footstepAudio'
+    );
 
   if (footstep) {
     footstep.volume =
@@ -747,7 +1610,9 @@ function applyRoomsAudioSettings() {
 
     if (
       roomsMuted ||
-      isRoomsPauseMenuOpen()
+      !roomsAudioUnlocked ||
+      isRoomsPauseMenuOpen() ||
+      document.hidden
     ) {
       footstep.pause();
     }
@@ -758,13 +1623,17 @@ function applyRoomsAudioSettings() {
       '#scareFootstepAudio'
     );
 
-  if (scareFootstep) {
+  if (
+    scareFootstep
+  ) {
     scareFootstep.volume =
       getScareFootstepVolume();
 
     if (
       roomsMuted ||
-      isRoomsPauseMenuOpen()
+      !roomsAudioUnlocked ||
+      isRoomsPauseMenuOpen() ||
+      document.hidden
     ) {
       scareFootstep.pause();
     }
@@ -773,12 +1642,14 @@ function applyRoomsAudioSettings() {
   updateRoomsVolumeUI();
 
   const scene =
-    document.querySelector('a-scene');
+    getScene();
 
   if (scene) {
     scene.emit(
       'audio-settings-changed',
+
       getRoomsAudioState(),
+
       false
     );
   }
@@ -786,13 +1657,14 @@ function applyRoomsAudioSettings() {
 
 
 /* ============================================================
-   UPDATE UI
+   UPDATE SOUND UI
 ============================================================ */
 
 function updateRoomsVolumeUI() {
   const percent =
     Math.round(
-      roomsMasterVolume * 100
+      roomsMasterVolume *
+      100
     );
 
   const screenVolumeLabel =
@@ -800,39 +1672,29 @@ function updateRoomsVolumeUI() {
       '#screenVolumeLabel'
     );
 
-  if (screenVolumeLabel) {
+  if (
+    screenVolumeLabel
+  ) {
     screenVolumeLabel.textContent =
       `${percent}%`;
   }
+
 
   const vrVolumeLabel =
     document.querySelector(
       '#vrVolumeLabel'
     );
 
-  if (vrVolumeLabel) {
+  if (
+    vrVolumeLabel
+  ) {
     vrVolumeLabel.setAttribute(
       'value',
+
       `${percent}%`
     );
   }
 
-  const vrMuteLabel =
-    document.querySelector(
-      '#vrMuteLabel'
-    );
-
-  if (vrMuteLabel) {
-    vrMuteLabel.setAttribute(
-      'value',
-      roomsMuted
-        ? 'OFF'
-        : 'ON'
-    );
-  }
-
-
-  /* NEW PAUSE MENU */
 
   const soundText =
     roomsMuted
@@ -845,7 +1707,9 @@ function updateRoomsVolumeUI() {
       '#screenSoundButton'
     );
 
-  if (screenSoundButton) {
+  if (
+    screenSoundButton
+  ) {
     screenSoundButton.textContent =
       soundText;
   }
@@ -856,9 +1720,12 @@ function updateRoomsVolumeUI() {
       '#vrSoundLabel'
     );
 
-  if (vrSoundLabel) {
+  if (
+    vrSoundLabel
+  ) {
     vrSoundLabel.setAttribute(
       'value',
+
       soundText
     );
   }
@@ -874,15 +1741,18 @@ AFRAME.registerComponent(
   {
     schema: {
       minSpeed: {
-        default: 0.02
+        default:
+          0.02
       },
 
       maxSpeed: {
-        default: 4
+        default:
+          4
       },
 
       volume: {
-        default: 0.18
+        default:
+          0.11
       }
     },
 
@@ -905,36 +1775,157 @@ AFRAME.registerComponent(
       this.isPlaying =
         false;
 
-      if (this.audio) {
-        this.audio.loop = true;
+      this.playPending =
+        false;
+
+      this.componentPaused =
+        false;
+
+      if (
+        this.audio
+      ) {
+        this.audio.loop =
+          true;
 
         this.audio.volume =
-          getPlayerFootstepVolume();
+          getPlayerFootstepVolume(
+            this.data.volume
+          );
       }
     },
 
 
-    stopSteps: function () {
-      if (!this.audio) {
-        return;
-      }
+    stopSteps:
+      function (
+        resetTime = true
+      ) {
+        if (
+          !this.audio
+        ) {
+          return;
+        }
 
-      this.audio.pause();
-      this.audio.currentTime = 0;
+        this.audio.pause();
 
-      this.isPlaying = false;
-    },
+        if (
+          resetTime
+        ) {
+          try {
+            this.audio.currentTime =
+              0;
+          } catch (error) {
+            /*
+              Ignore seek errors before metadata exists.
+            */
+          }
+        }
+
+        this.isPlaying =
+          false;
+
+        this.playPending =
+          false;
+      },
 
 
     pause: function () {
+      this.componentPaused =
+        true;
+
       this.stopSteps();
+
+      this.hasPreviousPosition =
+        false;
     },
 
 
     play: function () {
+      this.componentPaused =
+        false;
+
       this.hasPreviousPosition =
         false;
     },
+
+
+    startSteps:
+      function () {
+        if (
+          !this.audio ||
+          this.isPlaying ||
+          this.playPending ||
+          roomsMuted ||
+          !roomsAudioUnlocked ||
+          isRoomsPauseMenuOpen() ||
+          document.hidden
+        ) {
+          return;
+        }
+
+        this.audio.volume =
+          getPlayerFootstepVolume(
+            this.data.volume
+          );
+
+        this.playPending =
+          true;
+
+        try {
+          const result =
+            this.audio.play();
+
+          if (
+            result &&
+            typeof result.then ===
+              'function'
+          ) {
+            result
+              .then(
+                () => {
+                  this.playPending =
+                    false;
+
+                  this.isPlaying =
+                    !this.audio.paused;
+                }
+              )
+              .catch(
+                (error) => {
+                  this.playPending =
+                    false;
+
+                  this.isPlaying =
+                    false;
+
+                  console.warn(
+                    'Footstep sound could not start:',
+
+                    error
+                  );
+                }
+              );
+          } else {
+            this.playPending =
+              false;
+
+            this.isPlaying =
+              !this.audio.paused;
+          }
+
+        } catch (error) {
+          this.playPending =
+            false;
+
+          this.isPlaying =
+            false;
+
+          console.warn(
+            'Footstep sound could not start:',
+
+            error
+          );
+        }
+      },
 
 
     tick: function (
@@ -943,18 +1934,22 @@ AFRAME.registerComponent(
     ) {
       if (
         !deltaTime ||
-        !this.audio
+        !this.audio ||
+        this.componentPaused
       ) {
         return;
       }
 
-
       if (
         roomsMuted ||
+        !roomsAudioUnlocked ||
         isRoomsPauseMenuOpen() ||
-        !this.el.sceneEl.audioUnlocked
+        document.hidden
       ) {
-        if (this.isPlaying) {
+        if (
+          this.isPlaying ||
+          this.playPending
+        ) {
           this.stopSteps();
         }
 
@@ -964,14 +1959,14 @@ AFRAME.registerComponent(
         return;
       }
 
-
       this.el.object3D
         .getWorldPosition(
           this.currentWorldPosition
         );
 
-
-      if (!this.hasPreviousPosition) {
+      if (
+        !this.hasPreviousPosition
+      ) {
         this.previousWorldPosition
           .copy(
             this.currentWorldPosition
@@ -983,84 +1978,331 @@ AFRAME.registerComponent(
         return;
       }
 
-
       const deltaX =
         this.currentWorldPosition.x -
         this.previousWorldPosition.x;
-
 
       const deltaZ =
         this.currentWorldPosition.z -
         this.previousWorldPosition.z;
 
-
       const distance =
-        Math.sqrt(
-          deltaX * deltaX +
-          deltaZ * deltaZ
+        Math.hypot(
+          deltaX,
+          deltaZ
         );
-
 
       const speed =
         distance /
         Math.max(
           deltaTime / 1000,
+
           0.001
         );
 
+      /*
+        Teleports produce a huge one-frame speed.
+
+        maxSpeed prevents a teleport from sounding like walking.
+      */
 
       const isWalking =
         speed >=
           this.data.minSpeed &&
+
         speed <=
           this.data.maxSpeed;
 
-
       this.audio.volume =
-        roomsMuted
-          ? 0
-          : this.data.volume *
-            roomsMasterVolume;
-
+        getPlayerFootstepVolume(
+          this.data.volume
+        );
 
       if (
-        isWalking &&
-        !this.isPlaying
+        isWalking
       ) {
-        const playPromise =
-          this.audio.play();
-
-        if (
-          playPromise &&
-          playPromise.catch
-        ) {
-          playPromise.catch(
-            (error) => {
-              console.warn(
-                'Footstep sound could not start:',
-                error
-              );
-            }
-          );
-        }
-
-        this.isPlaying = true;
+        this.startSteps();
 
       } else if (
-        !isWalking &&
-        this.isPlaying
+        this.isPlaying ||
+        this.playPending
       ) {
         this.stopSteps();
       }
-
 
       this.previousWorldPosition
         .copy(
           this.currentWorldPosition
         );
+    },
+
+
+    remove: function () {
+      this.stopSteps();
     }
   }
 );
+
+
+/* ============================================================
+   AUDIO DEBUG
+
+   Browser / Quest remote console:
+
+   getRoomsAudioDebug()
+============================================================ */
+
+function describeAudioElement(
+  audio
+) {
+  if (
+    !audio
+  ) {
+    return null;
+  }
+
+  return {
+    id:
+      audio.id || '',
+
+    src:
+      audio.currentSrc ||
+      audio.src ||
+      '',
+
+    paused:
+      audio.paused,
+
+    ended:
+      audio.ended,
+
+    readyState:
+      audio.readyState,
+
+    networkState:
+      audio.networkState,
+
+    volume:
+      Number(
+        Number(
+          audio.volume || 0
+        ).toFixed(
+          3
+        )
+      ),
+
+    currentTime:
+      Number.isFinite(
+        audio.currentTime
+      )
+        ? Number(
+          audio.currentTime
+            .toFixed(
+              2
+            )
+        )
+        : null,
+
+    error:
+      getMediaErrorDescription(
+        audio
+      )
+  };
+}
+
+
+function getRoomsAudioDebug() {
+  const manager =
+    getSpatialAudioManager();
+
+  const tracks =
+    [];
+
+  if (
+    manager
+  ) {
+    manager.tracks
+      .forEach(
+        (track, id) => {
+          tracks.push({
+            id,
+
+            src:
+              track.definition
+                .src,
+
+            desiredPlaying:
+              manager
+                .desiredPlaying
+                .has(id),
+
+            loadReady:
+              Boolean(
+                track.loadReady
+              ),
+
+            unlockSucceeded:
+              Boolean(
+                track.unlockSucceeded
+              ),
+
+            paused:
+              track.audio
+                .paused,
+
+            volume:
+              Number(
+                track.audio
+                  .volume
+                  .toFixed(
+                    3
+                  )
+              ),
+
+            distance:
+              Number.isFinite(
+                track.lastDistance
+              )
+                ? Number(
+                  track
+                    .lastDistance
+                    .toFixed(
+                      2
+                    )
+                )
+                : null,
+
+            distanceGain:
+              Number(
+                Number(
+                  track.lastGain ||
+                  0
+                ).toFixed(
+                  3
+                )
+              ),
+
+            readyState:
+              track.audio
+                .readyState,
+
+            networkState:
+              track.audio
+                .networkState,
+
+            mediaError:
+              getMediaErrorDescription(
+                track.audio
+              ),
+
+            playError:
+              track.playError
+          });
+        }
+      );
+  }
+
+  return {
+    unlocked:
+      roomsAudioUnlocked,
+
+    muted:
+      roomsMuted,
+
+    masterVolume:
+      roomsMasterVolume,
+
+    tvOn:
+      roomsTVOn,
+
+    paused:
+      isRoomsPauseMenuOpen(),
+
+    documentHidden:
+      document.hidden,
+
+    managerReady:
+      Boolean(
+        manager
+      ),
+
+    tracks,
+
+    footstep:
+      describeAudioElement(
+        document.querySelector(
+          '#footstepAudio'
+        )
+      ),
+
+    scareFootstep:
+      describeAudioElement(
+        document.querySelector(
+          '#scareFootstepAudio'
+        )
+      )
+  };
+}
+
+
+/* ============================================================
+   PRINT AUDIO DEBUG AS A TABLE
+
+   Console:
+
+   printRoomsAudioDebug()
+============================================================ */
+
+function printRoomsAudioDebug() {
+  const debug =
+    getRoomsAudioDebug();
+
+  console.log(
+    'Rooms Within audio state:',
+
+    {
+      unlocked:
+        debug.unlocked,
+
+      muted:
+        debug.muted,
+
+      masterVolume:
+        debug.masterVolume,
+
+      tvOn:
+        debug.tvOn,
+
+      paused:
+        debug.paused,
+
+      managerReady:
+        debug.managerReady
+    }
+  );
+
+  if (
+    debug.tracks.length
+  ) {
+    console.table(
+      debug.tracks
+    );
+  }
+
+  console.log(
+    'Footstep audio:',
+
+    debug.footstep
+  );
+
+  console.log(
+    'Scare footstep audio:',
+
+    debug.scareFootstep
+  );
+
+  return debug;
+}
 
 
 /* ============================================================
@@ -1090,3 +2332,9 @@ window.applyRoomsAudioSettings =
 
 window.updateRoomsVolumeUI =
   updateRoomsVolumeUI;
+
+window.getRoomsAudioDebug =
+  getRoomsAudioDebug;
+
+window.printRoomsAudioDebug =
+  printRoomsAudioDebug;

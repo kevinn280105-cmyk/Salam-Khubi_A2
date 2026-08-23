@@ -1,25 +1,36 @@
 /* ============================================================
-   engine-interactions.js
-   ROOMS WITHIN
+   engine-interactions.js — ROOMS WITHIN
+   FULL REPLACEMENT
 
-   Handles:
-   - Real immersive VR detection
-   - Door interaction
-   - Mac door interaction
-   - Quest door interaction
-   - REAL CRT television inside livingasset.glb
-   - TV glow
-   - TV static connection
-   - Mac object grabbing
-   - Quest object grabbing / throwing
+   Fixes in this version:
+   - Door opens automatically when the player approaches.
+   - Door closes automatically after the player moves away.
+   - Door proximity uses the CLOSED doorway footprint so an open
+     door cannot accidentally move its own trigger area away.
+   - Manual Mac / Quest door interaction still works.
+   - Quest door / TV targeting asks for the intended entity directly
+     instead of being defeated by a nearer unrelated raycast hit.
+   - Proximity checks are throttled for Quest performance.
+   - TV casing is never recoloured.
+   - TV uses a separate lightweight CRT static overlay.
+   - TV static updates less often for better VR performance.
+   - Teddy / incense style objects can still be grabbed.
+   - Quest grab-hand listeners clean themselves up correctly.
+   - Pause/input lock is respected.
 ============================================================ */
 
 
 /* ============================================================
-   REAL IMMERSIVE XR CHECK
-
-   Mac fullscreen is NOT treated as Quest VR.
+   SHARED HELPERS
 ============================================================ */
+
+function roomsGameplayInputLocked() {
+  return Boolean(
+    window.roomsInputLocked ||
+    window.roomsPaused
+  );
+}
+
 
 function isImmersiveXRScene(scene) {
   return Boolean(
@@ -31,78 +42,76 @@ function isImmersiveXRScene(scene) {
 }
 
 
-/* ============================================================
-   GAMEPLAY INPUT LOCK
-
-   ui-scare.js exposes window.roomsInputLocked while the pause
-   menu is open. Every gameplay interaction in this file checks
-   this helper before changing the world.
-============================================================ */
-
-function roomsGameplayInputLocked() {
-  return Boolean(
-    window.roomsInputLocked ||
-    window.roomsPaused
-  );
-}
-
-
-/* ============================================================
-   THREE.JS / A-FRAME HELPER
-
-   Checks whether a raycast object belongs to a particular
-   A-Frame entity's GLB/model.
-============================================================ */
-
-function objectBelongsToEntity(hitObject, entity) {
-  if (!hitObject || !entity) {
+function objectBelongsToEntity(
+  hitObject,
+  entity
+) {
+  if (
+    !hitObject ||
+    !entity
+  ) {
     return false;
   }
 
-  const root = entity.getObject3D('mesh');
+  const root =
+    entity.getObject3D('mesh') ||
+    entity.object3D;
 
   if (!root) {
     return false;
   }
 
-  let current = hitObject;
+  let current =
+    hitObject;
 
   while (current) {
     if (current === root) {
       return true;
     }
 
-    current = current.parent;
+    current =
+      current.parent;
   }
 
   return false;
 }
 
 
-/* ============================================================
-   ADD SELECTOR TO EXISTING RAYCASTER
-
-   This allows TV interaction to add .tv-interactable without
-   rewriting the raycaster settings from index.html.
-============================================================ */
-
-function appendRaycasterObjectSelector(entity, selector) {
-  if (!entity || !selector) {
+function appendRaycasterObjectSelector(
+  entity,
+  selector
+) {
+  if (
+    !entity ||
+    !selector
+  ) {
     return;
   }
 
-  const rayData = entity.getAttribute('raycaster') || {};
-  const current = String(rayData.objects || '').trim();
+  const data =
+    entity.getAttribute(
+      'raycaster'
+    ) || {};
 
-  const selectors = current
-    ? current
-        .split(',')
-        .map((value) => value.trim())
-        .filter(Boolean)
-    : [];
+  const selectors =
+    String(
+      data.objects || ''
+    )
+      .split(',')
+      .map(
+        (value) =>
+          value.trim()
+      )
+      .filter(Boolean);
 
-  if (!selectors.includes(selector)) {
-    selectors.push(selector);
+  if (
+    !selectors.includes(
+      selector
+    )
+  ) {
+    selectors.push(
+      selector
+    );
   }
 
   entity.setAttribute(
@@ -111,1310 +120,1682 @@ function appendRaycasterObjectSelector(entity, selector) {
     selectors.join(', ')
   );
 
-  const raycaster = entity.components.raycaster;
+  const raycaster =
+    entity.components.raycaster;
 
-  if (raycaster && raycaster.refreshObjects) {
+  if (
+    raycaster &&
+    raycaster.refreshObjects
+  ) {
     raycaster.refreshObjects();
   }
 }
 
 
-/* ============================================================
-   MATERIAL SLOT HIT BY RAYCAST
-
-   Some GLB meshes use multiple materials.
-============================================================ */
-
-function getIntersectionMaterialIndex(intersection) {
+function getIntersectionMaterialIndex(
+  intersection
+) {
   if (
     intersection &&
     intersection.face &&
-    typeof intersection.face.materialIndex === 'number'
+    typeof intersection
+      .face.materialIndex ===
+      'number'
   ) {
-    return intersection.face.materialIndex;
+    return intersection
+      .face.materialIndex;
   }
 
   return 0;
 }
 
 
+function getClosestRayIntersection(
+  raycaster
+) {
+  if (!raycaster) {
+    return null;
+  }
+
+  if (
+    raycaster.refreshObjects
+  ) {
+    raycaster.refreshObjects();
+  }
+
+  const intersections =
+    raycaster.intersections ||
+    [];
+
+  return intersections.length
+    ? intersections[0]
+    : null;
+}
+
+
 /* ============================================================
-   DOOR SYSTEM
+   DOOR HINGE
 ============================================================ */
 
-AFRAME.registerComponent('door-hinge', {
-  schema: {
-    openAngle: {
-      default: 100
-    },
+AFRAME.registerComponent(
+  'door-hinge',
+  {
+    schema: {
+      openAngle: {
+        default: 100
+      },
 
-    hingeSide: {
-      default: 'left',
-      oneOf: ['left', 'right']
-    },
+      hingeSide: {
+        default: 'left',
 
-    direction: {
-      default: 1
-    },
+        oneOf: [
+          'left',
+          'right'
+        ]
+      },
 
-    duration: {
-      default: 650
-    }
-  },
+      direction: {
+        default: 1
+      },
 
-
-  init: function () {
-    this.root = null;
-    this.parts = [];
-    this.partStates = new Map();
-    this.lastActivation = 0;
-    this.lastActiveState = null;
-    this.closeTarget = null;
-
-    this.el.addEventListener(
-      'model-loaded',
-      () => {
-        this.prepareDoorParts();
-        this.createCloseTarget();
+      duration: {
+        default: 650
       }
-    );
+    },
 
-    this.el.addEventListener(
-      'activate-object',
-      (event) => {
-        if (roomsGameplayInputLocked()) {
+
+    init: function () {
+      this.root = null;
+
+      this.parts = [];
+
+      this.partStates =
+        new Map();
+
+      this.lastActivation =
+        0;
+
+
+      this.onModelLoaded =
+        this.onModelLoaded
+          .bind(this);
+
+
+      this.onActivateObject =
+        this.onActivateObject
+          .bind(this);
+
+
+      this.onDesktopClick =
+        this.onDesktopClick
+          .bind(this);
+
+
+      this.el.addEventListener(
+        'model-loaded',
+        this.onModelLoaded
+      );
+
+
+      this.el.addEventListener(
+        'activate-object',
+        this.onActivateObject
+      );
+
+
+      this.el.addEventListener(
+        'click',
+        this.onDesktopClick
+      );
+
+
+      if (
+        this.el.getObject3D(
+          'mesh'
+        )
+      ) {
+        this.onModelLoaded();
+      }
+    },
+
+
+    hasMeshDescendant:
+      function (object) {
+        let found =
+          false;
+
+        object.traverse(
+          (node) => {
+            if (node.isMesh) {
+              found = true;
+            }
+          }
+        );
+
+        return found;
+      },
+
+
+    onModelLoaded:
+      function () {
+        this.root =
+          this.el.getObject3D(
+            'mesh'
+          );
+
+        if (!this.root) {
           return;
         }
 
-        const hitObject =
-          event.detail && event.detail.object
+
+        let container =
+          this.root;
+
+
+        while (true) {
+          const children =
+            container.children
+              .filter(
+                (child) =>
+                  this
+                    .hasMeshDescendant(
+                      child
+                    )
+              );
+
+
+          if (
+            children.length !==
+              1 ||
+            children[0].isMesh
+          ) {
+            break;
+          }
+
+
+          container =
+            children[0];
+        }
+
+
+        this.parts =
+          container.children
+            .filter(
+              (child) =>
+                this
+                  .hasMeshDescendant(
+                    child
+                  )
+            );
+
+
+        if (
+          !this.parts.length
+        ) {
+          this.parts = [
+            container
+          ];
+        }
+
+
+        console.log(
+          `Door ready with ${this.parts.length} movable part(s).`
+        );
+      },
+
+
+    getLocalBoundingBox:
+      function (part) {
+        const box =
+          new THREE.Box3();
+
+        box.makeEmpty();
+
+
+        this.el.object3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        part.updateMatrixWorld(
+          true
+        );
+
+
+        const inverseEntityWorld =
+          new THREE.Matrix4()
+            .copy(
+              this.el.object3D
+                .matrixWorld
+            )
+            .invert();
+
+
+        part.traverse(
+          (node) => {
+            if (
+              !node.isMesh ||
+              !node.geometry
+            ) {
+              return;
+            }
+
+
+            if (
+              !node.geometry
+                .boundingBox
+            ) {
+              node.geometry
+                .computeBoundingBox();
+            }
+
+
+            if (
+              !node.geometry
+                .boundingBox
+            ) {
+              return;
+            }
+
+
+            const matrix =
+              new THREE.Matrix4()
+                .multiplyMatrices(
+                  inverseEntityWorld,
+                  node.matrixWorld
+                );
+
+
+            box.union(
+              node.geometry
+                .boundingBox
+                .clone()
+                .applyMatrix4(
+                  matrix
+                )
+            );
+          }
+        );
+
+
+        return box;
+      },
+
+
+    findPartFromHit:
+      function (
+        hitObject
+      ) {
+        if (!hitObject) {
+          return (
+            this.parts.length ===
+              1
+              ? this.parts[0]
+              : null
+          );
+        }
+
+
+        let current =
+          hitObject;
+
+
+        while (current) {
+          if (
+            current.userData &&
+            current.userData
+              .roomsDoorState
+          ) {
+            return current
+              .userData
+              .roomsDoorState
+              .part;
+          }
+
+
+          if (
+            this.parts
+              .includes(
+                current
+              )
+          ) {
+            return current;
+          }
+
+
+          if (
+            current ===
+            this.root
+          ) {
+            break;
+          }
+
+
+          current =
+            current.parent;
+        }
+
+
+        return (
+          this.parts.length ===
+            1
+            ? this.parts[0]
+            : null
+        );
+      },
+
+
+    createState:
+      function (part) {
+        if (!part) {
+          return null;
+        }
+
+
+        if (
+          this.partStates
+            .has(part)
+        ) {
+          return this
+            .partStates
+            .get(part);
+        }
+
+
+        const box =
+          this.getLocalBoundingBox(
+            part
+          );
+
+
+        if (box.isEmpty()) {
+          return null;
+        }
+
+
+        const size =
+          new THREE.Vector3();
+
+
+        const center =
+          new THREE.Vector3();
+
+
+        box.getSize(size);
+
+        box.getCenter(
+          center
+        );
+
+
+        const widthAlongX =
+          size.x >=
+          size.z;
+
+
+        const hinge =
+          center.clone();
+
+
+        if (widthAlongX) {
+          hinge.x =
+            this.data.hingeSide ===
+            'left'
+              ? box.min.x
+              : box.max.x;
+        } else {
+          hinge.z =
+            this.data.hingeSide ===
+            'left'
+              ? box.min.z
+              : box.max.z;
+        }
+
+
+        const pivot =
+          new THREE.Group();
+
+
+        pivot.name =
+          'rooms-door-hinge';
+
+
+        pivot.position
+          .copy(hinge);
+
+
+        this.el.object3D
+          .add(pivot);
+
+
+        pivot.attach(part);
+
+
+        const state = {
+          part,
+          pivot,
+
+          isOpen:
+            false,
+
+          currentAngle:
+            0,
+
+          startAngle:
+            0,
+
+          targetAngle:
+            0,
+
+          elapsed:
+            0,
+
+          animating:
+            false
+        };
+
+
+        part.userData
+          .roomsDoorState =
+          state;
+
+
+        this.partStates.set(
+          part,
+          state
+        );
+
+
+        return state;
+      },
+
+
+    startDoorAnimation:
+      function (
+        state,
+        open,
+        automatic
+      ) {
+        if (!state) {
+          return false;
+        }
+
+
+        const shouldOpen =
+          Boolean(open);
+
+
+        if (
+          state.isOpen ===
+            shouldOpen &&
+          !state.animating
+        ) {
+          return false;
+        }
+
+
+        state.isOpen =
+          shouldOpen;
+
+
+        state.startAngle =
+          state.currentAngle;
+
+
+        state.targetAngle =
+          THREE.MathUtils
+            .degToRad(
+              shouldOpen
+                ? (
+                    this.data
+                      .openAngle *
+                    this.data
+                      .direction
+                  )
+                : 0
+            );
+
+
+        state.elapsed =
+          0;
+
+
+        state.animating =
+          true;
+
+
+        this.el.emit(
+          shouldOpen
+            ? 'door-opened'
+            : 'door-closed',
+
+          {
+            automatic:
+              Boolean(
+                automatic
+              )
+          },
+
+          false
+        );
+
+
+        return true;
+      },
+
+
+    activatePart:
+      function (
+        hitObject
+      ) {
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return false;
+        }
+
+
+        const now =
+          performance.now();
+
+
+        if (
+          now -
+            this.lastActivation <
+          250
+        ) {
+          return false;
+        }
+
+
+        const part =
+          this.findPartFromHit(
+            hitObject
+          );
+
+
+        if (!part) {
+          return false;
+        }
+
+
+        const state =
+          this.createState(
+            part
+          );
+
+
+        if (!state) {
+          return false;
+        }
+
+
+        this.lastActivation =
+          now;
+
+
+        return this
+          .startDoorAnimation(
+            state,
+            !state.isOpen,
+            false
+          );
+      },
+
+
+    activateDefaultPart:
+      function () {
+        if (
+          !this.parts.length
+        ) {
+          return false;
+        }
+
+
+        return this
+          .activatePart(
+            this.parts[0]
+          );
+      },
+
+
+    onActivateObject:
+      function (event) {
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
+
+
+        const object =
+          event.detail &&
+          event.detail.object
             ? event.detail.object
             : null;
 
-        this.activatePart(hitObject);
-      }
-    );
 
-    this.el.addEventListener(
-      'click',
-      (event) => {
+        this.activatePart(
+          object
+        );
+      },
+
+
+    onDesktopClick:
+      function (event) {
         if (
           roomsGameplayInputLocked() ||
-          isImmersiveXRScene(this.el.sceneEl)
+          isImmersiveXRScene(
+            this.el.sceneEl
+          )
         ) {
           return;
         }
 
-        if (event && event.stopPropagation) {
-          event.stopPropagation();
+
+        if (
+          event &&
+          event.stopPropagation
+        ) {
+          event
+            .stopPropagation();
         }
 
-        const hitObject =
+
+        const object =
           event &&
           event.detail &&
-          event.detail.intersection
-            ? event.detail.intersection.object
+          event.detail
+            .intersection
+            ? event.detail
+                .intersection
+                .object
             : null;
 
-        if (
-          hitObject &&
-          this.activatePart(hitObject)
-        ) {
-          return;
-        }
 
-        this.closeOpenDoor();
-      }
-    );
-  },
-
-
-  hasMeshDescendant: function (object) {
-    let found = false;
-
-    object.traverse((node) => {
-      if (node.isMesh) {
-        found = true;
-      }
-    });
-
-    return found;
-  },
-
-
-  prepareDoorParts: function () {
-    this.root = this.el.getObject3D('mesh');
-
-    if (!this.root) {
-      return;
-    }
-
-    let container = this.root;
-
-    while (true) {
-      const meaningfulChildren =
-        container.children.filter(
-          (child) => this.hasMeshDescendant(child)
+        this.activatePart(
+          object
         );
+      },
 
-      if (
-        meaningfulChildren.length !== 1 ||
-        meaningfulChildren[0].isMesh
-      ) {
-        break;
-      }
 
-      container = meaningfulChildren[0];
-    }
-
-    this.parts = container.children.filter(
-      (child) => this.hasMeshDescendant(child)
-    );
-
-    if (!this.parts.length) {
-      this.parts = [container];
-    }
-
-    console.log(
-      `Door contains ${this.parts.length} selectable part(s).`
-    );
-  },
-
-
-  createCloseTarget: function () {
-    if (this.closeTarget || !this.root) {
-      return;
-    }
-
-    this.root.updateMatrixWorld(true);
-
-    const box = new THREE.Box3().setFromObject(this.root);
-
-    if (box.isEmpty()) {
-      return;
-    }
-
-    const size = new THREE.Vector3();
-    const center = new THREE.Vector3();
-
-    box.getSize(size);
-    box.getCenter(center);
-
-    const target = document.createElement('a-box');
-
-    target.setAttribute('id', 'doorCloseTarget');
-
-    target.setAttribute(
-      'position',
-      `${center.x} ${center.y} ${center.z}`
-    );
-
-    target.setAttribute(
-      'width',
-      Math.max(size.x * 0.28, 0.18)
-    );
-
-    target.setAttribute(
-      'height',
-      Math.max(size.y * 0.30, 0.42)
-    );
-
-    target.setAttribute(
-      'depth',
-      Math.max(size.z * 0.28, 0.12)
-    );
-
-    target.setAttribute(
-      'material',
-      `
-        opacity: 0;
-        transparent: true;
-        depthWrite: false;
-        side: double
-      `
-    );
-
-    target.setAttribute('visible', false);
-
-    target.addEventListener(
-      'click',
-      (event) => {
-        if (
-          roomsGameplayInputLocked() ||
-          isImmersiveXRScene(this.el.sceneEl)
-        ) {
-          return;
-        }
-
-        if (event && event.stopPropagation) {
-          event.stopPropagation();
-        }
-
-        this.closeOpenDoor();
-      }
-    );
-
-    this.el.sceneEl.appendChild(target);
-
-    this.closeTarget = target;
-
-    this.updateCloseTarget();
-  },
-
-
-  activateDefaultPart: function () {
-    if (!this.parts.length) {
-      return false;
-    }
-
-    return this.activatePart(this.parts[0]);
-  },
-
-
-  findPartFromHit: function (hitObject) {
-    let current = hitObject;
-
-    while (current) {
-      if (
-        current.userData &&
-        current.userData.doorPartState
-      ) {
-        return current.userData.doorPartState.part;
-      }
-
-      if (this.parts.includes(current)) {
-        return current;
-      }
-
-      if (current === this.root) {
-        break;
-      }
-
-      current = current.parent;
-    }
-
-    return this.parts.length === 1
-      ? this.parts[0]
-      : null;
-  },
-
-
-  getLocalBoundingBox: function (part) {
-    const box = new THREE.Box3();
-    box.makeEmpty();
-
-    this.el.object3D.updateMatrixWorld(true);
-    part.updateMatrixWorld(true);
-
-    const inverseEntityWorld =
-      new THREE.Matrix4()
-        .copy(this.el.object3D.matrixWorld)
-        .invert();
-
-    part.traverse((node) => {
-      if (!node.isMesh || !node.geometry) {
-        return;
-      }
-
-      if (!node.geometry.boundingBox) {
-        node.geometry.computeBoundingBox();
-      }
-
-      if (!node.geometry.boundingBox) {
-        return;
-      }
-
-      const nodeToEntity =
-        new THREE.Matrix4().multiplyMatrices(
-          inverseEntityWorld,
-          node.matrixWorld
-        );
-
-      const nodeBox =
-        node.geometry.boundingBox
-          .clone()
-          .applyMatrix4(nodeToEntity);
-
-      box.union(nodeBox);
-    });
-
-    return box;
-  },
-
-
-  createState: function (part) {
-    if (this.partStates.has(part)) {
-      return this.partStates.get(part);
-    }
-
-    const box = this.getLocalBoundingBox(part);
-
-    if (box.isEmpty()) {
-      return null;
-    }
-
-    const size = new THREE.Vector3();
-    const center = new THREE.Vector3();
-
-    box.getSize(size);
-    box.getCenter(center);
-
-    const widthRunsAlongX = size.x >= size.z;
-    const hingePosition = center.clone();
-
-    if (widthRunsAlongX) {
-      hingePosition.x =
-        this.data.hingeSide === 'left'
-          ? box.min.x
-          : box.max.x;
-    } else {
-      hingePosition.z =
-        this.data.hingeSide === 'left'
-          ? box.min.z
-          : box.max.z;
-    }
-
-    const pivot = new THREE.Group();
-
-    pivot.name = 'individual-door-hinge';
-    pivot.position.copy(hingePosition);
-
-    this.el.object3D.add(pivot);
-
-    pivot.attach(part);
-
-    const state = {
-      part: part,
-      pivot: pivot,
-      isOpen: false,
-      currentAngle: 0,
-      startAngle: 0,
-      targetAngle: 0,
-      animationTime: 0,
-      isAnimating: false
-    };
-
-    part.userData.doorPartState = state;
-
-    this.partStates.set(part, state);
-
-    return state;
-  },
-
-
-  startDoorAnimation: function (state, shouldOpen) {
-    state.isOpen = shouldOpen;
-    state.startAngle = state.currentAngle;
-
-    const targetDegrees = shouldOpen
-      ? this.data.openAngle * this.data.direction
-      : 0;
-
-    state.targetAngle =
-      THREE.MathUtils.degToRad(targetDegrees);
-
-    state.animationTime = 0;
-    state.isAnimating = true;
-
-    this.updateCloseTarget();
-  },
-
-
-  activatePart: function (hitObject) {
-    if (roomsGameplayInputLocked()) {
-      return false;
-    }
-
-    const now = performance.now();
-
-    if (now - this.lastActivation < 250) {
-      return false;
-    }
-
-    const part = this.findPartFromHit(hitObject);
-
-    if (!part) {
-      return false;
-    }
-
-    const state = this.createState(part);
-
-    if (!state) {
-      return false;
-    }
-
-    this.lastActivation = now;
-    this.lastActiveState = state;
-
-    this.startDoorAnimation(
-      state,
-      !state.isOpen
-    );
-
-    return true;
-  },
-
-
-  getOpenState: function () {
-    if (
-      this.lastActiveState &&
-      this.lastActiveState.isOpen
+    tick: function (
+      time,
+      deltaTime
     ) {
-      return this.lastActiveState;
-    }
-
-    let openState = null;
-
-    this.partStates.forEach((state) => {
-      if (!openState && state.isOpen) {
-        openState = state;
-      }
-    });
-
-    return openState;
-  },
-
-
-  closeOpenDoor: function () {
-    const state = this.getOpenState();
-
-    if (!state) {
-      return false;
-    }
-
-    const now = performance.now();
-
-    if (now - this.lastActivation < 250) {
-      return false;
-    }
-
-    this.lastActivation = now;
-    this.lastActiveState = state;
-
-    this.startDoorAnimation(state, false);
-
-    return true;
-  },
-
-
-  toggleLastDoor: function () {
-    const state = this.lastActiveState;
-
-    if (!state) {
-      return false;
-    }
-
-    const now = performance.now();
-
-    if (now - this.lastActivation < 250) {
-      return false;
-    }
-
-    this.lastActivation = now;
-
-    this.startDoorAnimation(
-      state,
-      !state.isOpen
-    );
-
-    return true;
-  },
-
-
-  updateCloseTarget: function () {
-    if (!this.closeTarget) {
-      return;
-    }
-
-    this.closeTarget.setAttribute(
-      'visible',
-      Boolean(this.getOpenState())
-    );
-  },
-
-
-  easeInOut: function (value) {
-    return value < 0.5
-      ? 2 * value * value
-      : 1 - Math.pow(-2 * value + 2, 2) / 2;
-  },
-
-
-  tick: function (time, deltaTime) {
-    if (
-      roomsGameplayInputLocked() ||
-      !deltaTime
-    ) {
-      return;
-    }
-
-    this.partStates.forEach((state) => {
-      if (!state.isAnimating) {
+      if (
+        roomsGameplayInputLocked() ||
+        !deltaTime
+      ) {
         return;
       }
 
-      state.animationTime += deltaTime;
 
-      const progress = Math.min(
-        state.animationTime / this.data.duration,
-        1
-      );
+      this.partStates
+        .forEach(
+          (state) => {
+            if (
+              !state.animating
+            ) {
+              return;
+            }
 
-      const eased = this.easeInOut(progress);
 
-      state.currentAngle =
-        THREE.MathUtils.lerp(
-          state.startAngle,
-          state.targetAngle,
-          eased
+            state.elapsed +=
+              deltaTime;
+
+
+            const progress =
+              Math.min(
+                state.elapsed /
+                  Math.max(
+                    this.data
+                      .duration,
+                    1
+                  ),
+
+                1
+              );
+
+
+            const eased =
+              progress < 0.5
+                ? (
+                    2 *
+                    progress *
+                    progress
+                  )
+                : (
+                    1 -
+                    Math.pow(
+                      -2 *
+                        progress +
+                        2,
+                      2
+                    ) /
+                    2
+                  );
+
+
+            state.currentAngle =
+              THREE.MathUtils
+                .lerp(
+                  state
+                    .startAngle,
+
+                  state
+                    .targetAngle,
+
+                  eased
+                );
+
+
+            state.pivot
+              .rotation.y =
+              state
+                .currentAngle;
+
+
+            if (
+              progress >= 1
+            ) {
+              state.currentAngle =
+                state.targetAngle;
+
+
+              state.pivot
+                .rotation.y =
+                state.targetAngle;
+
+
+              state.animating =
+                false;
+            }
+          }
+        );
+    },
+
+
+    remove: function () {
+      this.el
+        .removeEventListener(
+          'model-loaded',
+          this.onModelLoaded
         );
 
-      state.pivot.rotation.y = state.currentAngle;
 
-      if (progress >= 1) {
-        state.currentAngle = state.targetAngle;
-        state.pivot.rotation.y = state.targetAngle;
-        state.isAnimating = false;
-      }
-    });
+      this.el
+        .removeEventListener(
+          'activate-object',
+          this.onActivateObject
+        );
+
+
+      this.el
+        .removeEventListener(
+          'click',
+          this.onDesktopClick
+        );
+    }
   }
-});
+);
+
+
+/* ============================================================
+   AUTOMATIC DOOR PROXIMITY
+
+   Walk OR teleport close:
+   -> door opens.
+
+   Move far enough away:
+   -> door closes.
+
+   The CLOSED door bounds are cached once.
+
+   This matters because if the trigger area followed the moving
+   door leaf, opening the door could move the trigger away from
+   the player and cause unwanted opening/closing behaviour.
+============================================================ */
+
+AFRAME.registerComponent(
+  'auto-door-proximity',
+  {
+    schema: {
+      openDistance: {
+        default: 1.25
+      },
+
+      closeDistance: {
+        default: 1.75
+      },
+
+      interval: {
+        default: 120
+      }
+    },
+
+
+    init: function () {
+      this.lastCheck =
+        0;
+
+
+      this.playerPosition =
+        new THREE.Vector3();
+
+
+      this.closestPoint =
+        new THREE.Vector3();
+
+
+      this.closedBoxes =
+        new WeakMap();
+    },
+
+
+    getPlayerPosition:
+      function () {
+        const source =
+          document.querySelector(
+            '#cam'
+          ) ||
+          document.querySelector(
+            '#rig'
+          );
+
+
+        if (!source) {
+          return null;
+        }
+
+
+        source.object3D
+          .getWorldPosition(
+            this.playerPosition
+          );
+
+
+        return this
+          .playerPosition;
+      },
+
+
+    getClosedWorldBox:
+      function (part) {
+        if (!part) {
+          return null;
+        }
+
+
+        const cached =
+          this.closedBoxes
+            .get(part);
+
+
+        if (cached) {
+          return cached;
+        }
+
+
+        part.updateMatrixWorld(
+          true
+        );
+
+
+        const box =
+          new THREE.Box3()
+            .setFromObject(
+              part
+            );
+
+
+        if (box.isEmpty()) {
+          return null;
+        }
+
+
+        const saved =
+          box.clone();
+
+
+        this.closedBoxes.set(
+          part,
+          saved
+        );
+
+
+        return saved;
+      },
+
+
+    getHorizontalDistance:
+      function (
+        part,
+        player
+      ) {
+        if (
+          !part ||
+          !player
+        ) {
+          return Infinity;
+        }
+
+
+        const box =
+          this.getClosedWorldBox(
+            part
+          );
+
+
+        if (!box) {
+          return Infinity;
+        }
+
+
+        this.closestPoint.set(
+          THREE.MathUtils
+            .clamp(
+              player.x,
+              box.min.x,
+              box.max.x
+            ),
+
+          player.y,
+
+          THREE.MathUtils
+            .clamp(
+              player.z,
+              box.min.z,
+              box.max.z
+            )
+        );
+
+
+        return Math.hypot(
+          player.x -
+            this.closestPoint.x,
+
+          player.z -
+            this.closestPoint.z
+        );
+      },
+
+
+    tick: function (time) {
+      if (
+        roomsGameplayInputLocked() ||
+        time -
+          this.lastCheck <
+          this.data.interval
+      ) {
+        return;
+      }
+
+
+      this.lastCheck =
+        time;
+
+
+      const door =
+        this.el.components[
+          'door-hinge'
+        ];
+
+
+      if (
+        !door ||
+        !door.root ||
+        !door.parts.length
+      ) {
+        return;
+      }
+
+
+      const player =
+        this.getPlayerPosition();
+
+
+      if (!player) {
+        return;
+      }
+
+
+      door.parts.forEach(
+        (part) => {
+          const distance =
+            this
+              .getHorizontalDistance(
+                part,
+                player
+              );
+
+
+          if (
+            !Number.isFinite(
+              distance
+            )
+          ) {
+            return;
+          }
+
+
+          const state =
+            door.createState(
+              part
+            );
+
+
+          if (!state) {
+            return;
+          }
+
+
+          if (
+            distance <=
+              this.data
+                .openDistance &&
+            !state.isOpen
+          ) {
+            door.startDoorAnimation(
+              state,
+              true,
+              true
+            );
+
+
+            this.el.emit(
+              'door-auto-opened',
+
+              {
+                distance
+              },
+
+              false
+            );
+
+
+            return;
+          }
+
+
+          if (
+            distance >=
+              this.data
+                .closeDistance &&
+            state.isOpen
+          ) {
+            door.startDoorAnimation(
+              state,
+              false,
+              true
+            );
+
+
+            this.el.emit(
+              'door-auto-closed',
+
+              {
+                distance
+              },
+
+              false
+            );
+          }
+        }
+      );
+    }
+  }
+);
 
 
 /* ============================================================
    QUEST DOOR INTERACTION
 ============================================================ */
 
-AFRAME.registerComponent('vr-door-interactor', {
-  schema: {
-    pressThreshold: {
-      default: 0.65
-    },
-
-    releaseThreshold: {
-      default: 0.2
-    }
-  },
-
-
-  init: function () {
-    this.triggerHeld = false;
-    this.lastTriggerTime = 0;
-
-    this.pressTrigger = this.pressTrigger.bind(this);
-    this.releaseTrigger = this.releaseTrigger.bind(this);
-    this.onTriggerChanged = this.onTriggerChanged.bind(this);
-
-    this.el.addEventListener(
-      'triggerdown',
-      this.pressTrigger
-    );
-
-    this.el.addEventListener(
-      'triggerup',
-      this.releaseTrigger
-    );
-
-    this.el.addEventListener(
-      'triggerchanged',
-      this.onTriggerChanged
-    );
-
-    this.el.addEventListener(
-      'controllerdisconnected',
-      this.releaseTrigger
-    );
-  },
-
-
-  pressTrigger: function (event) {
-    if (
-      this.triggerHeld ||
-      roomsGameplayInputLocked()
-    ) {
-      return;
-    }
-
-    if (event && event.stopPropagation) {
-      event.stopPropagation();
-    }
-
-    const now = performance.now();
-
-    if (now - this.lastTriggerTime < 250) {
-      return;
-    }
-
-    this.triggerHeld = true;
-    this.lastTriggerTime = now;
-
-    this.useDoor();
-  },
-
-
-  releaseTrigger: function () {
-    this.triggerHeld = false;
-  },
-
-
-  onTriggerChanged: function (event) {
-    const value =
-      event &&
-      event.detail &&
-      typeof event.detail.value === 'number'
-        ? event.detail.value
-        : null;
-
-    if (value === null) {
-      return;
-    }
-
-    if (
-      value >= this.data.pressThreshold &&
-      !this.triggerHeld
-    ) {
-      this.pressTrigger();
-    } else if (
-      value <= this.data.releaseThreshold
-    ) {
-      this.releaseTrigger();
-    }
-  },
-
-
-  useDoor: function () {
-    if (roomsGameplayInputLocked()) {
-      return;
-    }
-
-    const raycaster = this.el.components.raycaster;
-    const door = document.querySelector('#door');
-    const closeTarget =
-      document.querySelector('#doorCloseTarget');
-
-    if (!raycaster || !door) {
-      return;
-    }
-
-    const doorComponent =
-      door.components['door-hinge'];
-
-    if (!doorComponent) {
-      return;
-    }
-
-    if (raycaster.refreshObjects) {
-      raycaster.refreshObjects();
-    }
-
-    const intersections = raycaster.intersections || [];
-    const closest = intersections.length
-      ? intersections[0]
-      : null;
-
-    if (!closest) {
-      return;
-    }
-
-    if (
-      closeTarget &&
-      objectBelongsToEntity(
-        closest.object,
-        closeTarget
-      )
-    ) {
-      doorComponent.closeOpenDoor();
-      return;
-    }
-
-    if (
-      !objectBelongsToEntity(
-        closest.object,
-        door
-      )
-    ) {
-      return;
-    }
-
-    if (
-      doorComponent.activatePart(
-        closest.object
-      )
-    ) {
-      return;
-    }
-
-    doorComponent.activateDefaultPart();
-  }
-});
-
-
-/* ============================================================
-   REAL CRT TV
-
-   NO fake plane.
-
-   This component attaches to #living.
-============================================================ */
-
-AFRAME.registerComponent('embedded-tv', {
-  schema: {
-    glowColor: {
-      default: '#d8efff'
-    },
-
-    screenColor: {
-      default: '#a9bdc8'
-    },
-
-    lightColor: {
-      default: '#c7e7ff'
-    },
-
-    lightIntensity: {
-      default: 2.0
-    },
-
-    lightDistance: {
-      default: 3
-    },
-
-    flickerMin: {
-      default: 1.55
-    },
-
-    flickerMax: {
-      default: 2.35
-    },
-
-    flickerInterval: {
-      default: 85
-    }
-  },
-
-
-  init: function () {
-    this.root = null;
-    this.isOn = false;
-
-    this.screenMesh = null;
-    this.screenMaterial = null;
-    this.screenMaterialIndex = 0;
-
-    this.originalColor = null;
-    this.originalEmissive = null;
-    this.originalEmissiveIntensity = 1;
-
-    this.glowLight = null;
-    this.lastFlickerTime = 0;
-
-    this.onDesktopClick =
-      this.onDesktopClick.bind(this);
-
-    this.onModelLoaded =
-      this.onModelLoaded.bind(this);
-
-    this.el.addEventListener(
-      'click',
-      this.onDesktopClick
-    );
-
-    this.el.addEventListener(
-      'model-loaded',
-      this.onModelLoaded
-    );
-
-    if (this.el.getObject3D('mesh')) {
-      this.onModelLoaded();
-    }
-  },
-
-
-  onModelLoaded: function () {
-    this.root = this.el.getObject3D('mesh');
-
-    if (!this.root) {
-      return;
-    }
-
-    this.tryNamedScreenAutoBind();
-  },
-
-
-  tryNamedScreenAutoBind: function () {
-    if (this.screenMaterial || !this.root) {
-      return false;
-    }
-
-    const keywords = [
-      'tvscreen',
-      'tv_screen',
-      'televisionscreen',
-      'television_screen',
-      'crtscreen',
-      'crt_screen',
-      'screen',
-      'display'
-    ];
-
-    let found = null;
-
-    this.root.traverse((node) => {
-      if (
-        found ||
-        !node.isMesh ||
-        !node.material
-      ) {
-        return;
+AFRAME.registerComponent(
+  'vr-door-interactor',
+  {
+    schema: {
+      pressThreshold: {
+        default: 0.65
+      },
+
+      releaseThreshold: {
+        default: 0.2
       }
+    },
 
-      const materials = Array.isArray(node.material)
-        ? node.material
-        : [node.material];
 
-      materials.forEach((material, index) => {
-        if (found || !material) {
+    init: function () {
+      this.triggerHeld =
+        false;
+
+
+      this.pressTrigger =
+        this.pressTrigger
+          .bind(this);
+
+
+      this.releaseTrigger =
+        this.releaseTrigger
+          .bind(this);
+
+
+      this.onTriggerChanged =
+        this.onTriggerChanged
+          .bind(this);
+
+
+      this.el.addEventListener(
+        'triggerdown',
+        this.pressTrigger
+      );
+
+
+      this.el.addEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
+
+
+      this.el.addEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    },
+
+
+    pressTrigger:
+      function () {
+        if (
+          this.triggerHeld ||
+          roomsGameplayInputLocked()
+        ) {
           return;
         }
 
-        const materialName =
-          String(material.name || '')
-            .toLowerCase()
-            .replace(/\s+/g, '');
 
-        const meshName =
-          String(node.name || '')
-            .toLowerCase()
-            .replace(/\s+/g, '');
+        this.triggerHeld =
+          true;
 
-        const combined = `${meshName} ${materialName}`;
 
-        const matching = keywords.some((keyword) =>
-          combined.includes(
-            keyword.replace(/\s+/g, '')
+        this.useDoor();
+      },
+
+
+    releaseTrigger:
+      function () {
+        this.triggerHeld =
+          false;
+      },
+
+
+    onTriggerChanged:
+      function (event) {
+        const value =
+          event &&
+          event.detail &&
+          typeof event
+            .detail.value ===
+            'number'
+            ? event.detail.value
+            : null;
+
+
+        if (
+          value === null
+        ) {
+          return;
+        }
+
+
+        if (
+          value >=
+            this.data
+              .pressThreshold &&
+          !this.triggerHeld
+        ) {
+          this.pressTrigger();
+        } else if (
+          value <=
+            this.data
+              .releaseThreshold
+        ) {
+          this.releaseTrigger();
+        }
+      },
+
+
+    useDoor:
+      function () {
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
+
+
+        const door =
+          document.querySelector(
+            '#door'
+          );
+
+
+        const raycaster =
+          this.el.components
+            .raycaster;
+
+
+        if (
+          !door ||
+          !raycaster
+        ) {
+          return;
+        }
+
+
+        if (
+          raycaster.refreshObjects
+        ) {
+          raycaster
+            .refreshObjects();
+        }
+
+
+        /*
+          Ask specifically for the door intersection.
+
+          This means a nearby unrelated prop cannot prevent
+          the door interaction just because it also happens
+          to be intersected by the controller ray.
+        */
+
+        const hit =
+          raycaster.getIntersection
+            ? raycaster
+                .getIntersection(
+                  door
+                )
+            : getClosestRayIntersection(
+                raycaster
+              );
+
+
+        if (
+          !hit ||
+          !objectBelongsToEntity(
+            hit.object,
+            door
           )
+        ) {
+          return;
+        }
+
+
+        const component =
+          door.components[
+            'door-hinge'
+          ];
+
+
+        if (!component) {
+          return;
+        }
+
+
+        if (
+          !component.activatePart(
+            hit.object
+          )
+        ) {
+          component
+            .activateDefaultPart();
+        }
+      },
+
+
+    remove: function () {
+      this.el
+        .removeEventListener(
+          'triggerdown',
+          this.pressTrigger
         );
 
-        if (matching) {
-          found = {
-            mesh: node,
-            materialIndex: index
-          };
-        }
-      });
-    });
 
-    if (!found) {
-      console.log(
-        'TV: no named screen found. ' +
-        'Click the real CRT glass once and it will bind automatically.'
+      this.el
+        .removeEventListener(
+          'triggerup',
+          this.releaseTrigger
+        );
+
+
+      this.el
+        .removeEventListener(
+          'triggerchanged',
+          this.onTriggerChanged
+        );
+
+
+      this.el
+        .removeEventListener(
+          'controllerdisconnected',
+          this.releaseTrigger
+        );
+    }
+  }
+);
+
+
+/* ============================================================
+   TV COMPONENT
+
+   Important:
+   The actual GLB material is NOT recoloured.
+
+   Instead, the first successful click/trigger on the CRT screen
+   learns the CRT screen surface and creates a separate cheap
+   static plane over it.
+============================================================ */
+
+/* ============================================================
+   EMBEDDED TV
+   Desktop click + Quest trigger
+   No extra white screen geometry
+   Small TV glow only
+============================================================ */
+
+AFRAME.registerComponent(
+  'embedded-tv',
+  {
+    schema: {
+      lightColor: {
+        default: '#b9d8e8'
+      },
+
+      lightIntensity: {
+        default: 0.65
+      },
+
+      lightDistance: {
+        default: 1.25
+      },
+
+      flickerInterval: {
+        default: 180
+      }
+    },
+
+
+    init: function () {
+      this.root = null;
+
+      this.isOn = false;
+
+      this.componentPaused = false;
+
+      this.screenPointWorld = null;
+
+      this.screenNormalWorld = null;
+
+      this.glowLight = null;
+
+      this.lastFlickerUpdate = 0;
+
+
+      this.onModelLoaded =
+        this.onModelLoaded.bind(this);
+
+      this.onDesktopClick =
+        this.onDesktopClick.bind(this);
+
+
+      /* Desktop clicking */
+      this.el.addEventListener(
+        'click',
+        this.onDesktopClick
       );
 
-      return false;
-    }
 
-    this.bindSurface(
-      found.mesh,
-      found.materialIndex,
-      null
-    );
-
-    console.log(
-      'TV: named CRT screen found automatically.'
-    );
-
-    return true;
-  },
-
-
-  onDesktopClick: function (event) {
-    if (
-      roomsGameplayInputLocked() ||
-      isImmersiveXRScene(this.el.sceneEl)
-    ) {
-      return;
-    }
-
-    const intersection =
-      event &&
-      event.detail &&
-      event.detail.intersection
-        ? event.detail.intersection
-        : null;
-
-    if (!intersection) {
-      return;
-    }
-
-    if (
-      !objectBelongsToEntity(
-        intersection.object,
-        this.el
-      )
-    ) {
-      return;
-    }
-
-    if (event.stopPropagation) {
-      event.stopPropagation();
-    }
-
-    this.toggleFromIntersection(intersection);
-  },
-
-
-  intersectionMatchesScreen: function (intersection) {
-    if (!intersection || !this.screenMesh) {
-      return false;
-    }
-
-    if (intersection.object !== this.screenMesh) {
-      return false;
-    }
-
-    const materialIndex =
-      getIntersectionMaterialIndex(intersection);
-
-    return materialIndex === this.screenMaterialIndex;
-  },
-
-
-  toggleFromIntersection: function (intersection) {
-    if (roomsGameplayInputLocked()) {
-      return false;
-    }
-
-    if (
-      !intersection ||
-      !intersection.object ||
-      !intersection.object.isMesh
-    ) {
-      return false;
-    }
-
-    /* --------------------------------------------------
-       FIRST CLICK
-
-       Remember exactly which GLB material was hit.
-    -------------------------------------------------- */
-
-    if (!this.screenMaterial) {
-      const materialIndex =
-        getIntersectionMaterialIndex(intersection);
-
-      const bound = this.bindSurface(
-        intersection.object,
-        materialIndex,
-        intersection
+      /* Wait for livingasset.glb */
+      this.el.addEventListener(
+        'model-loaded',
+        this.onModelLoaded
       );
 
-      if (!bound) {
-        return false;
+
+      if (
+        this.el.getObject3D('mesh')
+      ) {
+        this.onModelLoaded();
+      }
+    },
+
+
+    /* ========================================================
+       MODEL READY
+    ======================================================== */
+
+    onModelLoaded: function () {
+      this.root =
+        this.el.getObject3D(
+          'mesh'
+        );
+
+      if (!this.root) {
+        return;
       }
 
-      this.setState(true);
-      return true;
-    }
-
-    /* --------------------------------------------------
-       ALREADY BOUND
-
-       Other furniture does nothing.
-    -------------------------------------------------- */
-
-    if (!this.intersectionMatchesScreen(intersection)) {
-      return false;
-    }
-
-    /*
-      Recalculate the light position and forward direction from
-      the REAL CRT surface each time the screen is clicked.
-
-      This keeps the old soft point-light look, but moves the
-      source slightly in front of the CRT instead of beside it.
-    */
-
-    this.createGlowLight(
-      intersection.point,
-      intersection.object,
-      intersection
-    );
-
-    this.toggle();
-
-    return true;
-  },
-
-
-  getMaterialAt: function (mesh, materialIndex) {
-    if (!mesh || !mesh.material) {
-      return null;
-    }
-
-    if (Array.isArray(mesh.material)) {
-      return (
-        mesh.material[materialIndex] ||
-        mesh.material[0] ||
-        null
-      );
-    }
-
-    return mesh.material;
-  },
-
-
-  cloneMaterialSlot: function (mesh, materialIndex) {
-    const original = this.getMaterialAt(
-      mesh,
-      materialIndex
-    );
-
-    if (!original || !original.clone) {
-      return null;
-    }
-
-    const cloned = original.clone();
-
-    if (Array.isArray(mesh.material)) {
-      const materials = mesh.material.slice();
-      materials[materialIndex] = cloned;
-      mesh.material = materials;
-    } else {
-      mesh.material = cloned;
-    }
-
-    return cloned;
-  },
-
-
-  bindSurface: function (
-    mesh,
-    materialIndex,
-    intersection
-  ) {
-    if (!mesh || !mesh.isMesh) {
-      return false;
-    }
-
-    const material = this.cloneMaterialSlot(
-      mesh,
-      materialIndex
-    );
-
-    if (!material) {
-      console.warn(
-        'TV: selected surface has no usable material.'
-      );
-
-      return false;
-    }
-
-    this.screenMesh = mesh;
-    this.screenMaterialIndex = materialIndex;
-    this.screenMaterial = material;
-
-    if (material.color && material.color.clone) {
-      this.originalColor = material.color.clone();
-    }
-
-    if (
-      material.emissive &&
-      material.emissive.clone
-    ) {
-      this.originalEmissive =
-        material.emissive.clone();
-    }
-
-    if (
-      typeof material.emissiveIntensity === 'number'
-    ) {
-      this.originalEmissiveIntensity =
-        material.emissiveIntensity;
-    }
-
-    mesh.userData.roomsTVScreen = true;
-
-    const worldPoint =
-      intersection && intersection.point
-        ? intersection.point.clone()
-        : this.getMeshWorldCenter(mesh);
-
-    /*
-      IMPORTANT FIX:
-      use the actual CRT surface and its normal so the point light
-      is placed out in front of the screen.
-    */
-
-    this.createGlowLight(
-      worldPoint,
-      mesh,
-      intersection
-    );
-
-    if (
-      worldPoint &&
-      window.setRoomsTVPosition
-    ) {
-      window.setRoomsTVPosition(worldPoint);
-    }
-
-    console.log(
-      'TV SCREEN BOUND:',
-      '\nMesh:',
-      mesh.name || '(unnamed mesh)',
-      '\nMaterial:',
-      material.name || '(unnamed material)',
-      '\nMaterial slot:',
-      materialIndex
-    );
-
-    if (!Array.isArray(mesh.material)) {
       console.log(
-        'TV note: this clicked mesh uses one material. ' +
-        'If the whole television glows instead of only the glass, ' +
-        'the CRT glass needs its own material in Blender.'
+        'TV ready. Aim at the CRT screen and click / trigger.'
       );
-    }
-
-    return true;
-  },
+    },
 
 
-  getMeshWorldCenter: function (mesh) {
-    if (!mesh) {
-      return null;
-    }
+    /* ========================================================
+       FIND WHICH WAY THE TV SCREEN FACES
+    ======================================================== */
 
-    mesh.updateMatrixWorld(true);
-
-    const box = new THREE.Box3().setFromObject(mesh);
-
-    if (box.isEmpty()) {
-      return null;
-    }
-
-    return box.getCenter(new THREE.Vector3());
-  },
-
-
-  /* ======================================================
-     TV GLOW - FIXED
-
-     Keeps the SOFT POINT-LIGHT look that worked better.
-
-     The point light is moved about 20 cm OUT IN FRONT of
-     the actual CRT glass, based on the clicked triangle's
-     surface normal.
-
-     This prevents the strongest glow from appearing at the
-     side of / underneath the TV cabinet.
-  ====================================================== */
-
-  createGlowLight: function (
-    worldPoint,
-    mesh,
-    intersection
-  ) {
-    if (!worldPoint) {
-      return;
-    }
-
-    const forward = new THREE.Vector3();
-
-    /* --------------------------------------------------
-       FIND WHICH WAY THE CRT GLASS FACES
-    -------------------------------------------------- */
-
-    if (
-      intersection &&
-      intersection.face &&
-      mesh
+    getWorldNormal: function (
+      intersection
     ) {
-      const normalMatrix =
-        new THREE.Matrix3().getNormalMatrix(
-          mesh.matrixWorld
-        );
+      const normal =
+        new THREE.Vector3();
 
-      forward
-        .copy(intersection.face.normal)
-        .applyMatrix3(normalMatrix)
-        .normalize();
+      if (
+        intersection &&
+        intersection.face &&
+        intersection.object
+      ) {
+        const normalMatrix =
+          new THREE.Matrix3()
+            .getNormalMatrix(
+              intersection.object
+                .matrixWorld
+            );
+
+        normal
+          .copy(
+            intersection.face.normal
+          )
+          .applyMatrix3(
+            normalMatrix
+          )
+          .normalize();
+      }
+
 
       /*
-        Make sure the normal points OUT into the room,
-        toward the player, rather than backward through
-        the television.
+        Make sure the normal points
+        toward the player instead of
+        through the back of the TV.
       */
 
-      const cameraEl = document.querySelector('#cam');
-
-      if (cameraEl) {
-        const cameraWorld = new THREE.Vector3();
-
-        cameraEl.object3D.getWorldPosition(
-          cameraWorld
+      const camera =
+        document.querySelector(
+          '#cam'
         );
+
+      if (
+        camera &&
+        intersection &&
+        intersection.point
+      ) {
+        const cameraWorld =
+          new THREE.Vector3();
+
+        camera.object3D
+          .getWorldPosition(
+            cameraWorld
+          );
 
         const towardPlayer =
           cameraWorld
             .clone()
-            .sub(worldPoint)
+            .sub(
+              intersection.point
+            )
             .normalize();
 
-        if (forward.dot(towardPlayer) < 0) {
-          forward.multiplyScalar(-1);
+
+        if (
+          normal.lengthSq() <
+          0.0001
+        ) {
+          normal.copy(
+            towardPlayer
+          );
+        }
+
+        else if (
+          normal.dot(
+            towardPlayer
+          ) < 0
+        ) {
+          normal.multiplyScalar(
+            -1
+          );
         }
       }
-    } else {
+
+
+      if (
+        normal.lengthSq() <
+        0.0001
+      ) {
+        normal.set(
+          0,
+          0,
+          1
+        );
+      }
+
+
+      return normal.normalize();
+    },
+
+
+    /* ========================================================
+       REMEMBER WHERE PLAYER CLICKED THE TV
+    ======================================================== */
+
+    learnScreen: function (
+      intersection
+    ) {
+      if (
+        !intersection ||
+        !intersection.point ||
+        !intersection.object
+      ) {
+        return false;
+      }
+
+
+      if (
+        !objectBelongsToEntity(
+          intersection.object,
+          this.el
+        )
+      ) {
+        return false;
+      }
+
+
+      this.screenPointWorld =
+        intersection.point.clone();
+
+
+      this.screenNormalWorld =
+        this.getWorldNormal(
+          intersection
+        );
+
+
+      this.createGlowLight();
+
+      this.positionGlowLight();
+
+
       /*
-        Fallback when the screen was automatically discovered
-        by its Blender mesh/material name.
+        Tell audio.js where the TV is,
+        so TV static volume follows
+        distance correctly.
       */
 
-      const cameraEl = document.querySelector('#cam');
-
-      if (cameraEl) {
-        const cameraWorld = new THREE.Vector3();
-
-        cameraEl.object3D.getWorldPosition(
-          cameraWorld
+      if (
+        window.setRoomsTVPosition
+      ) {
+        window.setRoomsTVPosition(
+          this.screenPointWorld
         );
-
-        forward
-          .subVectors(cameraWorld, worldPoint)
-          .normalize();
-      } else {
-        forward.set(0, 0, 1);
       }
-    }
 
-    /* --------------------------------------------------
-       MOVE SOURCE OUT IN FRONT OF THE CRT
-    -------------------------------------------------- */
 
-    const lightWorld =
-      worldPoint
-        .clone()
-        .addScaledVector(
-          forward,
-          0.20
+      console.log(
+        'TV screen position learned.'
+      );
+
+
+      return true;
+    },
+
+
+    /* ========================================================
+       CREATE TV GLOW
+
+       IMPORTANT:
+       This creates ONLY a light.
+
+       No large white plane.
+       No replacement geometry.
+       No changing livingasset.glb material.
+    ======================================================== */
+
+    createGlowLight: function () {
+      if (
+        this.glowLight
+      ) {
+        return;
+      }
+
+
+      const light =
+        document.createElement(
+          'a-entity'
         );
 
-    /*
-      Tiny upward shift prevents the cabinet surface directly
-      below the CRT from becoming the brightest object.
-    */
 
-    lightWorld.y += 0.025;
+      light.setAttribute(
+        'id',
+        'tvGlowLight'
+      );
 
-    /* --------------------------------------------------
-       CREATE SOFT POINT LIGHT
-    -------------------------------------------------- */
-
-    if (!this.glowLight) {
-      const light = document.createElement('a-entity');
-
-      light.setAttribute('id', 'tvGlowLight');
 
       light.setAttribute(
         'light',
@@ -1428,382 +1809,1817 @@ AFRAME.registerComponent('embedded-tv', {
         `
       );
 
-      this.el.appendChild(light);
-      this.glowLight = light;
-    }
 
-    /* --------------------------------------------------
-       WORLD → livingasset LOCAL SPACE
-    -------------------------------------------------- */
+      this.el.sceneEl
+        .appendChild(
+          light
+        );
 
-    this.el.object3D.updateMatrixWorld(true);
 
-    const localLight =
-      this.el.object3D.worldToLocal(
-        lightWorld.clone()
+      this.glowLight =
+        light;
+    },
+
+
+    /* ========================================================
+       PUT LIGHT IN FRONT OF TV
+
+       The old light could sit too close
+       to / inside the wall.
+
+       We push this one outward toward
+       the player.
+    ======================================================== */
+
+    positionGlowLight: function () {
+      if (
+        !this.glowLight ||
+        !this.screenPointWorld ||
+        !this.screenNormalWorld
+      ) {
+        return;
+      }
+
+
+      const world =
+        this.screenPointWorld
+          .clone()
+          .addScaledVector(
+            this.screenNormalWorld,
+            0.28
+          );
+
+
+      /*
+        Slight upward adjustment so the
+        glow comes roughly from the CRT
+        center.
+      */
+
+      world.y += 0.03;
+
+
+      this.el.sceneEl
+        .object3D
+        .updateMatrixWorld(
+          true
+        );
+
+
+      const local =
+        this.el.sceneEl
+          .object3D
+          .worldToLocal(
+            world.clone()
+          );
+
+
+      this.glowLight
+        .object3D
+        .position
+        .copy(
+          local
+        );
+    },
+
+
+    /* ========================================================
+       TURN TV ON / OFF
+    ======================================================== */
+
+    setState: function (
+      on
+    ) {
+      /*
+        Don't turn on until we know
+        where the screen actually is.
+      */
+
+      if (
+        !this.screenPointWorld
+      ) {
+        return false;
+      }
+
+
+      this.isOn =
+        Boolean(
+          on
+        );
+
+
+      if (
+        this.glowLight
+      ) {
+        this.glowLight.setAttribute(
+          'light',
+          'intensity',
+          this.isOn
+            ? this.data.lightIntensity
+            : 0
+        );
+      }
+
+
+      /*
+        Tell audio.js whether
+        TV static should play.
+      */
+
+      if (
+        window.setRoomsTVState
+      ) {
+        window.setRoomsTVState(
+          this.isOn
+        );
+      }
+
+
+      /*
+        story.js listens for this.
+      */
+
+      this.el.emit(
+        'tv-state-changed',
+        {
+          isOn:
+            this.isOn
+        },
+        false
       );
 
-    this.glowLight.object3D.position.copy(
-      localLight
-    );
 
-    console.log(
-      'TV point light moved in front of CRT:',
-      lightWorld
-        .toArray()
-        .map((value) => value.toFixed(2))
-    );
-  },
+      console.log(
+        this.isOn
+          ? 'TV ON'
+          : 'TV OFF'
+      );
 
 
-  toggle: function () {
-    this.setState(!this.isOn);
-  },
+      return true;
+    },
 
 
-  setState: function (shouldBeOn) {
-    if (!this.screenMaterial) {
-      return false;
-    }
+    /* ========================================================
+       TOGGLE
+    ======================================================== */
 
-    this.isOn = Boolean(shouldBeOn);
-
-    this.applyVisualState();
-
-    if (window.setRoomsTVState) {
-      window.setRoomsTVState(this.isOn);
-    }
-
-    this.el.emit(
-      'tv-state-changed',
-      {
-        isOn: this.isOn
-      },
-      false
-    );
-
-    console.log(
-      this.isOn
-        ? 'TV turned ON.'
-        : 'TV turned OFF.'
-    );
-
-    return true;
-  },
+    toggle: function () {
+      return this.setState(
+        !this.isOn
+      );
+    },
 
 
-  applyVisualState: function () {
-    const material = this.screenMaterial;
+    /* ========================================================
+       CLICK / QUEST INTERSECTION
+    ======================================================== */
 
-    if (!material) {
-      return;
-    }
-
-    if (this.isOn) {
-      if (
-        material.emissive &&
-        material.emissive.set
+    toggleFromIntersection:
+      function (
+        intersection
       ) {
-        material.emissive.set(
-          this.data.glowColor
-        );
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return false;
+        }
+
 
         if (
-          typeof material.emissiveIntensity === 'number'
+          !intersection ||
+          !intersection.object ||
+          !intersection.point
         ) {
-          material.emissiveIntensity = 2.0;
+          return false;
         }
-      }
-
-      if (
-        material.color &&
-        material.color.set
-      ) {
-        material.color.set(
-          this.data.screenColor
-        );
-      }
-
-      if (this.glowLight) {
-        this.glowLight.setAttribute(
-          'light',
-          'intensity',
-          this.data.lightIntensity
-        );
-      }
-    } else {
-      if (
-        this.originalColor &&
-        material.color &&
-        material.color.copy
-      ) {
-        material.color.copy(
-          this.originalColor
-        );
-      }
-
-      if (
-        this.originalEmissive &&
-        material.emissive &&
-        material.emissive.copy
-      ) {
-        material.emissive.copy(
-          this.originalEmissive
-        );
-      }
-
-      if (
-        typeof material.emissiveIntensity === 'number'
-      ) {
-        material.emissiveIntensity =
-          this.originalEmissiveIntensity;
-      }
-
-      if (this.glowLight) {
-        this.glowLight.setAttribute(
-          'light',
-          'intensity',
-          0
-        );
-      }
-    }
-
-    material.needsUpdate = true;
-  },
 
 
-  tick: function (time) {
-    if (
-      roomsGameplayInputLocked() ||
-      !this.isOn ||
-      !this.screenMaterial
+        if (
+          !objectBelongsToEntity(
+            intersection.object,
+            this.el
+          )
+        ) {
+          return false;
+        }
+
+
+        /*
+          First click learns the CRT
+          screen position and turns TV on.
+        */
+
+        if (
+          !this.screenPointWorld
+        ) {
+          if (
+            !this.learnScreen(
+              intersection
+            )
+          ) {
+            return false;
+          }
+
+
+          return this.setState(
+            true
+          );
+        }
+
+
+        /*
+          Update the position slightly
+          using the current click point.
+          This keeps the glow attached
+          to the actual TV area.
+        */
+
+        const distance =
+          intersection.point
+            .distanceTo(
+              this.screenPointWorld
+            );
+
+
+        /*
+          Do not allow clicks from a
+          completely different part of
+          livingasset.glb to control TV.
+        */
+
+        if (
+          distance >
+          0.75
+        ) {
+          return false;
+        }
+
+
+        return this.toggle();
+      },
+
+
+    /* ========================================================
+       DESKTOP CLICK
+    ======================================================== */
+
+    onDesktopClick: function (
+      event
     ) {
-      return;
-    }
+      if (
+        roomsGameplayInputLocked()
+      ) {
+        return;
+      }
 
-    if (
-      time - this.lastFlickerTime <
-      this.data.flickerInterval
-    ) {
-      return;
-    }
 
-    this.lastFlickerTime = time;
+      /*
+        Quest uses vr-tv-interactor.
+        Do not fire desktop click logic
+        inside real immersive VR.
+      */
 
-    const brightness =
-      this.data.flickerMin +
-      Math.random() *
-      (
-        this.data.flickerMax -
-        this.data.flickerMin
+      if (
+        isImmersiveXRScene(
+          this.el.sceneEl
+        )
+      ) {
+        return;
+      }
+
+
+      const intersection =
+        event &&
+        event.detail &&
+        event.detail.intersection
+
+          ? event.detail
+              .intersection
+
+          : null;
+
+
+      if (
+        !intersection
+      ) {
+        return;
+      }
+
+
+      if (
+        !objectBelongsToEntity(
+          intersection.object,
+          this.el
+        )
+      ) {
+        return;
+      }
+
+
+      if (
+        event.stopPropagation
+      ) {
+        event.stopPropagation();
+      }
+
+
+      this.toggleFromIntersection(
+        intersection
       );
+    },
 
-    const material = this.screenMaterial;
 
-    if (
-      material.emissive &&
-      typeof material.emissiveIntensity === 'number'
+    /* ========================================================
+       SMALL CRT LIGHT FLICKER
+    ======================================================== */
+
+    tick: function (
+      time
     ) {
-      material.emissiveIntensity = brightness;
-    }
+      if (
+        this.componentPaused ||
+        roomsGameplayInputLocked() ||
+        !this.isOn ||
+        !this.glowLight
+      ) {
+        return;
+      }
 
-    if (this.glowLight) {
-      const roomBrightness =
-        this.data.lightIntensity *
-        (
-          0.78 +
-          Math.random() * 0.32
-        );
+
+      if (
+        time -
+        this.lastFlickerUpdate <
+        this.data.flickerInterval
+      ) {
+        return;
+      }
+
+
+      this.lastFlickerUpdate =
+        time;
+
+
+      /*
+        Very small brightness variation.
+        Enough to feel like CRT light,
+        but not enough to create giant
+        flashing wall patches.
+      */
+
+      const brightness =
+        0.88 +
+        Math.random() *
+        0.12;
+
 
       this.glowLight.setAttribute(
         'light',
         'intensity',
-        roomBrightness
+        this.data.lightIntensity *
+        brightness
       );
-    }
-  },
-
-
-  remove: function () {
-    this.el.removeEventListener(
-      'click',
-      this.onDesktopClick
-    );
-
-    this.el.removeEventListener(
-      'model-loaded',
-      this.onModelLoaded
-    );
-  }
-});
-
-
-/* ============================================================
-   QUEST REAL TV INTERACTION
-============================================================ */
-
-AFRAME.registerComponent('vr-tv-interactor', {
-  schema: {
-    pressThreshold: {
-      default: 0.65
     },
 
-    releaseThreshold: {
-      default: 0.2
+
+    /* ========================================================
+       PAUSE
+    ======================================================== */
+
+    pause: function () {
+      this.componentPaused =
+        true;
+    },
+
+
+    /* ========================================================
+       RESUME
+    ======================================================== */
+
+    play: function () {
+      this.componentPaused =
+        false;
+    },
+
+
+    /* ========================================================
+       CLEANUP
+    ======================================================== */
+
+    remove: function () {
+      this.el.removeEventListener(
+        'model-loaded',
+        this.onModelLoaded
+      );
+
+
+      this.el.removeEventListener(
+        'click',
+        this.onDesktopClick
+      );
+
+
+      if (
+        this.glowLight &&
+        this.glowLight.parentNode
+      ) {
+        this.glowLight
+          .parentNode
+          .removeChild(
+            this.glowLight
+          );
+      }
+
+
+      this.glowLight =
+        null;
+
+
+      this.screenPointWorld =
+        null;
+
+
+      this.screenNormalWorld =
+        null;
     }
-  },
-
-
-  init: function () {
-    this.triggerHeld = false;
-
-    this.pressTrigger = this.pressTrigger.bind(this);
-    this.releaseTrigger = this.releaseTrigger.bind(this);
-    this.onTriggerChanged = this.onTriggerChanged.bind(this);
-
-    this.el.addEventListener(
-      'triggerdown',
-      this.pressTrigger
-    );
-
-    this.el.addEventListener(
-      'triggerup',
-      this.releaseTrigger
-    );
-
-    this.el.addEventListener(
-      'triggerchanged',
-      this.onTriggerChanged
-    );
-
-    this.el.addEventListener(
-      'controllerdisconnected',
-      this.releaseTrigger
-    );
-  },
-
-
-  pressTrigger: function () {
-    if (
-      this.triggerHeld ||
-      roomsGameplayInputLocked()
-    ) {
-      return;
-    }
-
-    this.triggerHeld = true;
-    this.useTV();
-  },
-
-
-  releaseTrigger: function () {
-    this.triggerHeld = false;
-  },
-
-
-  onTriggerChanged: function (event) {
-    const value =
-      event &&
-      event.detail &&
-      typeof event.detail.value === 'number'
-        ? event.detail.value
-        : null;
-
-    if (value === null) {
-      return;
-    }
-
-    if (
-      value >= this.data.pressThreshold &&
-      !this.triggerHeld
-    ) {
-      this.pressTrigger();
-    } else if (
-      value <= this.data.releaseThreshold
-    ) {
-      this.releaseTrigger();
-    }
-  },
-
-
-  useTV: function () {
-    if (roomsGameplayInputLocked()) {
-      return;
-    }
-
-    const living = document.querySelector('#living');
-
-    if (!living) {
-      return;
-    }
-
-    const television =
-      living.components['embedded-tv'];
-
-    const raycaster = this.el.components.raycaster;
-
-    if (!television || !raycaster) {
-      return;
-    }
-
-    if (raycaster.refreshObjects) {
-      raycaster.refreshObjects();
-    }
-
-    const intersections = raycaster.intersections || [];
-
-    if (!intersections.length) {
-      return;
-    }
-
-    const closest = intersections[0];
-
-    if (
-      !objectBelongsToEntity(
-        closest.object,
-        living
-      )
-    ) {
-      return;
-    }
-
-    television.toggleFromIntersection(closest);
   }
-});
+);
 
 
 /* ============================================================
-   AUTOMATIC REAL TV SETUP
+   QUEST TV INTERACTION
 ============================================================ */
 
-function setupRoomsTV() {
-  const living = document.querySelector('#living');
-  const cursor = document.querySelector('a-cursor');
-  const rightHand = document.querySelector('#rightHand');
+AFRAME.registerComponent(
+  'vr-tv-interactor',
+  {
+    schema: {
+      pressThreshold: {
+        default: 0.65
+      },
 
-  if (!living) {
+      releaseThreshold: {
+        default: 0.2
+      }
+    },
+
+
+    init: function () {
+      this.triggerHeld =
+        false;
+
+
+      this.pressTrigger =
+        this.pressTrigger
+          .bind(this);
+
+
+      this.releaseTrigger =
+        this.releaseTrigger
+          .bind(this);
+
+
+      this.onTriggerChanged =
+        this.onTriggerChanged
+          .bind(this);
+
+
+      this.el.addEventListener(
+        'triggerdown',
+        this.pressTrigger
+      );
+
+
+      this.el.addEventListener(
+        'triggerup',
+        this.releaseTrigger
+      );
+
+
+      this.el.addEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    },
+
+
+    pressTrigger:
+      function () {
+        if (
+          this.triggerHeld ||
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
+
+
+        this.triggerHeld =
+          true;
+
+
+        this.useTV();
+      },
+
+
+    releaseTrigger:
+      function () {
+        this.triggerHeld =
+          false;
+      },
+
+
+    onTriggerChanged:
+      function (event) {
+        const value =
+          event &&
+          event.detail &&
+          typeof event
+            .detail.value ===
+            'number'
+            ? event.detail.value
+            : null;
+
+
+        if (
+          value === null
+        ) {
+          return;
+        }
+
+
+        if (
+          value >=
+            this.data
+              .pressThreshold &&
+          !this.triggerHeld
+        ) {
+          this.pressTrigger();
+        } else if (
+          value <=
+            this.data
+              .releaseThreshold
+        ) {
+          this.releaseTrigger();
+        }
+      },
+
+
+    useTV:
+      function () {
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
+
+
+        const living =
+          document.querySelector(
+            '#living'
+          );
+
+
+        const raycaster =
+          this.el.components
+            .raycaster;
+
+
+        if (
+          !living ||
+          !raycaster
+        ) {
+          return;
+        }
+
+
+        const component =
+          living.components[
+            'embedded-tv'
+          ];
+
+
+        if (!component) {
+          return;
+        }
+
+
+        if (
+          raycaster.refreshObjects
+        ) {
+          raycaster
+            .refreshObjects();
+        }
+
+
+        /*
+          Ask for the living-room entity directly so another
+          nearby object cannot steal the TV trigger press.
+        */
+
+        const hit =
+          raycaster.getIntersection
+            ? raycaster
+                .getIntersection(
+                  living
+                )
+            : getClosestRayIntersection(
+                raycaster
+              );
+
+
+        if (
+          !hit ||
+          !objectBelongsToEntity(
+            hit.object,
+            living
+          )
+        ) {
+          return;
+        }
+
+
+        component
+          .toggleFromIntersection(
+            hit
+          );
+      },
+
+
+    remove: function () {
+      this.el
+        .removeEventListener(
+          'triggerdown',
+          this.pressTrigger
+        );
+
+
+      this.el
+        .removeEventListener(
+          'triggerup',
+          this.releaseTrigger
+        );
+
+
+      this.el
+        .removeEventListener(
+          'triggerchanged',
+          this.onTriggerChanged
+        );
+
+
+      this.el
+        .removeEventListener(
+          'controllerdisconnected',
+          this.releaseTrigger
+        );
+    }
+  }
+);
+
+
+/* ============================================================
+   NATURAL GRABBABLE
+============================================================ */
+
+AFRAME.registerComponent(
+  'natural-grabbable',
+  {
+    schema: {
+      gravity: {
+        default: -9.8
+      },
+
+      floorY: {
+        default: 0.015
+      },
+
+      throwMultiplier: {
+        default: 1
+      },
+
+      maxThrowSpeed: {
+        default: 6
+      }
+    },
+
+
+    init: function () {
+      this.heldBy =
+        null;
+
+
+      this.velocity =
+        new THREE.Vector3();
+
+
+      this.isMoving =
+        false;
+
+
+      this.lastSurfaceCheck =
+        0;
+
+
+      this.dropRay =
+        new THREE.Raycaster();
+
+
+      this.cachedRoomMeshes =
+        [];
+
+
+      this.roomMeshCacheTime =
+        0;
+
+
+      this.onDesktopClick =
+        this.onDesktopClick
+          .bind(this);
+
+
+      this.el.addEventListener(
+        'click',
+        this.onDesktopClick
+      );
+    },
+
+
+    onDesktopClick:
+      function () {
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(
+            this.el.sceneEl
+          )
+        ) {
+          return;
+        }
+
+
+        const hold =
+          document.querySelector(
+            '#desktopHold'
+          );
+
+
+        if (!hold) {
+          return;
+        }
+
+
+        if (
+          this.heldBy
+        ) {
+          this.release(
+            new THREE.Vector3()
+          );
+        } else {
+          this.grab(
+            hold
+          );
+        }
+      },
+
+
+    getWorldBox:
+      function () {
+        const object =
+          this.el.getObject3D(
+            'mesh'
+          ) ||
+          this.el.object3D;
+
+
+        object
+          .updateMatrixWorld(
+            true
+          );
+
+
+        return new THREE.Box3()
+          .setFromObject(
+            object
+          );
+      },
+
+
+    distanceToPoint:
+      function (point) {
+        const box =
+          this.getWorldBox();
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return Infinity;
+        }
+
+
+        const closest =
+          point
+            .clone()
+            .clamp(
+              box.min,
+              box.max
+            );
+
+
+        return closest
+          .distanceTo(
+            point
+          );
+      },
+
+
+    reparentPreserveWorld:
+      function (
+        parentObject3D
+      ) {
+        parentObject3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        parentObject3D
+          .attach(
+            this.el.object3D
+          );
+      },
+
+
+    grab: function (
+      handEntity
+    ) {
+      if (
+        roomsGameplayInputLocked() ||
+        this.heldBy ||
+        !handEntity
+      ) {
+        return false;
+      }
+
+
+      this.isMoving =
+        false;
+
+
+      this.velocity.set(
+        0,
+        0,
+        0
+      );
+
+
+      this.heldBy =
+        handEntity;
+
+
+      this.reparentPreserveWorld(
+        handEntity.object3D
+      );
+
+
+      this.el.addState(
+        'grabbed'
+      );
+
+
+      return true;
+    },
+
+
+    release: function (
+      velocity
+    ) {
+      if (!this.heldBy) {
+        return;
+      }
+
+
+      const scene =
+        this.el.sceneEl;
+
+
+      this.reparentPreserveWorld(
+        scene.object3D
+      );
+
+
+      this.heldBy =
+        null;
+
+
+      this.el.removeState(
+        'grabbed'
+      );
+
+
+      this.velocity.copy(
+        velocity ||
+        new THREE.Vector3()
+      );
+
+
+      this.velocity
+        .multiplyScalar(
+          this.data
+            .throwMultiplier
+        );
+
+
+      this.velocity
+        .clampLength(
+          0,
+
+          this.data
+            .maxThrowSpeed
+        );
+
+
+      if (
+        this.velocity.length() <
+        0.22
+      ) {
+        this.isMoving =
+          !this
+            .settleOnSurface(
+              0.45
+            );
+      } else {
+        this.isMoving =
+          true;
+      }
+    },
+
+
+    getRoomMeshes:
+      function () {
+        const now =
+          performance.now();
+
+
+        if (
+          this.cachedRoomMeshes
+            .length &&
+
+          now -
+            this.roomMeshCacheTime <
+            5000
+        ) {
+          return this
+            .cachedRoomMeshes;
+        }
+
+
+        const meshes =
+          [];
+
+
+        this.el.sceneEl
+          .querySelectorAll(
+            '.roompart'
+          )
+          .forEach(
+            (entity) => {
+              const root =
+                entity
+                  .getObject3D(
+                    'mesh'
+                  );
+
+
+              if (!root) {
+                return;
+              }
+
+
+              root.traverse(
+                (node) => {
+                  if (
+                    node.isMesh
+                  ) {
+                    meshes.push(
+                      node
+                    );
+                  }
+                }
+              );
+            }
+          );
+
+
+        this.cachedRoomMeshes =
+          meshes;
+
+
+        this.roomMeshCacheTime =
+          now;
+
+
+        return meshes;
+      },
+
+
+    settleOnSurface:
+      function (
+        maxDistance
+      ) {
+        const meshes =
+          this.getRoomMeshes();
+
+
+        if (
+          !meshes.length
+        ) {
+          return false;
+        }
+
+
+        const box =
+          this.getWorldBox();
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return false;
+        }
+
+
+        const center =
+          box.getCenter(
+            new THREE.Vector3()
+          );
+
+
+        const origin =
+          new THREE.Vector3(
+            center.x,
+
+            box.min.y +
+              0.08,
+
+            center.z
+          );
+
+
+        this.dropRay.set(
+          origin,
+
+          new THREE.Vector3(
+            0,
+            -1,
+            0
+          )
+        );
+
+
+        this.dropRay.far =
+          maxDistance +
+          0.08;
+
+
+        const hits =
+          this.dropRay
+            .intersectObjects(
+              meshes,
+              true
+            );
+
+
+        const hit =
+          hits.find(
+            (candidate) =>
+              !objectBelongsToEntity(
+                candidate.object,
+                this.el
+              )
+          );
+
+
+        if (!hit) {
+          return false;
+        }
+
+
+        const gap =
+          box.min.y -
+          hit.point.y;
+
+
+        if (
+          gap < -0.03 ||
+          gap >
+            maxDistance
+        ) {
+          return false;
+        }
+
+
+        this.el.object3D
+          .position.y +=
+          hit.point.y -
+          box.min.y +
+          0.012;
+
+
+        this.velocity.set(
+          0,
+          0,
+          0
+        );
+
+
+        return true;
+      },
+
+
+    tick: function (
+      time,
+      deltaTime
+    ) {
+      if (
+        roomsGameplayInputLocked() ||
+        this.heldBy ||
+        !this.isMoving ||
+        !deltaTime
+      ) {
+        return;
+      }
+
+
+      const dt =
+        Math.min(
+          deltaTime /
+            1000,
+
+          0.04
+        );
+
+
+      this.velocity.y +=
+        this.data.gravity *
+        dt;
+
+
+      this.el.object3D
+        .position
+        .addScaledVector(
+          this.velocity,
+          dt
+        );
+
+
+      const damping =
+        Math.pow(
+          0.985,
+          dt * 60
+        );
+
+
+      this.velocity.x *=
+        damping;
+
+
+      this.velocity.z *=
+        damping;
+
+
+      const box =
+        this.getWorldBox();
+
+
+      if (
+        !box.isEmpty()
+      ) {
+        const penetration =
+          this.data.floorY -
+          box.min.y;
+
+
+        if (
+          penetration > 0
+        ) {
+          this.el.object3D
+            .position.y +=
+            penetration;
+
+
+          if (
+            Math.abs(
+              this.velocity.y
+            ) > 0.8
+          ) {
+            this.velocity.y *=
+              -0.12;
+
+
+            this.velocity.x *=
+              0.72;
+
+
+            this.velocity.z *=
+              0.72;
+          } else {
+            this.velocity.set(
+              0,
+              0,
+              0
+            );
+
+
+            this.isMoving =
+              false;
+          }
+        }
+      }
+
+
+      if (
+        this.isMoving &&
+        this.velocity.y <= 0 &&
+        time -
+          this.lastSurfaceCheck >
+          130
+      ) {
+        this.lastSurfaceCheck =
+          time;
+
+
+        if (
+          this.settleOnSurface(
+            0.12
+          )
+        ) {
+          this.isMoving =
+            false;
+        }
+      }
+    },
+
+
+    remove: function () {
+      this.el
+        .removeEventListener(
+          'click',
+          this.onDesktopClick
+        );
+    }
+  }
+);
+
+
+/* ============================================================
+   QUEST NATURAL GRAB HAND
+============================================================ */
+
+AFRAME.registerComponent(
+  'natural-grab-hand',
+  {
+    schema: {
+      radius: {
+        default: 0.4
+      },
+
+      velocitySmoothing: {
+        default: 0.35
+      },
+
+      gripThreshold: {
+        default: 0.5
+      }
+    },
+
+
+    init: function () {
+      this.heldItem =
+        null;
+
+
+      this.gripHeld =
+        false;
+
+
+      this.previousPosition =
+        new THREE.Vector3();
+
+
+      this.currentPosition =
+        new THREE.Vector3();
+
+
+      this.instantVelocity =
+        new THREE.Vector3();
+
+
+      this.smoothedVelocity =
+        new THREE.Vector3();
+
+
+      this.hasPreviousPosition =
+        false;
+
+
+      this.beginGrip =
+        this.beginGrip
+          .bind(this);
+
+
+      this.endGrip =
+        this.endGrip
+          .bind(this);
+
+
+      this.onGripChanged =
+        this.onGripChanged
+          .bind(this);
+
+
+      [
+        'gripdown',
+        'squeezestart',
+        'abuttondown',
+        'xbuttondown'
+      ].forEach(
+        (name) =>
+          this.el
+            .addEventListener(
+              name,
+              this.beginGrip
+            )
+      );
+
+
+      [
+        'gripup',
+        'squeezeend',
+        'abuttonup',
+        'xbuttonup',
+        'controllerdisconnected'
+      ].forEach(
+        (name) =>
+          this.el
+            .addEventListener(
+              name,
+              this.endGrip
+            )
+      );
+
+
+      this.el.addEventListener(
+        'gripchanged',
+        this.onGripChanged
+      );
+    },
+
+
+    onGripChanged:
+      function (event) {
+        const value =
+          event &&
+          event.detail &&
+          typeof event.detail
+            .value ===
+            'number'
+            ? event.detail
+                .value
+            : null;
+
+
+        if (
+          value === null
+        ) {
+          return;
+        }
+
+
+        if (
+          value >=
+            this.data
+              .gripThreshold
+        ) {
+          this.beginGrip();
+        } else if (
+          value <=
+          0.2
+        ) {
+          this.endGrip();
+        }
+      },
+
+
+    beginGrip:
+      function () {
+        if (
+          roomsGameplayInputLocked() ||
+          this.gripHeld
+        ) {
+          return;
+        }
+
+
+        this.gripHeld =
+          true;
+
+
+        this.grabNearest();
+      },
+
+
+    endGrip:
+      function () {
+        if (
+          !this.gripHeld &&
+          !this.heldItem
+        ) {
+          return;
+        }
+
+
+        this.gripHeld =
+          false;
+
+
+        this.releaseHeld();
+      },
+
+
+    findNearest:
+      function () {
+        const handPosition =
+          new THREE.Vector3();
+
+
+        this.el.object3D
+          .getWorldPosition(
+            handPosition
+          );
+
+
+        let nearest =
+          null;
+
+
+        let nearestDistance =
+          Infinity;
+
+
+        this.el.sceneEl
+          .querySelectorAll(
+            '[natural-grabbable]'
+          )
+          .forEach(
+            (entity) => {
+              const component =
+                entity.components[
+                  'natural-grabbable'
+                ];
+
+
+              if (
+                !component ||
+                component.heldBy
+              ) {
+                return;
+              }
+
+
+              const distance =
+                component
+                  .distanceToPoint(
+                    handPosition
+                  );
+
+
+              if (
+                distance <
+                nearestDistance
+              ) {
+                nearest =
+                  component;
+
+
+                nearestDistance =
+                  distance;
+              }
+            }
+          );
+
+
+        return {
+          nearest,
+          nearestDistance
+        };
+      },
+
+
+    grabNearest:
+      function () {
+        if (
+          roomsGameplayInputLocked() ||
+          this.heldItem
+        ) {
+          return;
+        }
+
+
+        const result =
+          this.findNearest();
+
+
+        if (
+          !result.nearest ||
+          result.nearestDistance >
+            this.data.radius
+        ) {
+          return;
+        }
+
+
+        if (
+          result.nearest.grab(
+            this.el
+          )
+        ) {
+          this.heldItem =
+            result.nearest;
+        }
+      },
+
+
+    releaseHeld:
+      function () {
+        if (
+          !this.heldItem
+        ) {
+          return;
+        }
+
+
+        const item =
+          this.heldItem;
+
+
+        this.heldItem =
+          null;
+
+
+        item.release(
+          roomsGameplayInputLocked()
+            ? new THREE.Vector3()
+            : this.smoothedVelocity
+                .clone()
+        );
+      },
+
+
+    tick: function (
+      time,
+      deltaTime
+    ) {
+      if (!deltaTime) {
+        return;
+      }
+
+
+      this.el.object3D
+        .getWorldPosition(
+          this.currentPosition
+        );
+
+
+      if (
+        !this
+          .hasPreviousPosition
+      ) {
+        this.previousPosition
+          .copy(
+            this.currentPosition
+          );
+
+
+        this.hasPreviousPosition =
+          true;
+
+
+        return;
+      }
+
+
+      const seconds =
+        deltaTime /
+        1000;
+
+
+      if (
+        seconds > 0
+      ) {
+        this.instantVelocity
+          .subVectors(
+            this.currentPosition,
+            this.previousPosition
+          )
+          .divideScalar(
+            seconds
+          );
+
+
+        this.smoothedVelocity
+          .lerp(
+            this.instantVelocity,
+
+            this.data
+              .velocitySmoothing
+          );
+
+
+        this.previousPosition
+          .copy(
+            this.currentPosition
+          );
+      }
+    },
+
+
+    remove: function () {
+      [
+        'gripdown',
+        'squeezestart',
+        'abuttondown',
+        'xbuttondown'
+      ].forEach(
+        (name) =>
+          this.el
+            .removeEventListener(
+              name,
+              this.beginGrip
+            )
+      );
+
+
+      [
+        'gripup',
+        'squeezeend',
+        'abuttonup',
+        'xbuttonup',
+        'controllerdisconnected'
+      ].forEach(
+        (name) =>
+          this.el
+            .removeEventListener(
+              name,
+              this.endGrip
+            )
+      );
+
+
+      this.el
+        .removeEventListener(
+          'gripchanged',
+          this.onGripChanged
+        );
+
+
+      /*
+        If the component is removed while holding an object,
+        put the object back into scene space without throwing it.
+      */
+
+      if (
+        this.heldItem
+      ) {
+        const item =
+          this.heldItem;
+
+
+        this.heldItem =
+          null;
+
+
+        this.gripHeld =
+          false;
+
+
+        item.release(
+          new THREE.Vector3()
+        );
+      }
+    }
+  }
+);
+
+
+/* ============================================================
+   AUTOMATIC SETUP
+============================================================ */
+
+function setupRoomsInteractions() {
+  const scene =
+    document.querySelector(
+      'a-scene'
+    );
+
+
+  const door =
+    document.querySelector(
+      '#door'
+    );
+
+
+  const living =
+    document.querySelector(
+      '#living'
+    );
+
+
+  const cursor =
+    document.querySelector(
+      'a-cursor'
+    );
+
+
+  const rightHand =
+    document.querySelector(
+      '#rightHand'
+    );
+
+
+  if (!scene) {
     return;
   }
 
-  living.classList.add('tv-interactable');
 
-  if (!living.hasAttribute('embedded-tv')) {
-    living.setAttribute('embedded-tv', '');
+  /* ----------------------------------------------------------
+     AUTOMATIC DOOR
+  ---------------------------------------------------------- */
+
+  if (door) {
+    if (
+      !door.hasAttribute(
+        'auto-door-proximity'
+      )
+    ) {
+      door.setAttribute(
+        'auto-door-proximity',
+
+        `
+          openDistance: 1.25;
+          closeDistance: 1.75;
+          interval: 120
+        `
+      );
+    }
   }
 
-  appendRaycasterObjectSelector(
-    cursor,
-    '.tv-interactable'
-  );
 
-  appendRaycasterObjectSelector(
-    rightHand,
-    '.tv-interactable'
-  );
+  /* ----------------------------------------------------------
+     EMBEDDED CRT TV
+  ---------------------------------------------------------- */
+
+  if (living) {
+    living.classList.add(
+      'tv-interactable'
+    );
+
+
+    if (
+      !living.hasAttribute(
+        'embedded-tv'
+      )
+    ) {
+      living.setAttribute(
+        'embedded-tv',
+        ''
+      );
+    }
+
+
+    appendRaycasterObjectSelector(
+      cursor,
+      '.tv-interactable'
+    );
+
+
+    appendRaycasterObjectSelector(
+      rightHand,
+      '.tv-interactable'
+    );
+  }
+
 
   if (
     rightHand &&
-    !rightHand.hasAttribute('vr-tv-interactor')
+    !rightHand.hasAttribute(
+      'vr-tv-interactor'
+    )
   ) {
     rightHand.setAttribute(
       'vr-tv-interactor',
@@ -1811,27 +3627,180 @@ function setupRoomsTV() {
     );
   }
 
+
   console.log(
-    'Real embedded CRT TV interaction ready.'
+    'Rooms interactions ready: automatic door + TV + grabbing.'
   );
 }
 
 
+/* ============================================================
+   INTERACTION DEBUG
+
+   Browser console:
+
+   getRoomsInteractionDebug()
+
+   Useful before the presentation to check whether the systems
+   actually initialized.
+============================================================ */
+
+function getRoomsInteractionDebug() {
+  const scene =
+    document.querySelector(
+      'a-scene'
+    );
+
+
+  const door =
+    document.querySelector(
+      '#door'
+    );
+
+
+  const living =
+    document.querySelector(
+      '#living'
+    );
+
+
+  const doorComponent =
+    door &&
+    door.components
+      ? door.components[
+          'door-hinge'
+        ]
+      : null;
+
+
+  const autoDoor =
+    door &&
+    door.components
+      ? door.components[
+          'auto-door-proximity'
+        ]
+      : null;
+
+
+  const tv =
+    living &&
+    living.components
+      ? living.components[
+          'embedded-tv'
+        ]
+      : null;
+
+
+  const doorStates =
+    [];
+
+
+  if (
+    doorComponent
+  ) {
+    doorComponent
+      .partStates
+      .forEach(
+        (state) => {
+          doorStates.push({
+            isOpen:
+              Boolean(
+                state.isOpen
+              ),
+
+            animating:
+              Boolean(
+                state.animating
+              ),
+
+            angleDegrees:
+              Number(
+                THREE.MathUtils
+                  .radToDeg(
+                    state
+                      .currentAngle
+                  )
+                  .toFixed(1)
+              )
+          });
+        }
+      );
+  }
+
+
+  return {
+    immersiveXR:
+      isImmersiveXRScene(
+        scene
+      ),
+
+    inputLocked:
+      roomsGameplayInputLocked(),
+
+    automaticDoorReady:
+      Boolean(
+        autoDoor
+      ),
+
+    doorParts:
+      doorComponent
+        ? doorComponent
+            .parts.length
+        : 0,
+
+    doorStates,
+
+    tvReady:
+      Boolean(tv),
+
+    tvOn:
+      Boolean(
+        tv &&
+        tv.isOn
+      ),
+
+    grabbableCount:
+      document
+        .querySelectorAll(
+          '[natural-grabbable]'
+        )
+        .length
+  };
+}
+
+
+window.getRoomsInteractionDebug =
+  getRoomsInteractionDebug;
+
+
+/* ============================================================
+   STARTUP
+============================================================ */
+
 window.addEventListener(
   'DOMContentLoaded',
+
   () => {
-    const scene = document.querySelector('a-scene');
+    const scene =
+      document.querySelector(
+        'a-scene'
+      );
+
 
     if (!scene) {
       return;
     }
 
-    if (scene.hasLoaded) {
-      setupRoomsTV();
+
+    if (
+      scene.hasLoaded
+    ) {
+      setupRoomsInteractions();
     } else {
       scene.addEventListener(
         'loaded',
-        setupRoomsTV,
+        setupRoomsInteractions,
+
         {
           once: true
         }
@@ -1839,612 +3808,3 @@ window.addEventListener(
     }
   }
 );
-
-
-/* ============================================================
-   NATURAL GRABBABLE OBJECT
-============================================================ */
-
-AFRAME.registerComponent('natural-grabbable', {
-  schema: {
-    gravity: {
-      default: -9.8
-    },
-
-    floorY: {
-      default: 0.015
-    },
-
-    throwMultiplier: {
-      default: 1.0
-    },
-
-    maxThrowSpeed: {
-      default: 6
-    }
-  },
-
-
-  init: function () {
-    this.heldBy = null;
-    this.velocity = new THREE.Vector3();
-    this.isMoving = false;
-    this.lastSurfaceCheck = 0;
-    this.dropRay = new THREE.Raycaster();
-    this.dropRay.far = 2.5;
-    this.cachedRoomMeshes = [];
-    this.roomMeshCacheTime = 0;
-
-    this.el.addEventListener(
-      'click',
-      () => {
-        if (
-          roomsGameplayInputLocked() ||
-          isImmersiveXRScene(this.el.sceneEl)
-        ) {
-          return;
-        }
-
-        const desktopHold =
-          document.querySelector('#desktopHold');
-
-        if (!desktopHold) {
-          return;
-        }
-
-        if (this.heldBy) {
-          this.release(new THREE.Vector3());
-        } else {
-          this.grab(desktopHold);
-        }
-      }
-    );
-  },
-
-
-  getWorldBox: function () {
-    const model =
-      this.el.getObject3D('mesh') ||
-      this.el.object3D;
-
-    model.updateMatrixWorld(true);
-
-    return new THREE.Box3().setFromObject(model);
-  },
-
-
-  distanceToPoint: function (worldPoint) {
-    const box = this.getWorldBox();
-
-    if (box.isEmpty()) {
-      return Infinity;
-    }
-
-    const closest =
-      worldPoint
-        .clone()
-        .clamp(box.min, box.max);
-
-    return closest.distanceTo(worldPoint);
-  },
-
-
-  reparentPreserveWorld: function (newParentObject3D) {
-    newParentObject3D.updateMatrixWorld(true);
-    newParentObject3D.attach(this.el.object3D);
-  },
-
-
-  grab: function (handEntity) {
-    if (
-      roomsGameplayInputLocked() ||
-      this.heldBy
-    ) {
-      return false;
-    }
-
-    this.isMoving = false;
-    this.velocity.set(0, 0, 0);
-    this.heldBy = handEntity;
-
-    this.reparentPreserveWorld(
-      handEntity.object3D
-    );
-
-    this.el.addState('grabbed');
-
-    console.log(
-      this.el.id,
-      'grabbed by',
-      handEntity.id
-    );
-
-    return true;
-  },
-
-
-  release: function (controllerVelocity) {
-    if (!this.heldBy) {
-      return;
-    }
-
-    const scene = this.el.sceneEl;
-
-    this.reparentPreserveWorld(
-      scene.object3D
-    );
-
-    this.heldBy = null;
-    this.el.removeState('grabbed');
-
-    this.velocity.copy(
-      controllerVelocity ||
-      new THREE.Vector3()
-    );
-
-    this.velocity.multiplyScalar(
-      this.data.throwMultiplier
-    );
-
-    this.velocity.clampLength(
-      0,
-      this.data.maxThrowSpeed
-    );
-
-    if (this.velocity.length() < 0.22) {
-      const settled =
-        this.settleOnNearbySurface(0.45);
-
-      this.isMoving = !settled;
-    } else {
-      this.isMoving = true;
-    }
-  },
-
-
-  getRoomMeshes: function () {
-    const now = performance.now();
-
-    if (
-      this.cachedRoomMeshes.length &&
-      now - this.roomMeshCacheTime < 5000
-    ) {
-      return this.cachedRoomMeshes;
-    }
-
-    const meshes = [];
-
-    this.el.sceneEl
-      .querySelectorAll('.roompart')
-      .forEach((entity) => {
-        const root = entity.getObject3D('mesh');
-
-        if (!root) {
-          return;
-        }
-
-        root.updateMatrixWorld(true);
-
-        root.traverse((node) => {
-          if (node.isMesh) {
-            meshes.push(node);
-          }
-        });
-      });
-
-    this.cachedRoomMeshes = meshes;
-    this.roomMeshCacheTime = now;
-
-    return this.cachedRoomMeshes;
-  },
-
-
-  settleOnNearbySurface: function (maximumDistance) {
-    const roomMeshes = this.getRoomMeshes();
-
-    if (!roomMeshes.length) {
-      return false;
-    }
-
-    const box = this.getWorldBox();
-
-    if (box.isEmpty()) {
-      return false;
-    }
-
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-
-    const origin = new THREE.Vector3(
-      center.x,
-      box.min.y + 0.08,
-      center.z
-    );
-
-    this.dropRay.set(
-      origin,
-      new THREE.Vector3(0, -1, 0)
-    );
-
-    this.dropRay.far = maximumDistance + 0.08;
-
-    const hit =
-      this.dropRay.intersectObjects(
-        roomMeshes,
-        true
-      )[0];
-
-    if (!hit) {
-      return false;
-    }
-
-    const gap = box.min.y - hit.point.y;
-
-    if (
-      gap < -0.03 ||
-      gap > maximumDistance
-    ) {
-      return false;
-    }
-
-    this.el.object3D.position.y +=
-      hit.point.y -
-      box.min.y +
-      0.012;
-
-    this.velocity.set(0, 0, 0);
-
-    return true;
-  },
-
-
-  tick: function (time, deltaTime) {
-    if (
-      roomsGameplayInputLocked() ||
-      this.heldBy ||
-      !this.isMoving ||
-      !deltaTime
-    ) {
-      return;
-    }
-
-    const dt = Math.min(
-      deltaTime / 1000,
-      0.04
-    );
-
-    this.velocity.y +=
-      this.data.gravity * dt;
-
-    this.el.object3D.position.addScaledVector(
-      this.velocity,
-      dt
-    );
-
-    const damping = Math.pow(
-      0.985,
-      dt * 60
-    );
-
-    this.velocity.x *= damping;
-    this.velocity.z *= damping;
-
-    this.el.object3D.updateMatrixWorld(true);
-
-    const box = this.getWorldBox();
-
-    if (!box.isEmpty()) {
-      const floorPenetration =
-        this.data.floorY - box.min.y;
-
-      if (floorPenetration > 0) {
-        this.el.object3D.position.y +=
-          floorPenetration;
-
-        if (
-          Math.abs(this.velocity.y) > 0.8
-        ) {
-          this.velocity.y *= -0.12;
-          this.velocity.x *= 0.72;
-          this.velocity.z *= 0.72;
-        } else {
-          this.velocity.set(0, 0, 0);
-          this.isMoving = false;
-        }
-      }
-    }
-
-    if (
-      this.isMoving &&
-      this.velocity.y <= 0 &&
-      time - this.lastSurfaceCheck > 120
-    ) {
-      this.lastSurfaceCheck = time;
-
-      if (
-        this.settleOnNearbySurface(0.12)
-      ) {
-        this.isMoving = false;
-      }
-    }
-  }
-});
-
-
-/* ============================================================
-   QUEST NATURAL GRAB HAND
-============================================================ */
-
-AFRAME.registerComponent('natural-grab-hand', {
-  schema: {
-    radius: {
-      default: 0.4
-    },
-
-    velocitySmoothing: {
-      default: 0.35
-    },
-
-    gripThreshold: {
-      default: 0.5
-    }
-  },
-
-
-  init: function () {
-    this.heldItem = null;
-    this.previousPosition = new THREE.Vector3();
-    this.currentPosition = new THREE.Vector3();
-    this.smoothedVelocity = new THREE.Vector3();
-    this.instantVelocity = new THREE.Vector3();
-    this.hasPreviousPosition = false;
-    this.gripHeld = false;
-    this.analogGripHeld = false;
-
-    this.beginGrip = this.beginGrip.bind(this);
-    this.endGrip = this.endGrip.bind(this);
-    this.onGripChanged = this.onGripChanged.bind(this);
-
-    this.el.addEventListener(
-      'gripdown',
-      this.beginGrip
-    );
-
-    this.el.addEventListener(
-      'squeezestart',
-      this.beginGrip
-    );
-
-    this.el.addEventListener(
-      'gripup',
-      this.endGrip
-    );
-
-    this.el.addEventListener(
-      'squeezeend',
-      this.endGrip
-    );
-
-    this.el.addEventListener(
-      'gripchanged',
-      this.onGripChanged
-    );
-
-    this.el.addEventListener(
-      'abuttondown',
-      this.beginGrip
-    );
-
-    this.el.addEventListener(
-      'abuttonup',
-      this.endGrip
-    );
-
-    this.el.addEventListener(
-      'xbuttondown',
-      this.beginGrip
-    );
-
-    this.el.addEventListener(
-      'xbuttonup',
-      this.endGrip
-    );
-
-    this.el.addEventListener(
-      'controllerdisconnected',
-      this.endGrip
-    );
-  },
-
-
-  onGripChanged: function (event) {
-    const value =
-      event &&
-      event.detail &&
-      typeof event.detail.value === 'number'
-        ? event.detail.value
-        : (
-            event &&
-            typeof event.detail === 'number'
-              ? event.detail
-              : null
-          );
-
-    if (value === null) {
-      return;
-    }
-
-    const isPressed =
-      value >= this.data.gripThreshold;
-
-    if (
-      isPressed &&
-      !this.analogGripHeld
-    ) {
-      this.analogGripHeld = true;
-      this.beginGrip();
-    } else if (
-      !isPressed &&
-      this.analogGripHeld
-    ) {
-      this.analogGripHeld = false;
-      this.endGrip();
-    }
-  },
-
-
-  beginGrip: function () {
-    if (
-      roomsGameplayInputLocked() ||
-      this.gripHeld
-    ) {
-      return;
-    }
-
-    this.gripHeld = true;
-    this.grabNearest();
-  },
-
-
-  endGrip: function () {
-    if (!this.gripHeld && !this.heldItem) {
-      return;
-    }
-
-    this.gripHeld = false;
-    this.releaseHeld();
-  },
-
-
-  findNearest: function () {
-    const handPosition = new THREE.Vector3();
-
-    this.el.object3D.getWorldPosition(
-      handPosition
-    );
-
-    let nearest = null;
-    let nearestEl = null;
-    let nearestDistance = Infinity;
-
-    this.el.sceneEl
-      .querySelectorAll('[natural-grabbable]')
-      .forEach((entity) => {
-        const component =
-          entity.components['natural-grabbable'];
-
-        if (!component || component.heldBy) {
-          return;
-        }
-
-        const distance =
-          component.distanceToPoint(
-            handPosition
-          );
-
-        if (distance < nearestDistance) {
-          nearest = component;
-          nearestEl = entity;
-          nearestDistance = distance;
-        }
-      });
-
-    return {
-      nearest: nearest,
-      nearestEl: nearestEl,
-      nearestDistance: nearestDistance
-    };
-  },
-
-
-  grabNearest: function () {
-    if (
-      roomsGameplayInputLocked() ||
-      this.heldItem
-    ) {
-      return;
-    }
-
-    const {
-      nearest,
-      nearestEl,
-      nearestDistance
-    } = this.findNearest();
-
-    if (
-      !nearest ||
-      nearestDistance > this.data.radius
-    ) {
-      console.log(
-        this.el.id,
-        'grip pressed, but no item was close enough. Nearest:',
-        nearestEl ? nearestEl.id : 'none'
-      );
-
-      return;
-    }
-
-    if (nearest.grab(this.el)) {
-      this.heldItem = nearest;
-    }
-  },
-
-
-  releaseHeld: function () {
-    if (!this.heldItem) {
-      return;
-    }
-
-    const released = this.heldItem;
-    this.heldItem = null;
-
-    const releaseVelocity =
-      roomsGameplayInputLocked()
-        ? new THREE.Vector3()
-        : this.smoothedVelocity.clone();
-
-    released.release(
-      releaseVelocity
-    );
-  },
-
-
-  tick: function (time, deltaTime) {
-    if (!deltaTime) {
-      return;
-    }
-
-    this.el.object3D.getWorldPosition(
-      this.currentPosition
-    );
-
-    if (!this.hasPreviousPosition) {
-      this.previousPosition.copy(
-        this.currentPosition
-      );
-
-      this.hasPreviousPosition = true;
-      return;
-    }
-
-    const seconds = deltaTime / 1000;
-
-    if (seconds > 0) {
-      this.instantVelocity
-        .subVectors(
-          this.currentPosition,
-          this.previousPosition
-        )
-        .divideScalar(seconds);
-
-      this.smoothedVelocity.lerp(
-        this.instantVelocity,
-        this.data.velocitySmoothing
-      );
-
-      this.previousPosition.copy(
-        this.currentPosition
-      );
-    }
-  }
-});
