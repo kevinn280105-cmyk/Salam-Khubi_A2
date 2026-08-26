@@ -62,6 +62,10 @@ function roomsEnvironmentIsImmersiveXR(scene) {
    IRREGULAR HORROR FLICKER
 ============================================================ */
 
+/* ============================================================
+   DARK HORROR FLICKER + THUNDER
+============================================================ */
+
 AFRAME.registerComponent(
   'flicker',
   {
@@ -86,11 +90,25 @@ AFRAME.registerComponent(
           'light'
         ) || {};
 
+
       const originalIntensity =
         typeof light.intensity ===
-          'number'
+        'number'
+
           ? light.intensity
+
           : this.data.max;
+
+
+      /*
+        Stable brightness.
+
+        min/max still determine the
+        normal resting range.
+
+        Flicker dips are now allowed
+        BELOW min.
+      */
 
       this.stableIntensity =
         THREE.MathUtils.clamp(
@@ -107,19 +125,26 @@ AFRAME.registerComponent(
           )
         );
 
-      this.sequence = [];
+
+      this.sequence =
+        [];
+
 
       this.sequenceIndex =
         0;
 
+
       this.stepRemaining =
         0;
+
 
       this.nextEventRemaining =
         this.randomEventDelay();
 
+
       this.componentPaused =
         false;
+
 
       this.applyIntensity(
         this.stableIntensity
@@ -127,19 +152,24 @@ AFRAME.registerComponent(
     },
 
 
-    randomBetween: function (
-      minimum,
-      maximum
-    ) {
-      return (
-        minimum +
-        Math.random() *
-        (
-          maximum -
-          minimum
-        )
-      );
-    },
+    /* ======================================================
+       RANDOM
+    ====================================================== */
+
+    randomBetween:
+      function (
+        minimum,
+        maximum
+      ) {
+        return (
+          minimum +
+          Math.random() *
+          (
+            maximum -
+            minimum
+          )
+        );
+      },
 
 
     randomEventDelay:
@@ -151,18 +181,18 @@ AFRAME.registerComponent(
             ) || 0.5,
 
             0.1,
-
             1.5
           );
+
 
         const frequencyScale =
           THREE.MathUtils.clamp(
             0.55 / speed,
 
             0.72,
-
             1.35
           );
+
 
         return (
           this.randomBetween(
@@ -174,11 +204,16 @@ AFRAME.registerComponent(
       },
 
 
+    /* ======================================================
+       LIGHT INTENSITY
+    ====================================================== */
+
     applyIntensity:
-      function (value) {
+      function (
+        value
+      ) {
         this.el.setAttribute(
           'light',
-
           'intensity',
 
           Math.max(
@@ -189,47 +224,49 @@ AFRAME.registerComponent(
       },
 
 
-    normalDip: function (
-      minimumStrength,
-      maximumStrength
-    ) {
-      const strength =
-        this.randomBetween(
-          minimumStrength,
-          maximumStrength
+    /*
+      IMPORTANT:
+
+      Unlike the old version,
+      this does NOT clamp to data.min.
+
+      Therefore a light at intensity 8
+      can suddenly drop near 0.5.
+    */
+
+    darkDip:
+      function (
+        minimum,
+        maximum
+      ) {
+        return (
+          this.stableIntensity *
+          this.randomBetween(
+            minimum,
+            maximum
+          )
         );
+      },
 
-      return THREE.MathUtils.clamp(
-        this.stableIntensity *
-        strength,
 
-        Math.min(
-          this.data.min,
-          this.data.max
-        ),
-
-        Math.max(
-          this.data.min,
-          this.data.max
-        )
-      );
-    },
-
+    /* ======================================================
+       SINGLE FLICKER
+    ====================================================== */
 
     buildSingleFlicker:
       function () {
         return [
           {
             intensity:
-              this.normalDip(
-                0.78,
-                0.94
+              this.darkDip(
+                0.12,
+                0.28
               ),
 
             duration:
               this.randomBetween(
-                45,
-                90
+                70,
+                130
               )
           },
 
@@ -239,28 +276,32 @@ AFRAME.registerComponent(
 
             duration:
               this.randomBetween(
-                70,
-                150
+                100,
+                180
               )
           }
         ];
       },
 
 
+    /* ======================================================
+       DOUBLE FLICKER
+    ====================================================== */
+
     buildDoubleFlicker:
       function () {
         return [
           {
             intensity:
-              this.normalDip(
-                0.66,
-                0.88
+              this.darkDip(
+                0.08,
+                0.22
               ),
 
             duration:
               this.randomBetween(
-                40,
-                80
+                65,
+                120
               )
           },
 
@@ -277,127 +318,14 @@ AFRAME.registerComponent(
 
           {
             intensity:
-              this.normalDip(
-                0.58,
-                0.84
+              this.darkDip(
+                0.04,
+                0.16
               ),
 
             duration:
               this.randomBetween(
-                35,
-                75
-              )
-          },
-
-          {
-            intensity:
-              this.stableIntensity,
-
-            duration:
-              this.randomBetween(
-                90,
-                180
-              )
-          }
-        ];
-      },
-
-
-    buildChaoticFlicker:
-      function () {
-        const steps =
-          [];
-
-        const count =
-          Math.floor(
-            this.randomBetween(
-              5,
-              9
-            )
-          );
-
-        for (
-          let i = 0;
-          i < count;
-          i++
-        ) {
-          const useStableFlash =
-            Math.random() <
-            0.28;
-
-          steps.push({
-            intensity:
-              useStableFlash
-                ? this
-                  .stableIntensity
-                : this
-                  .randomBetween(
-                    Math.min(
-                      this.data.min,
-                      this.data.max
-                    ),
-
-                    Math.max(
-                      this.data.min,
-                      this.data.max
-                    )
-                  ),
-
-            duration:
-              this.randomBetween(
-                28,
-                85
-              )
-          });
-        }
-
-        steps.push({
-          intensity:
-            this.stableIntensity,
-
-          duration:
-            this.randomBetween(
-              110,
-              220
-            )
-        });
-
-        return steps;
-      },
-
-
-    buildNearBlackout:
-      function () {
-        return [
-          {
-            intensity:
-              this.normalDip(
-                0.58,
-                0.76
-              ),
-
-            duration:
-              this.randomBetween(
-                45,
-                80
-              )
-          },
-
-          {
-            intensity:
-              Math.max(
-                0.02,
-
-                this.stableIntensity *
-                this.randomBetween(
-                  0.015,
-                  0.065
-                )
-              ),
-
-            duration:
-              this.randomBetween(
-                75,
+                80,
                 150
               )
           },
@@ -408,87 +336,381 @@ AFRAME.registerComponent(
 
             duration:
               this.randomBetween(
-                140,
-                240
+                120,
+                220
               )
           }
         ];
       },
 
 
+    /* ======================================================
+       CHAOTIC FLICKER
+    ====================================================== */
+
+    buildChaoticFlicker:
+      function () {
+        const steps =
+          [];
+
+
+        const count =
+          Math.floor(
+            this.randomBetween(
+              6,
+              11
+            )
+          );
+
+
+        for (
+          let i = 0;
+          i < count;
+          i++
+        ) {
+          /*
+            Occasionally flash back to
+            full brightness.
+
+            Most flashes are VERY dark.
+          */
+
+          const fullFlash =
+            Math.random() <
+            0.25;
+
+
+          steps.push(
+            {
+              intensity:
+                fullFlash
+
+                  ? this
+                      .stableIntensity
+
+                  : this.darkDip(
+                      0.03,
+                      0.32
+                    ),
+
+              duration:
+                this.randomBetween(
+                  35,
+                  100
+                )
+            }
+          );
+        }
+
+
+        steps.push(
+          {
+            intensity:
+              this.stableIntensity,
+
+            duration:
+              this.randomBetween(
+                150,
+                260
+              )
+          }
+        );
+
+
+        return steps;
+      },
+
+
+    /* ======================================================
+       NEAR BLACKOUT
+    ====================================================== */
+
+    buildNearBlackout:
+      function () {
+        return [
+          {
+            intensity:
+              this.darkDip(
+                0.10,
+                0.20
+              ),
+
+            duration:
+              this.randomBetween(
+                70,
+                120
+              )
+          },
+
+          {
+            /*
+              Nearly completely black.
+            */
+
+            intensity:
+              this.stableIntensity *
+              this.randomBetween(
+                0.002,
+                0.018
+              ),
+
+            duration:
+              this.randomBetween(
+                180,
+                380
+              )
+          },
+
+          {
+            intensity:
+              this.darkDip(
+                0.08,
+                0.20
+              ),
+
+            duration:
+              this.randomBetween(
+                50,
+                100
+              )
+          },
+
+          {
+            intensity:
+              this.stableIntensity,
+
+            duration:
+              this.randomBetween(
+                180,
+                320
+              )
+          }
+        ];
+      },
+
+
+    /* ======================================================
+       THUNDER
+
+       Plays ONCE when a flicker sequence starts.
+
+       It first checks window.playRoomsThunder(),
+       which we can connect to audio.js.
+
+       It also supports an existing
+       <audio id="thunderAudio"> element.
+    ====================================================== */
+
+    playThunder:
+      function () {
+        if (
+          roomsEnvironmentPaused()
+        ) {
+          return;
+        }
+
+
+        /*
+          Preferred audio.js method.
+        */
+
+        if (
+          typeof window
+            .playRoomsThunder ===
+          'function'
+        ) {
+          window
+            .playRoomsThunder();
+
+          return;
+        }
+
+
+        /*
+          Fallback if you've already put
+          thunderAudio in index.html.
+        */
+
+        const thunder =
+          document.querySelector(
+            '#thunderAudio'
+          );
+
+
+        if (
+          !thunder
+        ) {
+          return;
+        }
+
+
+        const audioState =
+          window
+            .getRoomsAudioState
+
+            ? window
+                .getRoomsAudioState()
+
+            : {
+                muted:
+                  false,
+
+                volume:
+                  1
+              };
+
+
+        if (
+          audioState.muted
+        ) {
+          return;
+        }
+
+
+        thunder.pause();
+
+
+        thunder.currentTime =
+          0;
+
+
+        /*
+          Thunder should be noticeable
+          but not deafening.
+        */
+
+        thunder.volume =
+          Math.min(
+            1,
+
+            0.55 *
+            (
+              audioState.volume !==
+              undefined
+
+                ? audioState.volume
+
+                : 1
+            )
+          );
+
+
+        thunder
+          .play()
+          .catch(
+            (error) => {
+              console.warn(
+                'Thunder could not play:',
+                error
+              );
+            }
+          );
+      },
+
+
+    /* ======================================================
+       RANDOM EVENT
+    ====================================================== */
+
     beginRandomEvent:
       function () {
         const roll =
           Math.random();
 
+
         if (
-          roll < 0.60
+          roll < 0.48
         ) {
           this.sequence =
             this
               .buildSingleFlicker();
+        }
 
-        } else if (
-          roll < 0.85
+        else if (
+          roll < 0.76
         ) {
           this.sequence =
             this
               .buildDoubleFlicker();
+        }
 
-        } else if (
-          roll < 0.95
+        else if (
+          roll < 0.93
         ) {
           this.sequence =
             this
               .buildChaoticFlicker();
+        }
 
-        } else {
+        else {
           this.sequence =
             this
               .buildNearBlackout();
         }
 
+
+        /*
+          Thunder happens when the
+          flicker STARTS.
+        */
+
+        this.playThunder();
+
+
         this.sequenceIndex =
           0;
+
 
         this.startCurrentStep();
       },
 
+
+    /* ======================================================
+       CURRENT STEP
+    ====================================================== */
 
     startCurrentStep:
       function () {
         if (
           !this.sequence ||
           this.sequenceIndex >=
-          this.sequence.length
+            this.sequence.length
         ) {
           this.sequence =
             [];
 
+
           this.sequenceIndex =
             0;
 
+
           this.stepRemaining =
             0;
+
 
           this.applyIntensity(
             this.stableIntensity
           );
 
+
           this.nextEventRemaining =
             this.randomEventDelay();
 
+
           return;
         }
+
 
         const step =
           this.sequence[
             this.sequenceIndex
           ];
 
+
         this.applyIntensity(
           step.intensity
         );
+
 
         this.stepRemaining =
           Math.max(
@@ -498,51 +720,71 @@ AFRAME.registerComponent(
       },
 
 
-    tick: function (
-      time,
-      deltaTime
-    ) {
-      if (
-        !deltaTime ||
-        this.componentPaused ||
-        roomsEnvironmentPaused()
-      ) {
-        return;
-      }
+    /* ======================================================
+       UPDATE
+    ====================================================== */
 
-      if (
-        this.sequence.length
+    tick:
+      function (
+        time,
+        deltaTime
       ) {
-        this.stepRemaining -=
-          deltaTime;
-
         if (
-          this.stepRemaining <=
-          0
+          !deltaTime ||
+          this.componentPaused ||
+          roomsEnvironmentPaused()
         ) {
-          this.sequenceIndex +=
-            1;
-
-          this.startCurrentStep();
+          return;
         }
 
-        return;
-      }
 
-      this.nextEventRemaining -=
-        deltaTime;
+        if (
+          this.sequence.length
+        ) {
+          this.stepRemaining -=
+            deltaTime;
 
-      if (
-        this.nextEventRemaining <=
-        0
-      ) {
-        this.beginRandomEvent();
-      }
-    },
 
+          if (
+            this.stepRemaining <= 0
+          ) {
+            this.sequenceIndex +=
+              1;
+
+
+            this.startCurrentStep();
+          }
+
+
+          return;
+        }
+
+
+        this.nextEventRemaining -=
+          deltaTime;
+
+
+        if (
+          this.nextEventRemaining <=
+          0
+        ) {
+          this.beginRandomEvent();
+        }
+      },
+
+
+    /* ======================================================
+       MANUAL REACTION
+
+       Mirror/proximity effects use this.
+
+       Thunder also plays for these.
+    ====================================================== */
 
     triggerReaction:
-      function (kind) {
+      function (
+        kind
+      ) {
         if (
           this.componentPaused ||
           roomsEnvironmentPaused()
@@ -550,59 +792,84 @@ AFRAME.registerComponent(
           return false;
         }
 
+
         if (
-          kind === 'single'
+          kind ===
+          'single'
         ) {
           this.sequence =
             this
               .buildSingleFlicker();
+        }
 
-        } else if (
-          kind === 'chaotic'
+        else if (
+          kind ===
+          'chaotic'
         ) {
           this.sequence =
             this
               .buildChaoticFlicker();
+        }
 
-        } else if (
-          kind === 'blackout'
+        else if (
+          kind ===
+          'blackout'
         ) {
           this.sequence =
             this
               .buildNearBlackout();
+        }
 
-        } else {
+        else {
           this.sequence =
             this
               .buildDoubleFlicker();
         }
 
+
+        /*
+          Thunder also happens when
+          another system forces a flicker.
+        */
+
+        this.playThunder();
+
+
         this.sequenceIndex =
           0;
 
+
         this.startCurrentStep();
+
 
         return true;
       },
 
 
-    pause: function () {
-      this.componentPaused =
-        true;
-    },
+    /* ======================================================
+       PAUSE
+    ====================================================== */
+
+    pause:
+      function () {
+        this.componentPaused =
+          true;
+      },
 
 
-    play: function () {
-      this.componentPaused =
-        false;
-    },
+    play:
+      function () {
+        this.componentPaused =
+          false;
+      },
 
 
-    remove: function () {
-      this.applyIntensity(
-        this.stableIntensity
-      );
-    }
+    remove:
+      function () {
+        this.applyIntensity(
+          this.stableIntensity
+        );
+      }
   }
 );
 
