@@ -502,6 +502,8 @@
 
   <script src="engine-interactions.js"></script>
 
+  <script src="interaction-prompts.js"></script>
+
   <script src="audio.js"></script>
 
   <script src="story.js"></script>
@@ -511,8 +513,6 @@
   <script src="incense.js"></script>
 
   <script src="mirror.js"></script>
-
-  <script src="interaction-prompts.js"></script>
 
 
 </head>
@@ -942,18 +942,13 @@
 
       id="living"
 
-      class="
-        roompart
-        tv-interactable
-      "
+      class="roompart"
 
       visible="true"
 
       gltf-model="url(livingasset.glb)"
 
       position="0 0 0"
-
-      embedded-tv
 
       model-status="
         name: Living room
@@ -962,19 +957,59 @@
     </a-entity>
 
 
+    <!-- ====================================================
+         STANDALONE TELEVISION
+
+         The television is now its own GLB instead of being part of
+         livingasset.glb. The TV model itself is the interaction target.
+
+         engine-interactions.js should target #tv directly.
+         interaction-prompts.js should target #tv directly.
+    ===================================================== -->
+
+    <a-entity
+
+      id="tv"
+
+      class="
+        roompart
+        tv-interactable
+      "
+
+      visible="true"
+
+      gltf-model="url(tv.glb)"
+
+      position="0 0 0"
+
+      rotation="0 0 0"
+
+      embedded-tv
+
+      model-status="
+        name: Television
+      ">
+
+    </a-entity>
+
+
     <!-- KITCHEN -->
 
-<a-entity
-  id="kitchen"
-  visible="true"
-  class="roompart"
-  gltf-model="url(kitchenasset.glb)"
-  position="0 0 0"
-  model-status="
-    name:
-      Kitchen
-  ">
-</a-entity>
+    <a-entity
+
+      id="kitchen"
+
+      visible="true"
+
+      class="roompart"
+
+      gltf-model="url(kitchenasset.glb)"
+
+      position="0 0 0"
+
+      model-status="
+        name: Kitchen
+      ">
 
     </a-entity>
 
@@ -1041,15 +1076,18 @@
       position="0 0 0"
 
       temporary-offering-table-smoke="
-        automatic: true;
-        autoDistance: 1.35;
-        autoExitDistance: 1.80;
-        autoDuration: 2200;
-        autoCooldown: 6500;
-        proximityInterval: 180;
-        duration: 4500;
-        surfaceRatio: 0.62;
-        smokeYOffset: 0.07
+        burnDuration: 60000;
+        smokeOffsetX: 0;
+        smokeOffsetY: 0.03;
+        smokeOffsetZ: 0;
+        count: 24;
+        height: 0.85;
+        speed: 0.20;
+        width: 0.13;
+        opacity: 0.24;
+        size: 0.052;
+        color: #d4d4d4;
+        hitboxScale: 1.08
       "
 
       model-status="
@@ -1404,7 +1442,10 @@
 
         id="mirror"
 
-        class="mirror-interactable"
+        class="
+          mirror-interactable
+          solid-collider
+        "
 
         position="0 0 0.034"
 
@@ -1641,11 +1682,12 @@
       "
 
       quest-room-collider="
-        objects: [gltf-model];
+        objects: [gltf-model], .solid-collider;
         radius: 0.32;
         skin: 0.035;
         maxSubstep: 0.12;
-        teleportDistance: 0.75
+        teleportDistance: 0.75;
+        teleportCheckStep: 0.20
       "
 
       footstep-player="
@@ -2174,4 +2216,4 @@
 
 </body>
 
-</html>s
+</html>

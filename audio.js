@@ -1,13 +1,25 @@
 /* ============================================================
    audio.js — ROOMS WITHIN
+   FULL REPLACEMENT — QUEST / VR AUDIO RECOVERY
 
-   - Living room + bedroom: rain
-   - Kitchen: fluorescent buzz
-   - Toilet / hallway: quiet
-   - TV static is local + HRTF spatial
-   - Footsteps use real camera movement
-   - Thunder plays once when a flicker event starts
-   - Normal room changes crossfade volume; ambience does not restart
+   Goals:
+   - Reliable ambience on Mac + Meta Quest browser.
+   - Native HTMLAudioElement playback for broad browser support.
+   - Distance-aware fan, rain, fluorescent buzz, and TV static.
+   - Standalone #tv sound position support.
+   - Thunder support for engine-environment.js.
+   - ENABLE SOUND button still works.
+   - Entering VR automatically attempts to unlock audio.
+   - First Quest controller interaction can recover locked audio.
+   - VR SOUND button can recover audio even if ENABLE SOUND was
+     never pressed before entering the headset.
+   - Pause / mute state is respected.
+   - Footsteps remain quieter than ambience.
+============================================================ */
+
+
+/* ============================================================
+   GLOBAL AUDIO STATE
 ============================================================ */
 
 let roomsMasterVolume = 1.0;
@@ -15,7 +27,9 @@ let roomsMuted = false;
 let roomsTVOn = false;
 let roomsTVWorldPosition = null;
 let roomsAudioUnlocked = false;
-let roomsAudioContext = null;
+let roomsAudioUnlockInProgress = null;
+let roomsLastUnlockSource = 'none';
+let roomsLastUnlockSuccess = false;
 let roomsLastThunderTime = -Infinity;
 
 window.roomsMuted = roomsMuted;
@@ -23,69 +37,75 @@ window.roomsMuted = roomsMuted;
 
 /* ============================================================
    SOUND DEFINITIONS
+
+   Ambience uses manual distance fading. This keeps the audio
+   reliable in Quest Browser while still making room sounds become
+   quieter as the player walks away.
+
+   The TV position is replaced automatically by #tv through
+   engine-interactions.js -> setRoomsTVPosition().
 ============================================================ */
 
-const ROOM_AMBIENCE_DEFINITIONS = [
+const ROOM_SOUND_DEFINITIONS = [
+  {
+    id: 'fanSound',
+    src: 'sounds/73347__noisecollector__noisy_ceiling_fan.mp3',
+    position: new THREE.Vector3(-3.5, 2.4, -1.0),
+    baseVolume: 0.24,
+    fullVolumeDistance: 2.2,
+    maxDistance: 11.0,
+    loop: true,
+    startAutomatically: true,
+    global: false
+  },
+
   {
     id: 'rainSound',
     src: 'sounds/bedroom-rain.wav',
+    position: new THREE.Vector3(-2.0, 1.6, -3.0),
     baseVolume: 0.20,
-    loop: true
+    fullVolumeDistance: 2.5,
+    maxDistance: 12.0,
+    loop: true,
+    startAutomatically: true,
+    global: false
   },
 
   {
     id: 'fluorescentSound',
     src: 'sounds/fluorescent-light.wav',
-    baseVolume: 0.15,
-    loop: true
+    position: new THREE.Vector3(2.5, 2.5, 1.5),
+    baseVolume: 0.14,
+    fullVolumeDistance: 2.0,
+    maxDistance: 9.0,
+    loop: true,
+    startAutomatically: true,
+    global: false
+  },
+
+  {
+    id: 'tvStaticSound',
+    src: 'sounds/tv-static.mp3',
+    position: new THREE.Vector3(0, 1.2, 0),
+    baseVolume: 0.18,
+    fullVolumeDistance: 1.6,
+    maxDistance: 7.0,
+    loop: true,
+    startAutomatically: false,
+    global: false
+  },
+
+  {
+    id: 'thunderSound',
+    src: 'sounds/thunder.wav',
+    position: new THREE.Vector3(0, 0, 0),
+    baseVolume: 0.55,
+    fullVolumeDistance: 999,
+    maxDistance: 1000,
+    loop: false,
+    startAutomatically: false,
+    global: true
   }
-];
-
-
-const TV_SOUND_DEFINITION = {
-  id: 'tvStaticSound',
-
-  src: 'sounds/tv-static.mp3',
-
-  baseVolume: 0.12,
-
-  fullVolumeDistance: 1.35,
-
-  maxDistance: 5.5,
-
-  loop: true
-};
-
-
-const THUNDER_SOUND_DEFINITION = {
-  id: 'thunderSound',
-
-  src: 'sounds/thunder.wav',
-
-  /*
-    Thunder volume.
-
-    0.55 = noticeable,
-    but not maximum volume.
-  */
-  baseVolume: 0.55,
-
-  /*
-    Prevent two lights flashing at
-    exactly the same moment from
-    stacking two thunder sounds.
-  */
-  cooldown: 250,
-
-  loop: false
-};
-
-
-const ROOM_ENTITY_IDS = [
-  'living',
-  'kitchen',
-  'bedroom',
-  'toilet'
 ];
 
 
@@ -104,17 +124,12 @@ function clamp01(value) {
 }
 
 
-function smoothStep01(value) {
-  const t =
-    clamp01(value);
-
+function getRoomSoundDefinition(id) {
   return (
-    t *
-    t *
-    (
-      3 -
-      2 * t
-    )
+    ROOM_SOUND_DEFINITIONS.find(
+      (definition) =>
+        definition.id === id
+    ) || null
   );
 }
 
@@ -128,21 +143,31 @@ function getScene() {
 
 function getCameraEntity() {
   return (
-    document.querySelector(
-      '#cam'
-    ) ||
-
-    document.querySelector(
-      '[camera]'
-    )
+    document.querySelector('#cam') ||
+    document.querySelector('[camera]')
   );
 }
 
 
-function getRigEntity() {
-  return document.querySelector(
-    '#rig'
-  );
+function hasRoomsImmersiveXRSession(scene) {
+  try {
+    return Boolean(
+      scene &&
+      scene.renderer &&
+      scene.renderer.xr &&
+      (
+        scene.renderer.xr.isPresenting ||
+        (
+          scene.renderer.xr.getSession &&
+          scene.renderer.xr.getSession()
+        )
+      )
+    );
+  }
+
+  catch (error) {
+    return false;
+  }
 }
 
 
@@ -163,11 +188,9 @@ function isRoomsPauseMenuOpen() {
 
   if (
     desktopOverlay &&
-    desktopOverlay
-      .classList
-      .contains(
-        'is-open'
-      )
+    desktopOverlay.classList.contains(
+      'is-open'
+    )
   ) {
     return true;
   }
@@ -179,9 +202,7 @@ function isRoomsPauseMenuOpen() {
     );
 
 
-  if (
-    vrPanel
-  ) {
+  if (vrPanel) {
     const visible =
       vrPanel.getAttribute(
         'visible'
@@ -201,10 +222,21 @@ function isRoomsPauseMenuOpen() {
 }
 
 
+function getPlayerFootstepVolume() {
+  if (roomsMuted) {
+    return 0;
+  }
+
+
+  return (
+    0.11 *
+    roomsMasterVolume
+  );
+}
+
+
 function getScareFootstepVolume() {
-  if (
-    roomsMuted
-  ) {
+  if (roomsMuted) {
     return 0;
   }
 
@@ -217,354 +249,35 @@ function getScareFootstepVolume() {
 
 
 /* ============================================================
-   WEB AUDIO / HRTF
+   MANUAL DISTANCE FADING
+
+   1.0 inside fullVolumeDistance.
+   Smoothly fades to 0 at maxDistance.
 ============================================================ */
 
-function ensureRoomsAudioContext() {
-  if (
-    roomsAudioContext
-  ) {
-    return roomsAudioContext;
-  }
-
-
-  const AudioContextClass =
-    window.AudioContext ||
-    window.webkitAudioContext;
-
-
-  if (
-    !AudioContextClass
-  ) {
-    console.warn(
-      'Web Audio API unavailable. Spatial audio is disabled.'
-    );
-
-    return null;
-  }
-
-
-  roomsAudioContext =
-    new AudioContextClass();
-
-
-  return roomsAudioContext;
-}
-
-
-async function resumeRoomsAudioContext() {
-  const context =
-    ensureRoomsAudioContext();
-
-
-  if (
-    !context
-  ) {
-    return false;
-  }
-
-
-  try {
-    if (
-      context.state ===
-      'suspended'
-    ) {
-      await context.resume();
-    }
-
-
-    return true;
-  }
-
-  catch (error) {
-    console.warn(
-      'Could not resume Web Audio context:',
-      error
-    );
-
-
-    return false;
-  }
-}
-
-
-function setAudioParam(
-  param,
-  value,
-  context
+function getDistanceGain(
+  distance,
+  definition
 ) {
-  if (
-    !param
-  ) {
-    return;
+  if (!definition) {
+    return 0;
   }
 
 
-  const numericValue =
-    Number(value) || 0;
-
-
-  if (
-    param.setValueAtTime &&
-    context
-  ) {
-    param.setValueAtTime(
-      numericValue,
-      context.currentTime
-    );
-  }
-
-  else {
-    param.value =
-      numericValue;
-  }
-}
-
-
-/* ============================================================
-   HEAD / EAR DIRECTION
-============================================================ */
-
-function updateRoomsAudioListener() {
-  if (
-    !roomsAudioContext
-  ) {
-    return;
+  if (definition.global) {
+    return 1;
   }
 
 
-  const camera =
-    getCameraEntity();
-
-
-  if (
-    !camera
-  ) {
-    return;
-  }
-
-
-  const position =
-    new THREE.Vector3();
-
-
-  const quaternion =
-    new THREE.Quaternion();
-
-
-  camera.object3D
-    .getWorldPosition(
-      position
-    );
-
-
-  camera.object3D
-    .getWorldQuaternion(
-      quaternion
-    );
-
-
-  const forward =
-    new THREE.Vector3(
-      0,
-      0,
-      -1
-    )
-      .applyQuaternion(
-        quaternion
-      );
-
-
-  const up =
-    new THREE.Vector3(
-      0,
-      1,
-      0
-    )
-      .applyQuaternion(
-        quaternion
-      );
-
-
-  const listener =
-    roomsAudioContext.listener;
-
-
-  if (
-    listener.positionX &&
-    listener.forwardX &&
-    listener.upX
-  ) {
-    setAudioParam(
-      listener.positionX,
-      position.x,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.positionY,
-      position.y,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.positionZ,
-      position.z,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.forwardX,
-      forward.x,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.forwardY,
-      forward.y,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.forwardZ,
-      forward.z,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.upX,
-      up.x,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.upY,
-      up.y,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      listener.upZ,
-      up.z,
-      roomsAudioContext
-    );
-  }
-
-  else {
-    if (
-      listener.setPosition
-    ) {
-      listener.setPosition(
-        position.x,
-        position.y,
-        position.z
-      );
-    }
-
-
-    if (
-      listener.setOrientation
-    ) {
-      listener.setOrientation(
-        forward.x,
-        forward.y,
-        forward.z,
-
-        up.x,
-        up.y,
-        up.z
-      );
-    }
-  }
-}
-
-
-/* ============================================================
-   POSITION SPATIAL SOUND
-============================================================ */
-
-function setTrackSpatialPosition(
-  track,
-  worldPosition
-) {
-  if (
-    !track ||
-    !track.pannerNode ||
-    !worldPosition ||
-    !roomsAudioContext
-  ) {
-    return;
-  }
-
-
-  const panner =
-    track.pannerNode;
-
-
-  if (
-    panner.positionX &&
-    panner.positionY &&
-    panner.positionZ
-  ) {
-    setAudioParam(
-      panner.positionX,
-      worldPosition.x,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      panner.positionY,
-      worldPosition.y,
-      roomsAudioContext
-    );
-
-
-    setAudioParam(
-      panner.positionZ,
-      worldPosition.z,
-      roomsAudioContext
-    );
-  }
-
-  else if (
-    panner.setPosition
-  ) {
-    panner.setPosition(
-      worldPosition.x,
-      worldPosition.y,
-      worldPosition.z
-    );
-  }
-}
-
-
-/* ============================================================
-   TV DISTANCE
-============================================================ */
-
-function getTVDistanceGain(
-  distance
-) {
-  const d =
-    Math.max(
-      0,
-      Number(distance) || 0
-    );
+  const d = Math.max(
+    0,
+    Number(distance) || 0
+  );
 
 
   if (
     d <=
-    TV_SOUND_DEFINITION
-      .fullVolumeDistance
+    definition.fullVolumeDistance
   ) {
     return 1;
   }
@@ -572,605 +285,295 @@ function getTVDistanceGain(
 
   if (
     d >=
-    TV_SOUND_DEFINITION
-      .maxDistance
+    definition.maxDistance
   ) {
     return 0;
   }
 
 
-  const normalized =
+  const range = Math.max(
+    0.001,
+    definition.maxDistance -
+      definition.fullVolumeDistance
+  );
+
+
+  const normalized = clamp01(
     (
       d -
-      TV_SOUND_DEFINITION
-        .fullVolumeDistance
-    )
+      definition.fullVolumeDistance
+    ) /
+      range
+  );
 
-    /
 
+  const smooth =
+    normalized *
+    normalized *
     (
-      TV_SOUND_DEFINITION
-        .maxDistance -
-
-      TV_SOUND_DEFINITION
-        .fullVolumeDistance
+      3 -
+      2 * normalized
     );
 
 
-  return (
-    1 -
-    smoothStep01(
-      normalized
-    )
-  );
+  return 1 - smooth;
 }
 
 
 /* ============================================================
-   ROOM DETECTION HELPERS
-============================================================ */
-
-function getHorizontalDistanceToBox(
-  position,
-  box
-) {
-  if (
-    !position ||
-    !box
-  ) {
-    return Infinity;
-  }
-
-
-  const dx =
-    position.x <
-    box.min.x
-
-      ? box.min.x -
-        position.x
-
-      : position.x >
-        box.max.x
-
-        ? position.x -
-          box.max.x
-
-        : 0;
-
-
-  const dz =
-    position.z <
-    box.min.z
-
-      ? box.min.z -
-        position.z
-
-      : position.z >
-        box.max.z
-
-        ? position.z -
-          box.max.z
-
-        : 0;
-
-
-  return Math.sqrt(
-    dx * dx +
-    dz * dz
-  );
-}
-
-
-function pointInsideHorizontalBox(
-  position,
-  box,
-  padding
-) {
-  if (
-    !position ||
-    !box
-  ) {
-    return false;
-  }
-
-
-  const pad =
-    Math.max(
-      0,
-      Number(
-        padding
-      ) || 0
-    );
-
-
-  return (
-    position.x >=
-      box.min.x -
-      pad &&
-
-    position.x <=
-      box.max.x +
-      pad &&
-
-    position.z >=
-      box.min.z -
-      pad &&
-
-    position.z <=
-      box.max.z +
-      pad
-  );
-}
-
-
-/* ============================================================
-   SPATIAL AUDIO MANAGER
+   NATIVE AUDIO MANAGER
 ============================================================ */
 
 AFRAME.registerComponent(
   'spatial-audio-manager',
   {
-    schema: {
-      roomPadding: {
-        default: 0.32
-      },
-
-
-      roomDetectionDistance: {
-        default: 1.6
-      },
-
-
-      roomHoldDuration: {
-        default: 1800
-      },
-
-
-      crossfadeDuration: {
-        default: 900
-      },
-
-
-      updateInterval: {
-        default: 60
-      }
-    },
-
-
     init: function () {
-      this.tracks =
-        new Map();
+      this.tracks = new Map();
 
+      this.desiredPlaying =
+        new Set();
 
-      this.roomZones =
-        new Map();
+      this.created = false;
 
-
-      this.created =
-        false;
-
-
-      this.currentRoom =
-        null;
-
-
-      this.lastRawRoom =
-        null;
-
-
-      this.lastValidRoom =
-        null;
-
-
-      this.lastValidRoomTime =
-        0;
-
-
-      this.lastUpdateTime =
-        0;
-
-
-      this.lastZoneRefresh =
-        0;
-
+      this.lastDistanceUpdate = 0;
 
       this.playerWorldPosition =
         new THREE.Vector3();
 
 
-      this.fallbackTVPosition =
-        new THREE.Vector3();
+      this.recoveryTargets = [];
 
 
-      this.hasFallbackTVPosition =
-        false;
-
-
-      this.thunderAudio =
-        null;
+      this.recoveryEvents = [
+        'triggerdown',
+        'gripdown',
+        'squeezestart',
+        'abuttondown',
+        'bbuttondown',
+        'xbuttondown',
+        'ybuttondown'
+      ];
 
 
       this.createTracks =
-        this.createTracks
-          .bind(
-            this
-          );
+        this.createTracks.bind(
+          this
+        );
 
 
       this.onPauseChanged =
+        this.onPauseChanged.bind(
+          this
+        );
+
+
+      this.onEnterVR =
+        this.onEnterVR.bind(
+          this
+        );
+
+
+      this.onControllerGesture =
+        this.onControllerGesture.bind(
+          this
+        );
+
+
+      this.attachQuestRecoveryListeners =
+        this.attachQuestRecoveryListeners.bind(
+          this
+        );
+
+
+      this.el.addEventListener(
+        'rooms-pause-changed',
         this.onPauseChanged
-          .bind(
-            this
-          );
+      );
 
 
-      this.onRoomModelLoaded =
-        this.onRoomModelLoaded
-          .bind(
-            this
-          );
+      this.el.addEventListener(
+        'enter-vr',
+        this.onEnterVR
+      );
 
 
-      this.el
-        .addEventListener(
-          'rooms-pause-changed',
-          this.onPauseChanged
-        );
-
-
-      ROOM_ENTITY_IDS
-        .forEach(
-          (id) => {
-            const entity =
-              document.querySelector(
-                `#${id}`
-              );
-
-
-            if (
-              entity
-            ) {
-              entity.addEventListener(
-                'model-loaded',
-                this.onRoomModelLoaded
-              );
-            }
-          }
-        );
-
-
-      if (
-        this.el.hasLoaded
-      ) {
+      if (this.el.hasLoaded) {
         this.createTracks();
+
+        this.attachQuestRecoveryListeners();
       }
 
       else {
         this.el.addEventListener(
           'loaded',
-          this.createTracks,
+          () => {
+            this.createTracks();
+
+            this.attachQuestRecoveryListeners();
+          },
           {
-            once:
-              true
+            once: true
           }
         );
       }
 
 
       window.setTimeout(
-        () =>
-          this.refreshRoomZones(),
+        this.attachQuestRecoveryListeners,
+        500
+      );
 
-        600
+
+      window.setTimeout(
+        this.attachQuestRecoveryListeners,
+        1500
       );
     },
 
 
-    /* ======================================================
-       CREATE AUDIO ELEMENT
-    ====================================================== */
+    /* ========================================================
+       CREATE AUDIO TRACKS
+    ======================================================== */
 
-    createAudioElement:
-      function (
-        id,
-        src,
-        loop
-      ) {
-        const audio =
-          new Audio();
+    createTracks: function () {
+      if (this.created) {
+        return;
+      }
 
 
-        audio.id =
-          id;
+      this.created = true;
 
 
-        audio.src =
-          src;
+      ROOM_SOUND_DEFINITIONS.forEach(
+        (definition) => {
+          const audio =
+            new Audio();
 
 
-        audio.preload =
-          'auto';
+          audio.id =
+            definition.id;
 
 
-        audio.loop =
-          Boolean(
-            loop
+          audio.src =
+            definition.src;
+
+
+          audio.preload =
+            'auto';
+
+
+          audio.loop =
+            Boolean(
+              definition.loop
+            );
+
+
+          audio.playsInline =
+            true;
+
+
+          audio.setAttribute(
+            'playsinline',
+            ''
           );
 
 
-        audio.playsInline =
-          true;
+          audio.setAttribute(
+            'webkit-playsinline',
+            ''
+          );
 
 
-        audio.volume =
-          0;
+          audio.volume = 0;
 
 
-        audio.addEventListener(
-          'error',
-          () => {
-            console.error(
-              `Audio failed to load: ${src}`
-            );
-          }
-        );
+          audio.addEventListener(
+            'error',
+            () => {
+              console.error(
+                `Audio failed to load: ${definition.src}`
+              );
+            }
+          );
 
 
-        audio.addEventListener(
-          'canplaythrough',
-
-          () =>
-            console.log(
-              `Audio ready: ${id}`
-            ),
-
-          {
-            once:
-              true
-          }
-        );
+          audio.addEventListener(
+            'canplaythrough',
+            () => {
+              console.log(
+                `Audio ready: ${definition.id}`
+              );
+            },
+            {
+              once: true
+            }
+          );
 
 
-        document.body
-          .appendChild(
+          document.body.appendChild(
             audio
           );
 
 
-        return audio;
-      },
-
-
-    /* ======================================================
-       CREATE SOUNDS
-    ====================================================== */
-
-    createTracks:
-      function () {
-        if (
-          this.created
-        ) {
-          return;
-        }
-
-
-        this.created =
-          true;
-
-
-        ROOM_AMBIENCE_DEFINITIONS
-          .forEach(
-            (definition) => {
-              const audio =
-                this.createAudioElement(
-                  definition.id,
-                  definition.src,
-                  definition.loop
-                );
-
-
-              this.tracks.set(
-                definition.id,
-                {
-                  type:
-                    'room',
-
-                  definition,
-
-                  audio,
-
-                  sourceNode:
-                    null,
-
-                  pannerNode:
-                    null,
-
-                  currentGain:
-                    0,
-
-                  targetGain:
-                    0,
-
-                  lastDistance:
-                    null,
-
-                  lastGain:
-                    0
-                }
-              );
+          this.tracks.set(
+            definition.id,
+            {
+              definition,
+              audio,
+              lastDistance:
+                Infinity,
+              lastGain:
+                0
             }
           );
 
 
-        /* TV */
-
-        const tvAudio =
-          this.createAudioElement(
-            TV_SOUND_DEFINITION.id,
-            TV_SOUND_DEFINITION.src,
-            TV_SOUND_DEFINITION.loop
-          );
-
-
-        this.tracks.set(
-          TV_SOUND_DEFINITION.id,
-          {
-            type:
-              'tv',
-
-            definition:
-              TV_SOUND_DEFINITION,
-
-            audio:
-              tvAudio,
-
-            sourceNode:
-              null,
-
-            pannerNode:
-              null,
-
-            currentGain:
-              0,
-
-            targetGain:
-              0,
-
-            lastDistance:
-              Infinity,
-
-            lastGain:
-              0
+          if (
+            definition.startAutomatically
+          ) {
+            this.desiredPlaying.add(
+              definition.id
+            );
           }
-        );
-
-
-        /* THUNDER */
-
-        this.thunderAudio =
-          this.createAudioElement(
-            THUNDER_SOUND_DEFINITION.id,
-            THUNDER_SOUND_DEFINITION.src,
-            false
-          );
-
-
-        this.refreshRoomZones();
-
-
-        this.applyPlaybackState();
-      },
-
-
-    /* ======================================================
-       HRTF
-    ====================================================== */
-
-    ensureSpatialGraphs:
-      function () {
-        const context =
-          ensureRoomsAudioContext();
-
-
-        if (
-          !context
-        ) {
-          return;
         }
+      );
 
 
-        this.tracks.forEach(
-          (track) => {
-            if (
-              !track.audio ||
-              track.sourceNode ||
-              track.pannerNode
-            ) {
-              return;
-            }
-
-
-            try {
-              const source =
-                context
-                  .createMediaElementSource(
-                    track.audio
-                  );
-
-
-              const panner =
-                context
-                  .createPanner();
-
-
-              panner.panningModel =
-                'HRTF';
-
-
-              panner.distanceModel =
-                'inverse';
-
-
-              panner.refDistance =
-                1;
-
-
-              panner.maxDistance =
-                10000;
-
-
-              panner.rolloffFactor =
-                0;
-
-
-              source.connect(
-                panner
-              );
-
-
-              panner.connect(
-                context.destination
-              );
-
-
-              track.sourceNode =
-                source;
-
-
-              track.pannerNode =
-                panner;
-            }
-
-            catch (error) {
-              console.warn(
-                `Could not create spatial audio graph for ${track.audio.id}:`,
-                error
-              );
-            }
-          }
-        );
-
-
-        this.updateSpatialPositions();
-      },
-
-
-    getTrack:
-      function (
-        id
+      if (
+        roomsTVWorldPosition
       ) {
-        return (
-          this.tracks.get(
-            id
-          ) ||
-          null
+        this.setEmitterPosition(
+          'tvStaticSound',
+          roomsTVWorldPosition
         );
-      },
+      }
 
 
-    /* ======================================================
+      this.updateVolumes(
+        true
+      );
+    },
+
+
+    /* ========================================================
+       GET TRACK
+    ======================================================== */
+
+    getTrack: function (
+      id
+    ) {
+      return (
+        this.tracks.get(
+          id
+        ) ||
+        null
+      );
+    },
+
+
+    /* ========================================================
        PLAYER POSITION
-    ====================================================== */
+    ======================================================== */
 
     getPlayerPosition:
       function () {
@@ -1178,9 +581,7 @@ AFRAME.registerComponent(
           getCameraEntity();
 
 
-        if (
-          !camera
-        ) {
+        if (!camera) {
           return null;
         }
 
@@ -1197,793 +598,313 @@ AFRAME.registerComponent(
       },
 
 
-    onRoomModelLoaded:
-      function () {
-        this.refreshRoomZones();
-
-
-        this.updateSpatialPositions();
-      },
-
-
-    /* ======================================================
-       ROOM BOUNDS
-    ====================================================== */
-
-    refreshRoomZones:
-      function () {
-        ROOM_ENTITY_IDS
-          .forEach(
-            (id) => {
-              const entity =
-                document.querySelector(
-                  `#${id}`
-                );
-
-
-              if (
-                !entity
-              ) {
-                return;
-              }
-
-
-              const root =
-                entity.getObject3D(
-                  'mesh'
-                );
-
-
-              if (
-                !root
-              ) {
-                return;
-              }
-
-
-              root.updateMatrixWorld(
-                true
-              );
-
-
-              const box =
-                new THREE.Box3()
-                  .setFromObject(
-                    root
-                  );
-
-
-              if (
-                box.isEmpty()
-              ) {
-                return;
-              }
-
-
-              const center =
-                box.getCenter(
-                  new THREE.Vector3()
-                );
-
-
-              const size =
-                box.getSize(
-                  new THREE.Vector3()
-                );
-
-
-              this.roomZones.set(
-                id,
-                {
-                  id,
-
-                  box,
-
-                  center,
-
-                  size,
-
-                  area:
-                    Math.max(
-                      0.001,
-
-                      size.x *
-                      size.z
-                    )
-                }
-              );
-            }
-          );
-
-
-        const livingZone =
-          this.roomZones.get(
-            'living'
-          );
-
-
-        if (
-          livingZone
-        ) {
-          this.fallbackTVPosition
-            .copy(
-              livingZone.center
-            );
-
-
-          this.hasFallbackTVPosition =
-            true;
-        }
-
-
-        this.updateSpatialPositions();
-      },
-
-
-    /* ======================================================
-       TV POSITION
-    ====================================================== */
-
-    resolveTVPosition:
-      function () {
-        if (
-          roomsTVWorldPosition
-        ) {
-          return (
-            roomsTVWorldPosition
-          );
-        }
-
-
-        const glow =
-          document.querySelector(
-            '#tvGlowLight'
-          );
-
-
-        if (
-          glow
-        ) {
-          const position =
-            new THREE.Vector3();
-
-
-          glow.object3D
-            .getWorldPosition(
-              position
-            );
-
-
-          if (
-            position.lengthSq() >
-            0.0001
-          ) {
-            return position;
-          }
-        }
-
-
-        if (
-          this.hasFallbackTVPosition
-        ) {
-          return (
-            this.fallbackTVPosition
-          );
-        }
-
-
-        return null;
-      },
-
-
-    /* ======================================================
-       SPATIAL POSITIONS
-    ====================================================== */
-
-    updateSpatialPositions:
-      function () {
-        /*
-          RAIN
-
-          Same rain track is used in
-          living room and bedroom.
-
-          Move its spatial point to
-          whichever room we're currently in.
-        */
-
-        const rainTrack =
-          this.getTrack(
-            'rainSound'
-          );
-
-
-        const bedroomZone =
-          this.roomZones.get(
-            'bedroom'
-          );
-
-
-        const livingZone =
-          this.roomZones.get(
-            'living'
-          );
-
-
-        if (
-          rainTrack
-        ) {
-          const rainPosition =
-            this.currentRoom ===
-              'living' &&
-            livingZone
-
-              ? livingZone.center
-
-              : bedroomZone
-
-                ? bedroomZone.center
-
-                : livingZone
-
-                  ? livingZone.center
-
-                  : null;
-
-
-          if (
-            rainPosition
-          ) {
-            setTrackSpatialPosition(
-              rainTrack,
-              rainPosition
-            );
-          }
-        }
-
-
-        /*
-          KITCHEN
-        */
-
-        const fluorescentTrack =
-          this.getTrack(
-            'fluorescentSound'
-          );
-
-
-        const kitchenZone =
-          this.roomZones.get(
-            'kitchen'
-          );
-
-
-        if (
-          fluorescentTrack &&
-          kitchenZone
-        ) {
-          setTrackSpatialPosition(
-            fluorescentTrack,
-            kitchenZone.center
-          );
-        }
-
-
-        /*
-          TV
-        */
-
-        const tvTrack =
-          this.getTrack(
-            'tvStaticSound'
-          );
-
-
-        const tvPosition =
-          this.resolveTVPosition();
-
-
-        if (
-          tvTrack &&
-          tvPosition
-        ) {
-          setTrackSpatialPosition(
-            tvTrack,
-            tvPosition
-          );
-        }
-      },
-
-
-    /* ======================================================
-       RAW ROOM DETECTION
-    ====================================================== */
-
-    detectRoomRaw:
+    /* ========================================================
+       CALCULATE VOLUME
+    ======================================================== */
+
+    calculateTrackVolume:
       function (
+        track,
         playerPosition
-      ) {
-        if (
-          !playerPosition
-        ) {
-          return null;
-        }
-
-
-        const inside =
-          [];
-
-
-        this.roomZones
-          .forEach(
-            (zone) => {
-              if (
-                pointInsideHorizontalBox(
-                  playerPosition,
-                  zone.box,
-                  this.data
-                    .roomPadding
-                )
-              ) {
-                inside.push(
-                  zone
-                );
-              }
-            }
-          );
-
-
-        if (
-          inside.length >
-          0
-        ) {
-          inside.sort(
-            (
-              a,
-              b
-            ) => {
-              const distanceA =
-                Math.hypot(
-                  playerPosition.x -
-                    a.center.x,
-
-                  playerPosition.z -
-                    a.center.z
-                );
-
-
-              const distanceB =
-                Math.hypot(
-                  playerPosition.x -
-                    b.center.x,
-
-                  playerPosition.z -
-                    b.center.z
-                );
-
-
-              if (
-                Math.abs(
-                  distanceA -
-                  distanceB
-                ) >
-                0.05
-              ) {
-                return (
-                  distanceA -
-                  distanceB
-                );
-              }
-
-
-              return (
-                a.area -
-                b.area
-              );
-            }
-          );
-
-
-          return (
-            inside[0].id
-          );
-        }
-
-
-        let nearestRoom =
-          null;
-
-
-        let nearestDistance =
-          Infinity;
-
-
-        this.roomZones
-          .forEach(
-            (zone) => {
-              const distance =
-                getHorizontalDistanceToBox(
-                  playerPosition,
-                  zone.box
-                );
-
-
-              if (
-                distance <
-                nearestDistance
-              ) {
-                nearestDistance =
-                  distance;
-
-
-                nearestRoom =
-                  zone.id;
-              }
-            }
-          );
-
-
-        if (
-          nearestDistance <=
-          this.data
-            .roomDetectionDistance
-        ) {
-          return nearestRoom;
-        }
-
-
-        return null;
-      },
-
-
-    /* ======================================================
-       STABLE ROOM DETECTION
-
-       Prevents tiny gaps between rooms
-       from suddenly killing the ambience.
-    ====================================================== */
-
-    detectStableRoom:
-      function (
-        playerPosition,
-        time
-      ) {
-        const rawRoom =
-          this.detectRoomRaw(
-            playerPosition
-          );
-
-
-        this.lastRawRoom =
-          rawRoom;
-
-
-        if (
-          rawRoom
-        ) {
-          this.lastValidRoom =
-            rawRoom;
-
-
-          this.lastValidRoomTime =
-            time;
-
-
-          return rawRoom;
-        }
-
-
-        if (
-          this.lastValidRoom &&
-          time -
-            this.lastValidRoomTime <=
-            this.data
-              .roomHoldDuration
-        ) {
-          return (
-            this.lastValidRoom
-          );
-        }
-
-
-        return null;
-      },
-
-
-    /* ======================================================
-       ROOM -> SOUND
-    ====================================================== */
-
-    getRoomTrackId:
-      function (
-        roomId
-      ) {
-        /*
-          Living room + bedroom
-          both use rain.
-        */
-
-        if (
-          roomId ===
-            'living' ||
-
-          roomId ===
-            'bedroom'
-        ) {
-          return 'rainSound';
-        }
-
-
-        /*
-          Kitchen buzz.
-        */
-
-        if (
-          roomId ===
-          'kitchen'
-        ) {
-          return 'fluorescentSound';
-        }
-
-
-        /*
-          Toilet / hallway = quiet.
-        */
-
-        return null;
-      },
-
-
-    /* ======================================================
-       KEEP TRACK PLAYING
-    ====================================================== */
-
-    ensurePlaying:
-      function (
-        track
       ) {
         if (
           !track ||
-          !track.audio ||
-          !roomsAudioUnlocked ||
+          !track.definition ||
           roomsMuted ||
-          isRoomsPauseMenuOpen() ||
-          !track.audio.paused
+          isRoomsPauseMenuOpen()
         ) {
-          return;
+          return 0;
         }
 
 
-        const promise =
-          track.audio.play();
+        const definition =
+          track.definition;
 
 
         if (
-          promise &&
-          promise.catch
+          definition.global
         ) {
-          promise.catch(
-            (error) => {
-              console.warn(
-                `Could not start ${track.audio.id}:`,
-                error
-              );
-            }
+          track.lastDistance = 0;
+
+          track.lastGain = 1;
+
+
+          return clamp01(
+            definition.baseVolume *
+              roomsMasterVolume
           );
         }
+
+
+        if (
+          !playerPosition
+        ) {
+          track.lastDistance = null;
+
+          track.lastGain = 1;
+
+
+          return clamp01(
+            definition.baseVolume *
+              roomsMasterVolume
+          );
+        }
+
+
+        const distance =
+          playerPosition.distanceTo(
+            definition.position
+          );
+
+
+        const distanceGain =
+          getDistanceGain(
+            distance,
+            definition
+          );
+
+
+        track.lastDistance =
+          distance;
+
+
+        track.lastGain =
+          distanceGain;
+
+
+        return clamp01(
+          definition.baseVolume *
+            roomsMasterVolume *
+            distanceGain
+        );
       },
 
 
-    ensureContinuousRoomTracks:
-      function () {
+    /* ========================================================
+       UPDATE VOLUMES
+    ======================================================== */
+
+    updateVolumes:
+      function (
+        force
+      ) {
+        const playerPosition =
+          this.getPlayerPosition();
+
+
         this.tracks.forEach(
           (track) => {
-            if (
-              track.type ===
-              'room'
-            ) {
-              this.ensurePlaying(
-                track
+            const targetVolume =
+              this.calculateTrackVolume(
+                track,
+                playerPosition
               );
+
+
+            const audio =
+              track.audio;
+
+
+            if (!audio) {
+              return;
+            }
+
+
+            if (
+              force ||
+              Math.abs(
+                audio.volume -
+                  targetVolume
+              ) >
+                0.006
+            ) {
+              audio.volume =
+                targetVolume;
             }
           }
         );
       },
 
 
-    /* ======================================================
-       CHANGE ROOM
-    ====================================================== */
+    /* ========================================================
+       PLAY TRACK
+    ======================================================== */
 
-    setCurrentRoom:
+    playTrack:
       function (
-        roomId
+        id
       ) {
+        this.desiredPlaying.add(
+          id
+        );
+
+
         if (
-          roomId ===
-          this.currentRoom
+          !roomsAudioUnlocked ||
+          roomsMuted ||
+          isRoomsPauseMenuOpen()
         ) {
-          return;
+          return false;
         }
 
 
-        this.currentRoom =
-          roomId;
-
-
-        const activeTrackId =
-          this.getRoomTrackId(
-            roomId
-          );
-
-
-        this.tracks
-          .forEach(
-            (
-              track,
-              id
-            ) => {
-              if (
-                track.type !==
-                'room'
-              ) {
-                return;
-              }
-
-
-              track.targetGain =
-                id ===
-                activeTrackId
-
-                  ? 1
-
-                  : 0;
-            }
-          );
-
-
-        this.updateSpatialPositions();
-
-
-        this.el.emit(
-          'rooms-audio-room-changed',
-
-          {
-            room:
-              roomId,
-
-            ambienceTrack:
-              activeTrackId
-          },
-
-          false
-        );
-
-
-        console.log(
-          'Audio room:',
-
-          roomId ||
-          'quiet / hallway'
-        );
-      },
-
-
-    /* ======================================================
-       CROSSFADE
-    ====================================================== */
-
-    updateRoomCrossfade:
-      function (
-        deltaTime
-      ) {
-        const fadeDuration =
-          Math.max(
-            100,
-
-            this.data
-              .crossfadeDuration
-          );
-
-
-        const step =
-          Math.min(
-            1,
-
-            deltaTime /
-            fadeDuration
-          );
-
-
-        this.tracks
-          .forEach(
-            (track) => {
-              if (
-                track.type !==
-                'room'
-              ) {
-                return;
-              }
-
-
-              const difference =
-                track.targetGain -
-                track.currentGain;
-
-
-              if (
-                Math.abs(
-                  difference
-                ) <=
-                step
-              ) {
-                track.currentGain =
-                  track.targetGain;
-              }
-
-              else {
-                track.currentGain +=
-                  Math.sign(
-                    difference
-                  ) *
-                  step;
-              }
-
-
-              const targetVolume =
-                roomsMuted ||
-                isRoomsPauseMenuOpen()
-
-                  ? 0
-
-                  : (
-                      track.definition
-                        .baseVolume *
-
-                      roomsMasterVolume *
-
-                      track.currentGain
-                    );
-
-
-              track.audio.volume =
-                clamp01(
-                  targetVolume
-                );
-
-
-              track.lastGain =
-                track.currentGain;
-
-
-              /*
-                IMPORTANT:
-
-                Don't pause ambience during
-                normal room changes.
-
-                It keeps running silently.
-              */
-
-              this.ensurePlaying(
-                track
-              );
-            }
-          );
-      },
-
-
-    /* ======================================================
-       TV
-    ====================================================== */
-
-    updateTVVolume:
-      function (
-        playerPosition
-      ) {
         const track =
           this.getTrack(
-            'tvStaticSound'
+            id
+          );
+
+
+        if (
+          !track ||
+          !track.audio
+        ) {
+          return false;
+        }
+
+
+        const audio =
+          track.audio;
+
+
+        if (
+          !audio.paused
+        ) {
+          return true;
+        }
+
+
+        try {
+          const promise =
+            audio.play();
+
+
+          if (
+            promise &&
+            promise.catch
+          ) {
+            promise.catch(
+              (error) => {
+                console.warn(
+                  `Could not start ${id}:`,
+                  error
+                );
+              }
+            );
+          }
+
+
+          return true;
+        }
+
+        catch (error) {
+          console.warn(
+            `Could not start ${id}:`,
+            error
+          );
+
+
+          return false;
+        }
+      },
+
+
+    /* ========================================================
+       ONE-SHOT SOUND
+    ======================================================== */
+
+    playOneShot:
+      function (
+        id
+      ) {
+        if (
+          !roomsAudioUnlocked ||
+          roomsMuted ||
+          isRoomsPauseMenuOpen()
+        ) {
+          return false;
+        }
+
+
+        const track =
+          this.getTrack(
+            id
+          );
+
+
+        if (
+          !track ||
+          !track.audio
+        ) {
+          return false;
+        }
+
+
+        this.updateVolumes(
+          true
+        );
+
+
+        const audio =
+          track.audio;
+
+
+        try {
+          audio.pause();
+
+          audio.currentTime =
+            0;
+
+
+          const promise =
+            audio.play();
+
+
+          if (
+            promise &&
+            promise.catch
+          ) {
+            promise.catch(
+              (error) => {
+                console.warn(
+                  `Could not play ${id}:`,
+                  error
+                );
+              }
+            );
+          }
+
+
+          return true;
+        }
+
+        catch (error) {
+          console.warn(
+            `Could not play ${id}:`,
+            error
+          );
+
+
+          return false;
+        }
+      },
+
+
+    /* ========================================================
+       STOP TRACK
+    ======================================================== */
+
+    stopTrack:
+      function (
+        id
+      ) {
+        this.desiredPlaying.delete(
+          id
+        );
+
+
+        const track =
+          this.getTrack(
+            id
           );
 
 
@@ -1995,158 +916,134 @@ AFRAME.registerComponent(
         }
 
 
+        track.audio.pause();
+
+        track.audio.currentTime =
+          0;
+      },
+
+
+    /* ========================================================
+       PAUSE TRACK WITHOUT REMOVING INTENT
+    ======================================================== */
+
+    pauseTrackWithoutChangingIntent:
+      function (
+        id
+      ) {
+        const track =
+          this.getTrack(
+            id
+          );
+
+
         if (
-          !roomsTVOn ||
-          roomsMuted ||
-          isRoomsPauseMenuOpen()
+          !track ||
+          !track.audio
         ) {
-          track.currentGain =
-            0;
-
-
-          track.targetGain =
-            0;
-
-
-          track.lastGain =
-            0;
-
-
-          track.audio.volume =
-            0;
-
-
-          if (
-            !roomsTVOn
-          ) {
-            track.audio.pause();
-
-
-            track.audio.currentTime =
-              0;
-          }
-
-
           return;
         }
 
 
-        this.ensurePlaying(
-          track
+        track.audio.pause();
+      },
+
+
+    /* ========================================================
+       NORMAL AMBIENCE
+    ======================================================== */
+
+    playNormalAmbience:
+      function () {
+        ROOM_SOUND_DEFINITIONS.forEach(
+          (definition) => {
+            if (
+              definition.startAutomatically
+            ) {
+              this.desiredPlaying.add(
+                definition.id
+              );
+            }
+          }
         );
 
 
-        const tvPosition =
-          this.resolveTVPosition();
+        this.applyPlaybackState();
+      },
 
 
-        let distance =
-          0;
+    /* ========================================================
+       PAUSE EVERYTHING
+    ======================================================== */
 
-
-        let gain =
-          1;
-
-
-        if (
-          playerPosition &&
-          tvPosition
-        ) {
-          distance =
-            playerPosition
-              .distanceTo(
-                tvPosition
-              );
-
-
-          gain =
-            getTVDistanceGain(
-              distance
-            );
-
-
-          setTrackSpatialPosition(
+    pauseAllWithoutChangingIntent:
+      function () {
+        this.tracks.forEach(
+          (
             track,
-            tvPosition
-          );
-        }
-
-
-        track.lastDistance =
-          distance;
-
-
-        track.lastGain =
-          gain;
-
-
-        track.currentGain =
-          gain;
-
-
-        track.targetGain =
-          gain;
-
-
-        track.audio.volume =
-          clamp01(
-            TV_SOUND_DEFINITION
-              .baseVolume *
-
-            roomsMasterVolume *
-
-            gain
-          );
+            id
+          ) => {
+            this.pauseTrackWithoutChangingIntent(
+              id
+            );
+          }
+        );
       },
 
 
-    /* ======================================================
-       REAL PAUSE
-    ====================================================== */
+    /* ========================================================
+       SET SOUND POSITION
+    ======================================================== */
 
-    pauseAllForRealPause:
-      function () {
-        this.tracks
-          .forEach(
-            (track) => {
-              track.audio.pause();
-
-
-              track.audio.volume =
-                0;
-            }
+    setEmitterPosition:
+      function (
+        id,
+        worldPosition
+      ) {
+        const definition =
+          getRoomSoundDefinition(
+            id
           );
 
 
         if (
-          this.thunderAudio
-        ) {
-          this.thunderAudio.pause();
-        }
-      },
-
-
-    /* ======================================================
-       APPLY STATE
-    ====================================================== */
-
-    applyPlaybackState:
-      function () {
-        if (
-          !this.created
+          !definition ||
+          !worldPosition
         ) {
           return;
         }
 
 
-        if (
-          roomsAudioContext
-        ) {
-          updateRoomsAudioListener();
+        definition.position.set(
+          Number(
+            worldPosition.x
+          ) || 0,
+
+          Number(
+            worldPosition.y
+          ) || 0,
+
+          Number(
+            worldPosition.z
+          ) || 0
+        );
 
 
-          this.ensureSpatialGraphs();
-        }
+        this.updateVolumes(
+          true
+        );
+      },
+
+
+    /* ========================================================
+       APPLY PLAYBACK STATE
+    ======================================================== */
+
+    applyPlaybackState:
+      function () {
+        this.updateVolumes(
+          true
+        );
 
 
         if (
@@ -2154,43 +1051,70 @@ AFRAME.registerComponent(
           roomsMuted ||
           isRoomsPauseMenuOpen()
         ) {
-          this.pauseAllForRealPause();
-
+          this.pauseAllWithoutChangingIntent();
 
           return;
         }
 
 
-        this.ensureContinuousRoomTracks();
+        ROOM_SOUND_DEFINITIONS.forEach(
+          (definition) => {
+            if (
+              definition.startAutomatically
+            ) {
+              this.desiredPlaying.add(
+                definition.id
+              );
+            }
+          }
+        );
 
 
-        const playerPosition =
-          this.getPlayerPosition();
+        if (
+          roomsTVOn
+        ) {
+          this.desiredPlaying.add(
+            'tvStaticSound'
+          );
+        }
 
-
-        const detectedRoom =
-          this.detectStableRoom(
-            playerPosition,
-            performance.now()
+        else {
+          this.desiredPlaying.delete(
+            'tvStaticSound'
           );
 
 
-        this.setCurrentRoom(
-          detectedRoom
-        );
+          const tvTrack =
+            this.getTrack(
+              'tvStaticSound'
+            );
 
 
-        this.updateRoomCrossfade(
-          this.data
-            .updateInterval
-        );
+          if (
+            tvTrack &&
+            tvTrack.audio
+          ) {
+            tvTrack.audio.pause();
+
+            tvTrack.audio.currentTime =
+              0;
+          }
+        }
 
 
-        this.updateTVVolume(
-          playerPosition
+        this.desiredPlaying.forEach(
+          (id) => {
+            this.playTrack(
+              id
+            );
+          }
         );
       },
 
+
+    /* ========================================================
+       PAUSE EVENT
+    ======================================================== */
 
     onPauseChanged:
       function () {
@@ -2198,255 +1122,216 @@ AFRAME.registerComponent(
       },
 
 
-    /* ======================================================
-       UPDATE
-    ====================================================== */
+    /* ========================================================
+       ENTER VR AUDIO RECOVERY
+    ======================================================== */
 
-    tick:
-      function (
-        time,
-        deltaTime
-      ) {
-        if (
-          !deltaTime
-        ) {
-          return;
-        }
-
-
-        if (
-          time -
-          this.lastUpdateTime <
-          this.data
-            .updateInterval
-        ) {
-          return;
-        }
-
-
-        const elapsed =
-          this.lastUpdateTime >
-          0
-
-            ? time -
-              this.lastUpdateTime
-
-            : this.data
-                .updateInterval;
-
-
-        this.lastUpdateTime =
-          time;
-
-
-        if (
-          time -
-          this.lastZoneRefresh >
-          2500
-        ) {
-          this.lastZoneRefresh =
-            time;
-
-
-          this.refreshRoomZones();
-        }
-
-
-        if (
-          roomsAudioContext
-        ) {
-          updateRoomsAudioListener();
-
-
-          this.updateSpatialPositions();
-        }
-
-
-        if (
-          !roomsAudioUnlocked ||
-          roomsMuted ||
-          isRoomsPauseMenuOpen()
-        ) {
-          return;
-        }
-
-
-        this.ensureContinuousRoomTracks();
-
-
-        const playerPosition =
-          this.getPlayerPosition();
-
-
-        const detectedRoom =
-          this.detectStableRoom(
-            playerPosition,
-            time
-          );
-
-
-        if (
-          detectedRoom !==
-          this.currentRoom
-        ) {
-          this.setCurrentRoom(
-            detectedRoom
-          );
-        }
-
-
-        this.updateRoomCrossfade(
-          elapsed
+    onEnterVR:
+      function () {
+        ensureRoomsAudioUnlocked(
+          'enter-vr'
         );
 
 
-        this.updateTVVolume(
-          playerPosition
+        window.setTimeout(
+          () => {
+            if (
+              !roomsAudioUnlocked
+            ) {
+              ensureRoomsAudioUnlocked(
+                'enter-vr-80ms'
+              );
+            }
+          },
+          80
+        );
+
+
+        window.setTimeout(
+          () => {
+            if (
+              !roomsAudioUnlocked
+            ) {
+              ensureRoomsAudioUnlocked(
+                'enter-vr-300ms'
+              );
+            }
+          },
+          300
         );
       },
 
 
-    /* ======================================================
+    /* ========================================================
+       QUEST CONTROLLER RECOVERY
+    ======================================================== */
+
+    onControllerGesture:
+      function () {
+        if (
+          !roomsAudioUnlocked
+        ) {
+          ensureRoomsAudioUnlocked(
+            'quest-controller'
+          );
+        }
+      },
+
+
+    /* ========================================================
+       ATTACH QUEST RECOVERY EVENTS
+    ======================================================== */
+
+    attachQuestRecoveryListeners:
+      function () {
+        const targets = [
+          document.querySelector(
+            '#leftHand'
+          ),
+
+          document.querySelector(
+            '#rightHand'
+          )
+        ]
+          .filter(
+            Boolean
+          );
+
+
+        targets.forEach(
+          (target) => {
+            if (
+              this.recoveryTargets.includes(
+                target
+              )
+            ) {
+              return;
+            }
+
+
+            this.recoveryTargets.push(
+              target
+            );
+
+
+            this.recoveryEvents.forEach(
+              (eventName) => {
+                target.addEventListener(
+                  eventName,
+                  this.onControllerGesture
+                );
+              }
+            );
+          }
+        );
+      },
+
+
+    /* ========================================================
+       UPDATE
+    ======================================================== */
+
+    tick:
+      function (
+        time
+      ) {
+        if (
+          time -
+            this.lastDistanceUpdate <
+          125
+        ) {
+          return;
+        }
+
+
+        this.lastDistanceUpdate =
+          time;
+
+
+        this.updateVolumes(
+          false
+        );
+      },
+
+
+    /* ========================================================
        CLEANUP
-    ====================================================== */
+    ======================================================== */
 
     remove:
       function () {
-        this.el
-          .removeEventListener(
-            'rooms-pause-changed',
-            this.onPauseChanged
-          );
+        this.el.removeEventListener(
+          'rooms-pause-changed',
+          this.onPauseChanged
+        );
 
 
-        ROOM_ENTITY_IDS
-          .forEach(
-            (id) => {
-              const entity =
-                document.querySelector(
-                  `#${id}`
-                );
+        this.el.removeEventListener(
+          'enter-vr',
+          this.onEnterVR
+        );
 
 
-              if (
-                entity
-              ) {
-                entity.removeEventListener(
-                  'model-loaded',
-                  this.onRoomModelLoaded
+        this.recoveryTargets.forEach(
+          (target) => {
+            this.recoveryEvents.forEach(
+              (eventName) => {
+                target.removeEventListener(
+                  eventName,
+                  this.onControllerGesture
                 );
               }
+            );
+          }
+        );
+
+
+        this.recoveryTargets =
+          [];
+
+
+        this.tracks.forEach(
+          (track) => {
+            if (
+              !track.audio
+            ) {
+              return;
             }
-          );
 
 
-        this.tracks
-          .forEach(
-            (track) => {
-              if (
-                !track.audio
-              ) {
-                return;
-              }
+            track.audio.pause();
 
 
-              track.audio.pause();
-
-
-              try {
-                if (
-                  track.sourceNode
-                ) {
-                  track.sourceNode
-                    .disconnect();
-                }
-
-
-                if (
-                  track.pannerNode
-                ) {
-                  track.pannerNode
-                    .disconnect();
-                }
-              }
-
-              catch (error) {
-                /*
-                  Ignore cleanup errors.
-                */
-              }
-
-
-              track.audio
-                .removeAttribute(
-                  'src'
-                );
-
-
-              track.audio.load();
-
-
-              if (
-                track.audio
-                  .parentNode
-              ) {
-                track.audio
-                  .parentNode
-                  .removeChild(
-                    track.audio
-                  );
-              }
-            }
-          );
-
-
-        /*
-          THUNDER CLEANUP
-        */
-
-        if (
-          this.thunderAudio
-        ) {
-          this.thunderAudio.pause();
-
-
-          this.thunderAudio
-            .removeAttribute(
+            track.audio.removeAttribute(
               'src'
             );
 
 
-          this.thunderAudio.load();
+            track.audio.load();
 
 
-          if (
-            this.thunderAudio
-              .parentNode
-          ) {
-            this.thunderAudio
-              .parentNode
-              .removeChild(
-                this.thunderAudio
+            if (
+              track.audio.parentNode
+            ) {
+              track.audio.parentNode.removeChild(
+                track.audio
               );
+            }
           }
-
-
-          this.thunderAudio =
-            null;
-        }
+        );
 
 
         this.tracks.clear();
 
 
-        this.roomZones.clear();
+        this.desiredPlaying.clear();
       }
   }
 );
 
 
 /* ============================================================
-   GET MANAGER
+   GET AUDIO MANAGER
 ============================================================ */
 
 function getSpatialAudioManager() {
@@ -2454,9 +1339,7 @@ function getSpatialAudioManager() {
     getScene();
 
 
-  if (
-    !scene
-  ) {
+  if (!scene) {
     return null;
   }
 
@@ -2471,15 +1354,85 @@ function getSpatialAudioManager() {
 
 
 /* ============================================================
-   UNLOCK AUDIO
+   RESUME WEB AUDIO CONTEXT
+
+   A-Frame may create a Web Audio context for some project sounds.
+   Resume it as part of the same Quest audio recovery process.
+============================================================ */
+
+async function resumeRoomsWebAudioContext() {
+  let context =
+    null;
+
+
+  try {
+    if (
+      typeof THREE !==
+        'undefined' &&
+      THREE.AudioContext &&
+      THREE.AudioContext.getContext
+    ) {
+      context =
+        THREE.AudioContext.getContext();
+    }
+  }
+
+  catch (error) {
+    context =
+      null;
+  }
+
+
+  if (!context) {
+    const scene =
+      getScene();
+
+
+    if (
+      scene &&
+      scene.audioListener &&
+      scene.audioListener.context
+    ) {
+      context =
+        scene.audioListener.context;
+    }
+  }
+
+
+  if (
+    context &&
+    context.state ===
+      'suspended'
+  ) {
+    try {
+      await context.resume();
+    }
+
+    catch (error) {
+      console.warn(
+        'Rooms Within Web Audio context could not resume:',
+        error
+      );
+    }
+  }
+
+
+  return Boolean(
+    !context ||
+    context.state ===
+      'running'
+  );
+}
+
+
+/* ============================================================
+   UNLOCK ONE NATIVE AUDIO ELEMENT
 ============================================================ */
 
 function unlockAudioElement(
   audio
 ) {
-  if (
-    !audio
-  ) {
+  if (!audio) {
     return Promise.resolve(
       false
     );
@@ -2504,15 +1457,12 @@ function unlockAudioElement(
       promise.then
     ) {
       return promise
-
         .then(
           () => {
             audio.pause();
 
-
             audio.currentTime =
               0;
-
 
             audio.volume =
               previousVolume;
@@ -2521,15 +1471,12 @@ function unlockAudioElement(
             return true;
           }
         )
-
         .catch(
           () => {
             audio.pause();
 
-
             audio.currentTime =
               0;
-
 
             audio.volume =
               previousVolume;
@@ -2543,10 +1490,8 @@ function unlockAudioElement(
 
     audio.pause();
 
-
     audio.currentTime =
       0;
-
 
     audio.volume =
       previousVolume;
@@ -2560,10 +1505,8 @@ function unlockAudioElement(
   catch (error) {
     audio.pause();
 
-
     audio.currentTime =
       0;
-
 
     audio.volume =
       previousVolume;
@@ -2577,686 +1520,101 @@ function unlockAudioElement(
 
 
 /* ============================================================
-   THUNDER
-
-   engine-environment.js calls:
-
-   window.playRoomsThunder()
+   SOUND BUTTON UI
 ============================================================ */
 
-function playRoomsThunder() {
-  const manager =
-    getSpatialAudioManager();
-
-
-  if (
-    !manager ||
-    !manager.thunderAudio ||
-    !roomsAudioUnlocked ||
-    roomsMuted ||
-    isRoomsPauseMenuOpen()
-  ) {
-    return false;
-  }
-
-
-  const now =
-    performance.now();
-
-
-  /*
-    If two different lights flicker
-    together, don't stack two thunder
-    WAV files on top of each other.
-  */
-
-  if (
-    now -
-    roomsLastThunderTime <
-    THUNDER_SOUND_DEFINITION
-      .cooldown
-  ) {
-    return false;
-  }
-
-
-  roomsLastThunderTime =
-    now;
-
-
-  const thunder =
-    manager.thunderAudio;
-
-
-  thunder.pause();
-
-
-  thunder.currentTime =
-    0;
-
-
-  thunder.volume =
-    clamp01(
-      THUNDER_SOUND_DEFINITION
-        .baseVolume *
-
-      roomsMasterVolume
-    );
-
-
-  const promise =
-    thunder.play();
-
-
-  if (
-    promise &&
-    promise.catch
-  ) {
-    promise.catch(
-      (error) => {
-        console.warn(
-          'Thunder sound could not start:',
-          error
-        );
-      }
-    );
-  }
-
-
-  return true;
-}
-
-
-/* ============================================================
-   FOOTSTEPS
-============================================================ */
-
-AFRAME.registerComponent(
-  'footstep-player',
-  {
-    schema: {
-      minSpeed: {
-        default: 0.045
-      },
-
-
-      maxSpeed: {
-        default: 3.8
-      },
-
-
-      stepDistance: {
-        default: 0.42
-      },
-
-
-      teleportDistance: {
-        default: 0.72
-      },
-
-
-      volume: {
-        default: 0.27
-      },
-
-
-      minInterval: {
-        default: 260
-      }
-    },
-
-
-    init: function () {
-      this.sourceAudio =
-        document.querySelector(
-          '#footstepAudio'
-        );
-
-
-      this.audioPool =
-        [];
-
-
-      this.poolIndex =
-        0;
-
-
-      this.previousWorldPosition =
-        new THREE.Vector3();
-
-
-      this.currentWorldPosition =
-        new THREE.Vector3();
-
-
-      this.hasPreviousPosition =
-        false;
-
-
-      this.accumulatedDistance =
-        0;
-
-
-      this.lastStepTime =
-        -Infinity;
-
-
-      this.lastSpeed =
-        0;
-
-
-      this.lastDeltaDistance =
-        0;
-
-
-      this.createAudioPool();
-    },
-
-
-    createAudioPool:
-      function () {
-        if (
-          !this.sourceAudio
-        ) {
-          console.warn(
-            'Footstep audio element #footstepAudio was not found.'
-          );
-
-
-          return;
-        }
-
-
-        this.sourceAudio.pause();
-
-
-        this.sourceAudio.loop =
-          false;
-
-
-        this.sourceAudio.volume =
-          0;
-
-
-        for (
-          let i = 0;
-          i < 2;
-          i++
-        ) {
-          const audio =
-            new Audio();
-
-
-          audio.src =
-            this.sourceAudio
-              .currentSrc ||
-
-            this.sourceAudio
-              .src;
-
-
-          audio.preload =
-            'auto';
-
-
-          audio.loop =
-            false;
-
-
-          audio.playsInline =
-            true;
-
-
-          audio.volume =
-            0;
-
-
-          document.body
-            .appendChild(
-              audio
-            );
-
-
-          this.audioPool.push(
-            audio
-          );
-        }
-      },
-
-
-    getAudioElements:
-      function () {
-        return (
-          this.audioPool.slice()
-        );
-      },
-
-
-    getMovementEntity:
-      function () {
-        return (
-          getCameraEntity() ||
-          this.el
-        );
-      },
-
-
-    resetTracking:
-      function () {
-        this.hasPreviousPosition =
-          false;
-
-
-        this.accumulatedDistance =
-          0;
-
-
-        this.lastSpeed =
-          0;
-
-
-        this.lastDeltaDistance =
-          0;
-      },
-
-
-    stopAllSteps:
-      function () {
-        this.audioPool
-          .forEach(
-            (audio) => {
-              audio.pause();
-
-
-              audio.currentTime =
-                0;
-            }
-          );
-      },
-
-
-    playStep:
-      function (
-        time,
-        speed
-      ) {
-        if (
-          this.audioPool.length ===
-            0 ||
-
-          !roomsAudioUnlocked ||
-
-          roomsMuted ||
-
-          isRoomsPauseMenuOpen()
-        ) {
-          return;
-        }
-
-
-        if (
-          time -
-          this.lastStepTime <
-          this.data
-            .minInterval
-        ) {
-          return;
-        }
-
-
-        const audio =
-          this.audioPool[
-            this.poolIndex
-          ];
-
-
-        this.poolIndex =
-          (
-            this.poolIndex +
-            1
-          )
-
-          %
-
-          this.audioPool
-            .length;
-
-
-        audio.pause();
-
-
-        audio.currentTime =
-          0;
-
-
-        const speedGain =
-          THREE.MathUtils
-            .clamp(
-              speed / 1.2,
-              0.65,
-              1
-            );
-
-
-        audio.volume =
-          clamp01(
-            this.data.volume *
-
-            roomsMasterVolume *
-
-            speedGain
-          );
-
-
-        audio.playbackRate =
-          0.96 +
-          Math.random() *
-          0.08;
-
-
-        const promise =
-          audio.play();
-
-
-        if (
-          promise &&
-          promise.catch
-        ) {
-          promise.catch(
-            (error) => {
-              console.warn(
-                'Footstep sound could not start:',
-                error
-              );
-            }
-          );
-        }
-
-
-        this.lastStepTime =
-          time;
-      },
-
-
-    pause:
-      function () {
-        this.stopAllSteps();
-
-
-        this.resetTracking();
-      },
-
-
-    play:
-      function () {
-        this.resetTracking();
-      },
-
-
-    tick:
-      function (
-        time,
-        deltaTime
-      ) {
-        if (
-          !deltaTime ||
-          this.audioPool.length ===
-            0
-        ) {
-          return;
-        }
-
-
-        if (
-          roomsMuted ||
-          isRoomsPauseMenuOpen() ||
-          !roomsAudioUnlocked
-        ) {
-          this.stopAllSteps();
-
-
-          this.resetTracking();
-
-
-          return;
-        }
-
-
-        const movementEntity =
-          this.getMovementEntity();
-
-
-        if (
-          !movementEntity
-        ) {
-          return;
-        }
-
-
-        movementEntity.object3D
-          .getWorldPosition(
-            this.currentWorldPosition
-          );
-
-
-        if (
-          !this.hasPreviousPosition
-        ) {
-          this.previousWorldPosition
-            .copy(
-              this.currentWorldPosition
-            );
-
-
-          this.hasPreviousPosition =
-            true;
-
-
-          return;
-        }
-
-
-        const deltaX =
-          this.currentWorldPosition.x -
-          this.previousWorldPosition.x;
-
-
-        const deltaZ =
-          this.currentWorldPosition.z -
-          this.previousWorldPosition.z;
-
-
-        const distance =
-          Math.sqrt(
-            deltaX * deltaX +
-            deltaZ * deltaZ
-          );
-
-
-        const speed =
-          distance
-
-          /
-
-          Math.max(
-            deltaTime /
-              1000,
-
-            0.001
-          );
-
-
-        this.lastSpeed =
-          speed;
-
-
-        this.lastDeltaDistance =
-          distance;
-
-
-        /*
-          Teleport should not produce
-          footsteps.
-        */
-
-        if (
-          distance >=
-          this.data
-            .teleportDistance
-        ) {
-          this.accumulatedDistance =
-            0;
-
-
-          this.previousWorldPosition
-            .copy(
-              this.currentWorldPosition
-            );
-
-
-          return;
-        }
-
-
-        const effectiveMinSpeed =
-          Math.max(
-            0.045,
-
-            this.data
-              .minSpeed
-          );
-
-
-        const isWalking =
-          speed >=
-            effectiveMinSpeed &&
-
-          speed <=
-            this.data.maxSpeed;
-
-
-        if (
-          isWalking
-        ) {
-          this.accumulatedDistance +=
-            distance;
-
-
-          if (
-            this.accumulatedDistance >=
-            this.data
-              .stepDistance
-          ) {
-            this.playStep(
-              time,
-              speed
-            );
-
-
-            this.accumulatedDistance =
-              Math.max(
-                0,
-
-                this.accumulatedDistance -
-
-                this.data
-                  .stepDistance
-              );
-          }
-        }
-
-        else if (
-          speed <
-          effectiveMinSpeed
-        ) {
-          this.accumulatedDistance =
-            Math.max(
-              0,
-
-              this.accumulatedDistance -
-              0.012
-            );
-        }
-
-
-        this.previousWorldPosition
-          .copy(
-            this.currentWorldPosition
-          );
-      },
-
-
-    remove:
-      function () {
-        this.stopAllSteps();
-
-
-        this.audioPool
-          .forEach(
-            (audio) => {
-              audio.removeAttribute(
-                'src'
-              );
-
-
-              audio.load();
-
-
-              if (
-                audio.parentNode
-              ) {
-                audio.parentNode
-                  .removeChild(
-                    audio
-                  );
-              }
-            }
-          );
-
-
-        this.audioPool =
-          [];
-      }
-  }
-);
-
-
-/* ============================================================
-   ENABLE SOUND
-============================================================ */
-
-async function enableSound() {
-  const scene =
-    getScene();
-
-
+function setRoomsSoundButtonStarting() {
   const button =
     document.querySelector(
       '#soundButton'
     );
 
 
-  if (
-    !scene
-  ) {
-    console.error(
-      'Cannot enable sound: a-scene was not found.'
-    );
-
-
+  if (!button) {
     return;
   }
 
 
-  if (
-    button
-  ) {
-    button.textContent =
-      'STARTING SOUND...';
+  button.textContent =
+    'STARTING SOUND...';
 
 
-    button.disabled =
-      true;
+  button.disabled =
+    true;
+}
+
+
+function setRoomsSoundButtonReady() {
+  const button =
+    document.querySelector(
+      '#soundButton'
+    );
+
+
+  if (!button) {
+    return;
+  }
+
+
+  button.textContent =
+    'SOUND ENABLED';
+
+
+  button.disabled =
+    true;
+
+
+  window.setTimeout(
+    () => {
+      button.style.display =
+        'none';
+    },
+    600
+  );
+}
+
+
+function setRoomsSoundButtonRetry() {
+  const button =
+    document.querySelector(
+      '#soundButton'
+    );
+
+
+  if (!button) {
+    return;
+  }
+
+
+  button.textContent =
+    'ENABLE SOUND';
+
+
+  button.disabled =
+    false;
+}
+
+
+/* ============================================================
+   CENTRAL AUDIO UNLOCK
+
+   Used by:
+   - ENABLE SOUND
+   - ENTER VR
+   - Quest controller input
+   - VR SOUND button
+============================================================ */
+
+async function unlockRoomsAudioNow(
+  source,
+  showDesktopButtonState
+) {
+  const scene =
+    getScene();
+
+
+  if (!scene) {
+    return false;
   }
 
 
@@ -3264,27 +1622,15 @@ async function enableSound() {
     getSpatialAudioManager();
 
 
-  if (
-    !manager
-  ) {
-    console.error(
-      'Cannot enable sound: spatial-audio-manager is not ready.'
-    );
-
-
+  if (!manager) {
     if (
-      button
+      showDesktopButtonState
     ) {
-      button.textContent =
-        'TRY SOUND AGAIN';
-
-
-      button.disabled =
-        false;
+      setRoomsSoundButtonRetry();
     }
 
 
-    return;
+    return false;
   }
 
 
@@ -3295,110 +1641,56 @@ async function enableSound() {
   }
 
 
-  await resumeRoomsAudioContext();
+  if (
+    showDesktopButtonState
+  ) {
+    setRoomsSoundButtonStarting();
+  }
 
 
-  manager.ensureSpatialGraphs();
-
-
-  updateRoomsAudioListener();
+  await resumeRoomsWebAudioContext();
 
 
   const unlockPromises =
     [];
 
 
-  /* Room sounds + TV */
-
-  manager.tracks
-    .forEach(
-      (track) => {
-        if (
-          track.audio
-        ) {
-          unlockPromises.push(
-            unlockAudioElement(
-              track.audio
-            )
-          );
-        }
+  manager.tracks.forEach(
+    (track) => {
+      if (
+        track.audio
+      ) {
+        unlockPromises.push(
+          unlockAudioElement(
+            track.audio
+          )
+        );
       }
-    );
-
-
-  /* THUNDER */
-
-  if (
-    manager.thunderAudio
-  ) {
-    unlockPromises.push(
-      unlockAudioElement(
-        manager.thunderAudio
-      )
-    );
-  }
-
-
-  /* FOOTSTEPS */
-
-  const rig =
-    getRigEntity();
-
-
-  const footstepComponent =
-    rig &&
-    rig.components
-
-      ? rig.components[
-          'footstep-player'
-        ]
-
-      : null;
-
-
-  if (
-    footstepComponent &&
-    footstepComponent
-      .getAudioElements
-  ) {
-    footstepComponent
-      .getAudioElements()
-      .forEach(
-        (audio) => {
-          unlockPromises.push(
-            unlockAudioElement(
-              audio
-            )
-          );
-        }
-      );
-  }
-
-  else {
-    const fallbackFootstep =
-      document.querySelector(
-        '#footstepAudio'
-      );
-
-
-    if (
-      fallbackFootstep
-    ) {
-      unlockPromises.push(
-        unlockAudioElement(
-          fallbackFootstep
-        )
-      );
     }
-  }
+  );
 
 
-  /* SCARE */
+  const footstep =
+    document.querySelector(
+      '#footstepAudio'
+    );
+
 
   const scareFootstep =
     document.querySelector(
       '#scareFootstepAudio'
     );
+
+
+  if (
+    footstep
+  ) {
+    unlockPromises.push(
+      unlockAudioElement(
+        footstep
+      )
+    );
+  }
 
 
   if (
@@ -3423,10 +1715,53 @@ async function enableSound() {
       (result) =>
         result.status ===
           'fulfilled' &&
-
         result.value ===
           true
     ).length;
+
+
+  const success =
+    successCount > 0 ||
+    unlockPromises.length ===
+      0;
+
+
+  roomsLastUnlockSource =
+    String(
+      source ||
+      'unknown'
+    );
+
+
+  roomsLastUnlockSuccess =
+    success;
+
+
+  if (
+    !success
+  ) {
+    roomsAudioUnlocked =
+      false;
+
+
+    scene.audioUnlocked =
+      false;
+
+
+    if (
+      showDesktopButtonState
+    ) {
+      setRoomsSoundButtonRetry();
+    }
+
+
+    console.warn(
+      `Rooms Within audio unlock was blocked (${roomsLastUnlockSource}). The next Quest controller press will try again.`
+    );
+
+
+    return false;
+  }
 
 
   roomsAudioUnlocked =
@@ -3438,6 +1773,18 @@ async function enableSound() {
 
 
   if (
+    footstep
+  ) {
+    footstep.loop =
+      true;
+
+
+    footstep.volume =
+      getPlayerFootstepVolume();
+  }
+
+
+  if (
     scareFootstep
   ) {
     scareFootstep.volume =
@@ -3445,13 +1792,7 @@ async function enableSound() {
   }
 
 
-  manager.refreshRoomZones();
-
-
-  manager.updateSpatialPositions();
-
-
-  manager.ensureContinuousRoomTracks();
+  manager.playNormalAmbience();
 
 
   manager.applyPlaybackState();
@@ -3462,39 +1803,94 @@ async function enableSound() {
 
   scene.emit(
     'audio-settings-changed',
-
     getRoomsAudioState(),
-
     false
   );
 
 
+  setRoomsSoundButtonReady();
+
+
+  console.log(
+    `Rooms Within audio unlocked from ${roomsLastUnlockSource}. ${successCount} audio element(s) accepted playback.`
+  );
+
+
+  return true;
+}
+
+
+/* ============================================================
+   ENSURE SOUND IS UNLOCKED
+============================================================ */
+
+function ensureRoomsAudioUnlocked(
+  source,
+  showDesktopButtonState =
+    false
+) {
   if (
-    button
+    roomsAudioUnlocked
   ) {
-    button.textContent =
-      'SOUND ENABLED';
+    const manager =
+      getSpatialAudioManager();
 
 
-    window.setTimeout(
-      () => {
-        button.style.display =
-          'none';
-      },
+    if (
+      manager
+    ) {
+      manager.applyPlaybackState();
+    }
 
-      900
+
+    return Promise.resolve(
+      true
     );
   }
 
 
-  console.log(
-    `Rooms Within audio enabled. ${successCount} audio element(s) unlocked.`
+  if (
+    roomsAudioUnlockInProgress
+  ) {
+    return (
+      roomsAudioUnlockInProgress
+    );
+  }
+
+
+  roomsAudioUnlockInProgress =
+    unlockRoomsAudioNow(
+      source,
+      showDesktopButtonState
+    )
+      .finally(
+        () => {
+          roomsAudioUnlockInProgress =
+            null;
+        }
+      );
+
+
+  return (
+    roomsAudioUnlockInProgress
   );
 }
 
 
 /* ============================================================
-   TV
+   ENABLE SOUND BUTTON
+============================================================ */
+
+async function enableSound() {
+  return ensureRoomsAudioUnlocked(
+    'enable-sound-button',
+    true
+  );
+}
+
+
+/* ============================================================
+   STANDALONE TV STATE
 ============================================================ */
 
 function setRoomsTVState(
@@ -3510,32 +1906,50 @@ function setRoomsTVState(
     getSpatialAudioManager();
 
 
-  if (
-    !manager
-  ) {
+  if (!manager) {
     return;
   }
 
 
-  const tvTrack =
-    manager.getTrack(
+  if (
+    roomsTVOn
+  ) {
+    manager.desiredPlaying.add(
+      'tvStaticSound'
+    );
+  }
+
+  else {
+    manager.desiredPlaying.delete(
       'tvStaticSound'
     );
 
 
-  if (
-    roomsTVOn &&
-    tvTrack
-  ) {
-    manager.ensurePlaying(
-      tvTrack
-    );
+    const track =
+      manager.getTrack(
+        'tvStaticSound'
+      );
+
+
+    if (
+      track &&
+      track.audio
+    ) {
+      track.audio.pause();
+
+      track.audio.currentTime =
+        0;
+    }
   }
 
 
   manager.applyPlaybackState();
 }
 
+
+/* ============================================================
+   STANDALONE TV SOUND POSITION
+============================================================ */
 
 function setRoomsTVPosition(
   worldPosition
@@ -3570,10 +1984,10 @@ function setRoomsTVPosition(
   if (
     manager
   ) {
-    manager.updateSpatialPositions();
-
-
-    manager.applyPlaybackState();
+    manager.setEmitterPosition(
+      'tvStaticSound',
+      roomsTVWorldPosition
+    );
   }
 
 
@@ -3593,7 +2007,53 @@ function setRoomsTVPosition(
 
 
 /* ============================================================
-   VOLUME / MUTE
+   THUNDER
+============================================================ */
+
+function playRoomsThunder() {
+  const now =
+    performance.now();
+
+
+  if (
+    now -
+      roomsLastThunderTime <
+    250
+  ) {
+    return false;
+  }
+
+
+  if (
+    roomsMuted ||
+    isRoomsPauseMenuOpen() ||
+    !roomsAudioUnlocked
+  ) {
+    return false;
+  }
+
+
+  const manager =
+    getSpatialAudioManager();
+
+
+  if (!manager) {
+    return false;
+  }
+
+
+  roomsLastThunderTime =
+    now;
+
+
+  return manager.playOneShot(
+    'thunderSound'
+  );
+}
+
+
+/* ============================================================
+   MASTER VOLUME
 ============================================================ */
 
 function changeRoomsVolume(
@@ -3602,10 +2062,10 @@ function changeRoomsVolume(
   roomsMasterVolume =
     clamp01(
       roomsMasterVolume +
-
-      Number(
-        amount || 0
-      )
+        Number(
+          amount ||
+          0
+        )
     );
 
 
@@ -3613,7 +2073,43 @@ function changeRoomsVolume(
 }
 
 
+/* ============================================================
+   MUTE / UNMUTE
+
+   If the user never enabled audio before entering VR, pressing
+   SOUND acts as an audio-recovery gesture rather than immediately
+   muting the already-silent experience.
+============================================================ */
+
 function toggleRoomsMute() {
+  if (
+    !roomsAudioUnlocked
+  ) {
+    roomsMuted =
+      false;
+
+
+    window.roomsMuted =
+      false;
+
+
+    updateRoomsVolumeUI();
+
+
+    ensureRoomsAudioUnlocked(
+      'sound-toggle'
+    )
+      .then(
+        () => {
+          applyRoomsAudioSettings();
+        }
+      );
+
+
+    return false;
+  }
+
+
   roomsMuted =
     !roomsMuted;
 
@@ -3630,14 +2126,10 @@ function toggleRoomsMute() {
 
 
 /* ============================================================
-   STATE
+   CURRENT AUDIO STATE
 ============================================================ */
 
 function getRoomsAudioState() {
-  const manager =
-    getSpatialAudioManager();
-
-
   return {
     muted:
       roomsMuted,
@@ -3651,17 +2143,11 @@ function getRoomsAudioState() {
     unlocked:
       roomsAudioUnlocked,
 
-    room:
-      manager
+    lastUnlockSource:
+      roomsLastUnlockSource,
 
-        ? manager.currentRoom
-
-        : null,
-
-    spatialAudio:
-      Boolean(
-        roomsAudioContext
-      )
+    lastUnlockSuccess:
+      roomsLastUnlockSuccess
   };
 }
 
@@ -3679,61 +2165,29 @@ function applyRoomsAudioSettings() {
     manager
   ) {
     manager.applyPlaybackState();
-
-
-    /*
-      THUNDER also follows
-      the master volume.
-    */
-
-    if (
-      manager.thunderAudio
-    ) {
-      manager.thunderAudio.volume =
-        clamp01(
-          THUNDER_SOUND_DEFINITION
-            .baseVolume *
-
-          roomsMasterVolume
-        );
-
-
-      if (
-        roomsMuted ||
-        isRoomsPauseMenuOpen()
-      ) {
-        manager.thunderAudio.pause();
-      }
-    }
   }
 
 
-  const rig =
-    getRigEntity();
-
-
-  const footsteps =
-    rig &&
-    rig.components
-
-      ? rig.components[
-          'footstep-player'
-        ]
-
-      : null;
+  const footstep =
+    document.querySelector(
+      '#footstepAudio'
+    );
 
 
   if (
-    footsteps &&
-    (
-      roomsMuted ||
-      isRoomsPauseMenuOpen()
-    )
+    footstep
   ) {
-    footsteps.stopAllSteps();
+    footstep.volume =
+      getPlayerFootstepVolume();
 
 
-    footsteps.resetTracking();
+    if (
+      roomsMuted ||
+      isRoomsPauseMenuOpen() ||
+      !roomsAudioUnlocked
+    ) {
+      footstep.pause();
+    }
   }
 
 
@@ -3752,7 +2206,8 @@ function applyRoomsAudioSettings() {
 
     if (
       roomsMuted ||
-      isRoomsPauseMenuOpen()
+      isRoomsPauseMenuOpen() ||
+      !roomsAudioUnlocked
     ) {
       scareFootstep.pause();
     }
@@ -3771,9 +2226,7 @@ function applyRoomsAudioSettings() {
   ) {
     scene.emit(
       'audio-settings-changed',
-
       getRoomsAudioState(),
-
       false
     );
   }
@@ -3781,7 +2234,7 @@ function applyRoomsAudioSettings() {
 
 
 /* ============================================================
-   SOUND UI
+   UPDATE SOUND UI
 ============================================================ */
 
 function updateRoomsVolumeUI() {
@@ -3824,9 +2277,7 @@ function updateRoomsVolumeUI() {
 
   const soundText =
     roomsMuted
-
       ? 'SOUND: OFF'
-
       : 'SOUND: ON';
 
 
@@ -3862,9 +2313,318 @@ function updateRoomsVolumeUI() {
 
 
 /* ============================================================
-   DEBUG
+   PLAYER FOOTSTEPS
+============================================================ */
 
-   Console:
+AFRAME.registerComponent(
+  'footstep-player',
+  {
+    schema: {
+      minSpeed: {
+        default:
+          0.02
+      },
+
+      maxSpeed: {
+        default:
+          4
+      },
+
+      volume: {
+        default:
+          0.11
+      }
+    },
+
+
+    init: function () {
+      this.audio =
+        document.querySelector(
+          '#footstepAudio'
+        );
+
+
+      this.previousWorldPosition =
+        new THREE.Vector3();
+
+
+      this.currentWorldPosition =
+        new THREE.Vector3();
+
+
+      this.hasPreviousPosition =
+        false;
+
+
+      this.isPlaying =
+        false;
+
+
+      if (
+        this.audio
+      ) {
+        this.audio.loop =
+          true;
+
+
+        this.audio.playsInline =
+          true;
+
+
+        this.audio.setAttribute(
+          'playsinline',
+          ''
+        );
+
+
+        this.audio.volume =
+          getPlayerFootstepVolume();
+      }
+    },
+
+
+    stopSteps:
+      function () {
+        if (
+          !this.audio
+        ) {
+          return;
+        }
+
+
+        this.audio.pause();
+
+
+        this.audio.currentTime =
+          0;
+
+
+        this.isPlaying =
+          false;
+      },
+
+
+    pause:
+      function () {
+        this.stopSteps();
+
+
+        this.hasPreviousPosition =
+          false;
+      },
+
+
+    play:
+      function () {
+        this.hasPreviousPosition =
+          false;
+      },
+
+
+    tick:
+      function (
+        time,
+        deltaTime
+      ) {
+        if (
+          !deltaTime ||
+          !this.audio
+        ) {
+          return;
+        }
+
+
+        if (
+          roomsMuted ||
+          isRoomsPauseMenuOpen() ||
+          !roomsAudioUnlocked
+        ) {
+          if (
+            this.isPlaying
+          ) {
+            this.stopSteps();
+          }
+
+
+          this.hasPreviousPosition =
+            false;
+
+
+          return;
+        }
+
+
+        this.el.object3D
+          .getWorldPosition(
+            this.currentWorldPosition
+          );
+
+
+        if (
+          !this.hasPreviousPosition
+        ) {
+          this.previousWorldPosition
+            .copy(
+              this.currentWorldPosition
+            );
+
+
+          this.hasPreviousPosition =
+            true;
+
+
+          return;
+        }
+
+
+        const deltaX =
+          this.currentWorldPosition.x -
+          this.previousWorldPosition.x;
+
+
+        const deltaZ =
+          this.currentWorldPosition.z -
+          this.previousWorldPosition.z;
+
+
+        const distance =
+          Math.sqrt(
+            deltaX *
+              deltaX +
+
+            deltaZ *
+              deltaZ
+          );
+
+
+        const speed =
+          distance /
+          Math.max(
+            deltaTime /
+              1000,
+
+            0.001
+          );
+
+
+        const isWalking =
+          speed >=
+            this.data.minSpeed &&
+
+          speed <=
+            this.data.maxSpeed;
+
+
+        this.audio.volume =
+          roomsMuted
+            ? 0
+            : this.data.volume *
+              roomsMasterVolume;
+
+
+        if (
+          isWalking &&
+          !this.isPlaying
+        ) {
+          try {
+            const playPromise =
+              this.audio.play();
+
+
+            this.isPlaying =
+              true;
+
+
+            if (
+              playPromise &&
+              playPromise.catch
+            ) {
+              playPromise.catch(
+                (error) => {
+                  this.isPlaying =
+                    false;
+
+
+                  console.warn(
+                    'Footstep sound could not start:',
+                    error
+                  );
+                }
+              );
+            }
+          }
+
+          catch (error) {
+            this.isPlaying =
+              false;
+          }
+        }
+
+        else if (
+          !isWalking &&
+          this.isPlaying
+        ) {
+          this.stopSteps();
+        }
+
+
+        this.previousWorldPosition
+          .copy(
+            this.currentWorldPosition
+          );
+      }
+  }
+);
+
+
+/* ============================================================
+   EXTRA USER-GESTURE RECOVERY
+
+   This means pressing A-Frame's ENTER VR button itself can also
+   unlock the audio because pointerdown is a real browser gesture.
+============================================================ */
+
+function setupRoomsAudioGestureRecovery() {
+  const attempt = () => {
+    if (
+      !roomsAudioUnlocked
+    ) {
+      ensureRoomsAudioUnlocked(
+        'page-user-gesture'
+      );
+    }
+  };
+
+
+  window.addEventListener(
+    'pointerdown',
+    attempt,
+    {
+      passive: true
+    }
+  );
+
+
+  window.addEventListener(
+    'touchstart',
+    attempt,
+    {
+      passive: true
+    }
+  );
+
+
+  window.addEventListener(
+    'keydown',
+    attempt
+  );
+}
+
+
+/* ============================================================
+   DEBUG AUDIO STATE
+
+   Browser console:
 
    getRoomsAudioDebug()
 ============================================================ */
@@ -3881,91 +2641,76 @@ function getRoomsAudioDebug() {
   if (
     manager
   ) {
-    manager.tracks
-      .forEach(
-        (
-          track,
-          id
-        ) => {
-          tracks.push(
-            {
-              id,
+    manager.tracks.forEach(
+      (
+        track,
+        id
+      ) => {
+        tracks.push({
+          id,
 
-              type:
-                track.type,
+          src:
+            track.definition.src,
 
-              src:
-                track.definition.src,
+          paused:
+            track.audio.paused,
 
-              paused:
-                track.audio.paused,
+          volume:
+            Number(
+              track.audio.volume
+                .toFixed(
+                  3
+                )
+            ),
 
-              currentTime:
-                Number(
-                  track.audio
-                    .currentTime
+          distance:
+            Number.isFinite(
+              track.lastDistance
+            )
+              ? Number(
+                  track.lastDistance
                     .toFixed(
                       2
                     )
-                ),
-
-              volume:
-                Number(
-                  track.audio
-                    .volume
-                    .toFixed(
-                      3
-                    )
-                ),
-
-              gain:
-                Number(
-                  (
-                    track.lastGain ||
-                    0
-                  )
-                    .toFixed(
-                      3
-                    )
-                ),
-
-              spatial:
-                Boolean(
-                  track.pannerNode
-                ),
-
-              distance:
-                Number.isFinite(
-                  track.lastDistance
                 )
+              : null,
 
-                  ? Number(
-                      track.lastDistance
-                        .toFixed(
-                          2
-                        )
-                    )
-
-                  : null
-            }
-          );
-        }
-      );
+          distanceGain:
+            Number(
+              track.lastGain
+                .toFixed(
+                  3
+                )
+            )
+        });
+      }
+    );
   }
 
 
-  const tvPosition =
-    manager
-
-      ? manager
-          .resolveTVPosition()
-
-      : roomsTVWorldPosition;
+  const scene =
+    getScene();
 
 
   return {
     unlocked:
       roomsAudioUnlocked,
+
+    unlockInProgress:
+      Boolean(
+        roomsAudioUnlockInProgress
+      ),
+
+    lastUnlockSource:
+      roomsLastUnlockSource,
+
+    lastUnlockSuccess:
+      roomsLastUnlockSuccess,
+
+    immersiveXR:
+      hasRoomsImmersiveXRSession(
+        scene
+      ),
 
     muted:
       roomsMuted,
@@ -3973,116 +2718,20 @@ function getRoomsAudioDebug() {
     masterVolume:
       roomsMasterVolume,
 
-    currentRoom:
-      manager
-
-        ? manager.currentRoom
-
-        : null,
-
-    rawDetectedRoom:
-      manager
-
-        ? manager.lastRawRoom
-
-        : null,
-
-    lastValidRoom:
-      manager
-
-        ? manager.lastValidRoom
-
-        : null,
-
     tvOn:
       roomsTVOn,
 
-    tvPosition:
-      tvPosition
-
-        ? tvPosition
+    tvWorldPosition:
+      roomsTVWorldPosition
+        ? roomsTVWorldPosition
             .toArray()
-            .map(
-              (value) =>
-                Number(
-                  value.toFixed(
-                    2
-                  )
-                )
-            )
-
         : null,
-
-    thunder:
-      manager &&
-      manager.thunderAudio
-
-        ? {
-            src:
-              THUNDER_SOUND_DEFINITION
-                .src,
-
-            paused:
-              manager
-                .thunderAudio
-                .paused,
-
-            volume:
-              Number(
-                manager
-                  .thunderAudio
-                  .volume
-                  .toFixed(
-                    3
-                  )
-              ),
-
-            currentTime:
-              Number(
-                manager
-                  .thunderAudio
-                  .currentTime
-                  .toFixed(
-                    2
-                  )
-              )
-          }
-
-        : null,
-
-    audioContextState:
-      roomsAudioContext
-
-        ? roomsAudioContext
-            .state
-
-        : null,
-
-    spatialAudio:
-      Boolean(
-        roomsAudioContext
-      ),
 
     paused:
       isRoomsPauseMenuOpen(),
 
     tracks
   };
-}
-
-
-function printRoomsAudioDebug() {
-  const debug =
-    getRoomsAudioDebug();
-
-
-  console.log(
-    'ROOMS WITHIN AUDIO DEBUG',
-    debug
-  );
-
-
-  return debug;
 }
 
 
@@ -4094,12 +2743,20 @@ window.enableSound =
   enableSound;
 
 
+window.ensureRoomsAudioUnlocked =
+  ensureRoomsAudioUnlocked;
+
+
 window.setRoomsTVState =
   setRoomsTVState;
 
 
 window.setRoomsTVPosition =
   setRoomsTVPosition;
+
+
+window.playRoomsThunder =
+  playRoomsThunder;
 
 
 window.changeRoomsVolume =
@@ -4122,18 +2779,19 @@ window.updateRoomsVolumeUI =
   updateRoomsVolumeUI;
 
 
-/*
-  This is what the new
-  engine-environment.js flicker uses.
-*/
-
-window.playRoomsThunder =
-  playRoomsThunder;
-
-
 window.getRoomsAudioDebug =
   getRoomsAudioDebug;
 
 
-window.printRoomsAudioDebug =
-  printRoomsAudioDebug;
+/* ============================================================
+   STARTUP
+============================================================ */
+
+window.addEventListener(
+  'DOMContentLoaded',
+  () => {
+    setupRoomsAudioGestureRecovery();
+
+    updateRoomsVolumeUI();
+  }
+);
