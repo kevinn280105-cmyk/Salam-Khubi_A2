@@ -7,7 +7,7 @@
    - Right-controller B opens/closes Settings.
    - Right trigger selects the 3D Settings controls.
    - Right-controller ray points straight forward.
-   - Virtual hand mesh is corrected upward by 45 degrees without
+   - Virtual hand mesh is corrected upward by 40 degrees without
      changing the real controller tracking/grab position.
 
    DESKTOP:
@@ -740,7 +740,7 @@ window.syncRoomsPauseUI =
 /* ============================================================
    HAND VISUAL CORRECTION
 
-   Rotate ONLY the visible hand mesh +45 degrees.
+   Rotate ONLY the visible hand mesh upward by about 40 degrees.
    Do not rotate the tracked controller entity itself.
 
    That means:
@@ -755,7 +755,7 @@ AFRAME.registerComponent(
   {
     schema: {
       pitch: {
-        default: 45
+        default: 40
       },
 
       yaw: {
@@ -799,6 +799,17 @@ AFRAME.registerComponent(
       );
     },
 
+    update: function () {
+      /*
+        If index.html still contains an older pitch value, A-Frame
+        can update this component at runtime and immediately reapply
+        the corrected orientation.
+      */
+      if (this.baseQuaternion) {
+        this.apply();
+      }
+    },
+
     apply: function () {
       const mesh =
         this.el.getObject3D('mesh');
@@ -837,12 +848,24 @@ AFRAME.registerComponent(
             )
           );
 
+      /*
+        Apply the correction in the controller/parent space.
+
+        IMPORTANT:
+        The previous version multiplied the offset AFTER the hand
+        model's original quaternion. On Quest, that treated the
+        correction as a local-model rotation and made the hand swing
+        sideways.
+
+        Pre-multiplying the offset makes the pitch correction happen
+        relative to the controller/parent orientation instead.
+      */
       mesh.quaternion
         .copy(
-          this.baseQuaternion
+          offset
         )
         .multiply(
-          offset
+          this.baseQuaternion
         );
     },
 
@@ -884,17 +907,18 @@ function setupRoomsQuestControllerPresentation() {
 
   [leftHand, rightHand]
     .forEach((hand) => {
-      if (
-        hand &&
-        !hand.hasAttribute(
-          'controller-hand-visual-offset'
-        )
-      ) {
-        hand.setAttribute(
-          'controller-hand-visual-offset',
-          'pitch: 45; yaw: 0; roll: 0'
-        );
+      if (!hand) {
+        return;
       }
+
+      /*
+        Force the corrected value even if index.html still has the
+        older 45-degree hand-offset setting.
+      */
+      hand.setAttribute(
+        'controller-hand-visual-offset',
+        'pitch: 40; yaw: 0; roll: 0'
+      );
     });
 
   if (
