@@ -991,11 +991,11 @@
 
       temporary-offering-table-smoke="
         burnDuration: 60000;
-        smokeOffsetX: 0;
-        smokeOffsetY: 0.03;
+        smokeOffsetX: 0.1;
+        smokeOffsetY: 0.10;
         smokeOffsetZ: 0;
         count: 24;
-        height: 0.85;
+        height: 1;
         speed: 0.20;
         width: 0.13;
         opacity: 0.24;
@@ -2069,88 +2069,99 @@
            LEFT QUEST CONTROLLER
       =================================================== -->
 
-      <a-entity
+     <a-entity
 
-        id="leftHand"
+  id="leftHand"
 
-        hand-controls="
-          hand: left
-        "
+  hand-controls="
+    hand: left
+  "
 
-        blink-controls="
-          cameraRig: #rig;
-          teleportOrigin: #cam;
-          collisionEntities: .floor;
-          button: trigger;
-          snapTurn: false;
-          rotateOnTeleport: false
-        "
+  controller-hand-visual-offset="
+    pitch: 45;
+    yaw: 0;
+    roll: 0
+  "
 
-        natural-grab-hand="
-          radius: 0.4;
-          velocitySmoothing: 0.35
-        ">
+  blink-controls="
+    cameraRig: #rig;
+    teleportOrigin: #cam;
+    collisionEntities: .floor;
+    button: trigger;
+    snapTurn: false;
+    rotateOnTeleport: false
+  "
 
-      </a-entity>
+  natural-grab-hand="
+    radius: 0.4;
+    velocitySmoothing: 0.35
+  ">
+
+</a-entity>
 
 
       <!-- ==================================================
            RIGHT QUEST CONTROLLER
       =================================================== -->
 
-      <a-entity
+<a-entity
 
-        id="rightHand"
+  id="rightHand"
 
-        hand-controls="
-          hand: right
-        "
+  hand-controls="
+    hand: right
+  "
 
-        raycaster="
-          objects:
-            #door,
-            .mirror-interactable,
-            .tv-interactable,
-            .offering-smoke-interactable,
-            .offering-smoke-hitbox,
-            .vr-control;
+  controller-hand-visual-offset="
+    pitch: 45;
+    yaw: 0;
+    roll: 0
+  "
 
-          direction:
-            0 -0.45 -0.89;
+  raycaster="
+    objects:
+      #door,
+      .mirror-interactable,
+      .tv-interactable,
+      .offering-smoke-interactable,
+      .offering-smoke-hitbox,
+      .vr-control;
 
-          far:
-            3;
+    direction:
+      0 0 -1;
 
-          interval:
-            50;
+    far:
+      3;
 
-          showLine:
-            true;
+    interval:
+      50;
 
-          lineColor:
-            #ffffff;
+    showLine:
+      true;
 
-          lineOpacity:
-            0.8
-        "
+    lineColor:
+      #ffffff;
 
-        natural-grab-hand="
-          radius: 0.4;
-          velocitySmoothing: 0.35
-        "
+    lineOpacity:
+      0.8
+  "
 
-        vr-door-interactor
+  natural-grab-hand="
+    radius: 0.4;
+    velocitySmoothing: 0.35
+  "
 
-        vr-tv-interactor
+  vr-door-interactor
 
-        vr-mirror-interactor
+  vr-tv-interactor
 
-        vr-offering-table-smoke-interactor
+  vr-mirror-interactor
 
-        vr-ui-interactor>
+  vr-offering-table-smoke-interactor
 
-      </a-entity>
+  vr-ui-interactor>
 
+</a-entity>
 
     </a-entity>
 

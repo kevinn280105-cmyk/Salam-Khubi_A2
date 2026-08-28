@@ -1,25 +1,38 @@
 /* ============================================================
    audio.js — ROOMS WITHIN
-   FULL REPLACEMENT — QUEST RELIABLE NATIVE AUDIO
+   FULL REPLACEMENT
 
-   - No ENABLE SOUND button.
-   - ENTER VR click starts the sound directly.
-   - Uses normal HTMLAudioElement playback because Quest Browser
-     is generally more reliable with this across WebXR transitions.
-   - Settings SOUND: ON / OFF remains the only sound control.
-   - Fan, rain, fluorescent hum and TV static fade by distance.
+   Behaviour:
+   - Normal webpage stays silent.
+   - ENTER VR starts ambience while SOUND is ON.
+   - Settings SOUND: ON / SOUND: OFF always toggles immediately.
+   - SOUND: OFF stops room ambience, TV static, thunder,
+     footsteps, scare footsteps, and spiral ambience.
+   - SOUND: ON restores audio after the Settings menu is resumed.
+   - Fan, rain, fluorescent hum, and TV static fade with distance.
+   - A subtle generated spiral ambience moves left -> right -> left.
+   - Native HTMLAudioElement playback is used for Quest reliability.
+============================================================ */
+
+
+/* ============================================================
+   GLOBAL AUDIO STATE
 ============================================================ */
 
 let roomsMasterVolume = 1.0;
 let roomsMuted = false;
 let roomsTVOn = false;
-let roomsTVWorldPosition = null;
 let roomsAudioUnlocked = false;
+let roomsVRStarted = false;
 let roomsLastUnlockSource = 'none';
 let roomsLastThunderTime = -Infinity;
 
 window.roomsMuted = roomsMuted;
 
+
+/* ============================================================
+   SOUND DEFINITIONS
+============================================================ */
 
 const ROOM_SOUND_DEFINITIONS = [
   {
@@ -84,16 +97,32 @@ const ROOM_SOUND_DEFINITIONS = [
 ];
 
 
-const roomsTracks =
-  new Map();
+/* ============================================================
+   TRACK STORAGE
+============================================================ */
+
+const roomsTracks = new Map();
+const roomsTrackErrors = new Map();
 
 
-const roomsDesiredPlaying =
-  new Set();
+/* ============================================================
+   SPIRAL AMBIENCE STATE
+============================================================ */
 
+const ROOMS_SPIRAL_BASE_VOLUME = 0.035;
+const ROOMS_SPIRAL_CYCLE_SECONDS = 8.0;
 
-const roomsTrackErrors =
-  new Map();
+const roomsSpiral = {
+  context: null,
+  source: null,
+  filter: null,
+  panner: null,
+  gain: null,
+  timer: null,
+  started: false,
+  available: false,
+  startTime: 0
+};
 
 
 /* ============================================================
@@ -112,9 +141,7 @@ function clamp01(value) {
 
 
 function getScene() {
-  return document.querySelector(
-    'a-scene'
-  );
+  return document.querySelector('a-scene');
 }
 
 
@@ -129,11 +156,34 @@ function getCameraEntity() {
 function getDefinition(id) {
   return (
     ROOM_SOUND_DEFINITIONS.find(
-      (item) =>
-        item.id === id
-    ) ||
-    null
+      (definition) => definition.id === id
+    ) || null
   );
+}
+
+
+function hasRoomsImmersiveXRSession(scene) {
+  try {
+    if (
+      !scene ||
+      !scene.renderer ||
+      !scene.renderer.xr
+    ) {
+      return false;
+    }
+
+    const xr = scene.renderer.xr;
+
+    return Boolean(
+      xr.isPresenting ||
+      (
+        xr.getSession &&
+        xr.getSession()
+      )
+    );
+  } catch (error) {
+    return false;
+  }
 }
 
 
@@ -145,35 +195,24 @@ function isRoomsPauseMenuOpen() {
     return true;
   }
 
-
   const desktopOverlay =
     document.querySelector(
       '#screenPauseMenuOverlay'
     );
 
-
   if (
     desktopOverlay &&
-    desktopOverlay.classList.contains(
-      'is-open'
-    )
+    desktopOverlay.classList.contains('is-open')
   ) {
     return true;
   }
 
-
   const vrPanel =
-    document.querySelector(
-      '#vrPausePanel'
-    );
-
+    document.querySelector('#vrPausePanel');
 
   if (vrPanel) {
     const visible =
-      vrPanel.getAttribute(
-        'visible'
-      );
-
+      vrPanel.getAttribute('visible');
 
     if (
       visible === true ||
@@ -183,169 +222,22 @@ function isRoomsPauseMenuOpen() {
     }
   }
 
-
   return false;
 }
 
 
-/* ============================================================
-   CREATE AUDIO
-============================================================ */
-
-function createAudioElement(
-  definition
-) {
-  const audio =
-    document.createElement(
-      'audio'
-    );
-
-
-  audio.id =
-    `rooms-${definition.id}`;
-
-
-  audio.src =
-    definition.src;
-
-
-  audio.preload =
-    'auto';
-
-
-  audio.loop =
-    Boolean(
-      definition.loop
-    );
-
-
-  audio.playsInline =
-    true;
-
-
-  audio.setAttribute(
-    'playsinline',
-    ''
-  );
-
-
-  audio.setAttribute(
-    'webkit-playsinline',
-    ''
-  );
-
-
-  audio.volume =
-    0;
-
-
-  audio.style.display =
-    'none';
-
-
-  audio.addEventListener(
-    'canplay',
-    () => {
-      roomsTrackErrors.delete(
-        definition.id
-      );
-    }
-  );
-
-
-  audio.addEventListener(
-    'error',
-    () => {
-      let message =
-        'unknown media error';
-
-
-      if (
-        audio.error
-      ) {
-        message =
-          `code ${audio.error.code}`;
-      }
-
-
-      roomsTrackErrors.set(
-        definition.id,
-        message
-      );
-
-
-      console.error(
-        `Rooms Within: failed to load ${definition.id}: ${definition.src} (${message})`
-      );
-    }
-  );
-
-
-  document.body.appendChild(
-    audio
-  );
-
-
-  return audio;
-}
-
-
-/* ============================================================
-   PREPARE TRACKS
-============================================================ */
-
-function ensureRoomsTracks() {
-  ROOM_SOUND_DEFINITIONS.forEach(
-    (definition) => {
-      if (
-        !roomsTracks.has(
-          definition.id
-        )
-      ) {
-        const audio =
-          createAudioElement(
-            definition
-          );
-
-
-        roomsTracks.set(
-          definition.id,
-          {
-            definition,
-            audio,
-            playRequested:
-              false,
-            lastPlaySucceeded:
-              false
-          }
-        );
-      }
-
-
-      if (
-        definition.auto
-      ) {
-        roomsDesiredPlaying.add(
-          definition.id
-        );
-      }
-    }
+function shouldRoomsAudioBeAudible() {
+  return Boolean(
+    roomsVRStarted &&
+    !roomsMuted &&
+    !isRoomsPauseMenuOpen()
   );
 }
 
-
-/* ============================================================
-   PLAYER POSITION
-============================================================ */
 
 function getPlayerWorldPosition() {
-  const camera =
-    getCameraEntity();
-
-
-  const position =
-    new THREE.Vector3();
-
+  const camera = getCameraEntity();
+  const position = new THREE.Vector3();
 
   if (
     camera &&
@@ -356,128 +248,199 @@ function getPlayerWorldPosition() {
     );
   }
 
-
   return position;
 }
 
 
 /* ============================================================
-   DISTANCE VOLUME
+   CREATE NATIVE AUDIO ELEMENTS
+============================================================ */
+
+function createRoomsAudioElement(definition) {
+  const audio =
+    document.createElement('audio');
+
+  audio.id =
+    `rooms-${definition.id}`;
+
+  audio.src = definition.src;
+  audio.preload = 'auto';
+  audio.loop = Boolean(definition.loop);
+  audio.playsInline = true;
+  audio.volume = 0;
+
+  audio.setAttribute('playsinline', '');
+  audio.setAttribute('webkit-playsinline', '');
+  audio.style.display = 'none';
+
+  audio.addEventListener(
+    'canplay',
+    () => {
+      roomsTrackErrors.delete(
+        definition.id
+      );
+    }
+  );
+
+  audio.addEventListener(
+    'error',
+    () => {
+      const code =
+        audio.error
+          ? audio.error.code
+          : 'unknown';
+
+      roomsTrackErrors.set(
+        definition.id,
+        `media error ${code}`
+      );
+
+      console.error(
+        `Rooms Within audio failed: ${definition.src} (code ${code})`
+      );
+    }
+  );
+
+  document.body.appendChild(audio);
+
+  return audio;
+}
+
+
+function ensureRoomsTracks() {
+  ROOM_SOUND_DEFINITIONS.forEach(
+    (definition) => {
+      if (
+        roomsTracks.has(
+          definition.id
+        )
+      ) {
+        return;
+      }
+
+      roomsTracks.set(
+        definition.id,
+        {
+          definition,
+          audio: createRoomsAudioElement(
+            definition
+          ),
+          lastDistance: Infinity,
+          lastGain: 0,
+          lastPlaySucceeded: false
+        }
+      );
+    }
+  );
+}
+
+
+/* ============================================================
+   DISTANCE FADING
 ============================================================ */
 
 function getDistanceGain(
   distance,
   definition
 ) {
-  if (
-    !definition
-  ) {
+  if (!definition) {
     return 0;
   }
 
-
-  if (
-    definition.global
-  ) {
+  if (definition.global) {
     return 1;
   }
 
-
-  const full =
+  const fullDistance =
     Math.max(
       0,
-      definition.fullVolumeDistance || 0
+      Number(
+        definition.fullVolumeDistance
+      ) || 0
     );
 
-
-  const max =
+  const maxDistance =
     Math.max(
-      full + 0.001,
-      definition.maxDistance ||
-        full + 1
+      fullDistance + 0.001,
+      Number(
+        definition.maxDistance
+      ) ||
+      fullDistance + 1
     );
 
+  const d =
+    Math.max(
+      0,
+      Number(distance) || 0
+    );
 
-  if (
-    distance <= full
-  ) {
+  if (d <= fullDistance) {
     return 1;
   }
 
-
-  if (
-    distance >= max
-  ) {
+  if (d >= maxDistance) {
     return 0;
   }
 
-
-  const t =
+  const normalized =
     clamp01(
       (
-        distance -
-        full
+        d - fullDistance
       ) /
       (
-        max -
-        full
+        maxDistance - fullDistance
       )
     );
 
-
   const smooth =
-    t *
-    t *
+    normalized *
+    normalized *
     (
       3 -
-      2 * t
+      2 * normalized
     );
 
-
-  return (
-    1 -
-    smooth
-  );
+  return 1 - smooth;
 }
 
 
-function getTrackVolume(
+function calculateTrackVolume(
   track,
   playerPosition
 ) {
   if (
     !track ||
-    roomsMuted ||
-    isRoomsPauseMenuOpen()
+    !track.definition ||
+    !shouldRoomsAudioBeAudible()
   ) {
     return 0;
   }
 
+  const definition = track.definition;
 
-  const definition =
-    track.definition;
+  if (definition.global) {
+    track.lastDistance = 0;
+    track.lastGain = 1;
 
-
-  let gain =
-    1;
-
-
-  if (
-    !definition.global
-  ) {
-    const distance =
-      playerPosition.distanceTo(
-        definition.position
-      );
-
-
-    gain =
-      getDistanceGain(
-        distance,
-        definition
-      );
+    return clamp01(
+      definition.baseVolume *
+      roomsMasterVolume
+    );
   }
 
+  const distance =
+    playerPosition.distanceTo(
+      definition.position
+    );
+
+  const gain =
+    getDistanceGain(
+      distance,
+      definition
+    );
+
+  track.lastDistance = distance;
+  track.lastGain = gain;
 
   return clamp01(
     definition.baseVolume *
@@ -491,7 +454,6 @@ function updateRoomsTrackVolumes() {
   const playerPosition =
     getPlayerWorldPosition();
 
-
   roomsTracks.forEach(
     (track) => {
       if (
@@ -501,197 +463,110 @@ function updateRoomsTrackVolumes() {
         return;
       }
 
-
       track.audio.volume =
-        getTrackVolume(
+        calculateTrackVolume(
           track,
           playerPosition
         );
     }
   );
+
+  updateRoomsSpiralVolume();
 }
 
 
 /* ============================================================
-   PLAY RESULT
+   PLAY / PAUSE NATIVE TRACKS
 ============================================================ */
 
-function markTrackPlayResult(
+function requestRoomsTrackPlay(
   id,
-  success,
-  error
+  restart = false
 ) {
-  const track =
-    roomsTracks.get(
-      id
-    );
-
+  const track = roomsTracks.get(id);
 
   if (
-    !track
+    !track ||
+    !track.audio
   ) {
-    return;
+    return false;
   }
 
+  const audio = track.audio;
 
-  track.lastPlaySucceeded =
-    Boolean(
-      success
-    );
+  if (restart) {
+    try {
+      audio.currentTime = 0;
+    } catch (error) {
+      /* ignore seek error */
+    }
+  }
 
+  if (!audio.paused) {
+    track.lastPlaySucceeded = true;
+    return true;
+  }
 
-  if (
-    success
-  ) {
-    roomsTrackErrors.delete(
-      id
-    );
+  try {
+    const playPromise = audio.play();
 
-  } else if (
-    error
-  ) {
+    if (
+      playPromise &&
+      typeof playPromise.then === 'function'
+    ) {
+      playPromise
+        .then(() => {
+          track.lastPlaySucceeded = true;
+          roomsTrackErrors.delete(id);
+          roomsAudioUnlocked = true;
+
+          const scene = getScene();
+
+          if (scene) {
+            scene.audioUnlocked = true;
+          }
+        })
+        .catch((error) => {
+          track.lastPlaySucceeded = false;
+
+          roomsTrackErrors.set(
+            id,
+            error.name ||
+            error.message ||
+            String(error)
+          );
+
+          console.warn(
+            `Rooms Within: ${id} could not play:`,
+            error
+          );
+        });
+    } else {
+      track.lastPlaySucceeded = true;
+      roomsAudioUnlocked = true;
+    }
+
+    return true;
+  } catch (error) {
+    track.lastPlaySucceeded = false;
+
     roomsTrackErrors.set(
       id,
       error.name ||
       error.message ||
       String(error)
     );
-  }
-}
-
-
-/* ============================================================
-   PLAY TRACK
-============================================================ */
-
-function requestTrackPlay(
-  id,
-  forceGesture = false
-) {
-  const track =
-    roomsTracks.get(
-      id
-    );
-
-
-  if (
-    !track ||
-    !track.audio
-  ) {
-    return false;
-  }
-
-
-  if (
-    !forceGesture &&
-    (
-      roomsMuted ||
-      isRoomsPauseMenuOpen()
-    )
-  ) {
-    return false;
-  }
-
-
-  const audio =
-    track.audio;
-
-
-  track.playRequested =
-    true;
-
-
-  try {
-    const result =
-      audio.play();
-
-
-    if (
-      result &&
-      typeof result.then ===
-        'function'
-    ) {
-      result
-        .then(
-          () => {
-            markTrackPlayResult(
-              id,
-              true
-            );
-
-
-            roomsAudioUnlocked =
-              true;
-
-
-            const scene =
-              getScene();
-
-
-            if (
-              scene
-            ) {
-              scene.audioUnlocked =
-                true;
-            }
-          }
-        )
-        .catch(
-          (error) => {
-            markTrackPlayResult(
-              id,
-              false,
-              error
-            );
-
-
-            console.warn(
-              `Rooms Within: ${id} play() was blocked/failed:`,
-              error
-            );
-          }
-        );
-
-    } else {
-      markTrackPlayResult(
-        id,
-        true
-      );
-
-
-      roomsAudioUnlocked =
-        true;
-    }
-
-
-    return true;
-
-  } catch (error) {
-    markTrackPlayResult(
-      id,
-      false,
-      error
-    );
-
 
     return false;
   }
 }
 
 
-/* ============================================================
-   STOP TRACK
-============================================================ */
-
-function stopTrack(
+function pauseRoomsTrack(
   id,
   reset = false
 ) {
-  const track =
-    roomsTracks.get(
-      id
-    );
-
+  const track = roomsTracks.get(id);
 
   if (
     !track ||
@@ -700,304 +575,395 @@ function stopTrack(
     return;
   }
 
-
   track.audio.pause();
 
-
-  track.playRequested =
-    false;
-
-
-  if (
-    reset
-  ) {
+  if (reset) {
     try {
-      track.audio.currentTime =
-        0;
-
+      track.audio.currentTime = 0;
     } catch (error) {
-      /* Ignore seek error. */
+      /* ignore seek error */
     }
   }
 }
 
 
-/* ============================================================
-   APPLY PLAYBACK STATE
-============================================================ */
-
-function applyRoomsPlaybackState() {
-  ensureRoomsTracks();
-
-
-  updateRoomsTrackVolumes();
-
-
-  if (
-    roomsMuted ||
-    isRoomsPauseMenuOpen()
-  ) {
-    roomsTracks.forEach(
-      (track) => {
-        if (
-          track &&
-          track.audio
-        ) {
-          track.audio.pause();
-
-
-          track.playRequested =
-            false;
-        }
+function pauseAllRoomsNativeAudio() {
+  roomsTracks.forEach(
+    (track) => {
+      if (
+        track &&
+        track.audio
+      ) {
+        track.audio.pause();
       }
+    }
+  );
+
+  const footstep =
+    document.querySelector(
+      '#footstepAudio'
     );
 
+  const scareFootstep =
+    document.querySelector(
+      '#scareFootstepAudio'
+    );
 
+  if (footstep) {
+    footstep.pause();
+  }
+
+  if (scareFootstep) {
+    scareFootstep.pause();
+  }
+}
+
+
+/* ============================================================
+   SPIRAL AMBIENCE
+
+   Generated low-frequency noise moves:
+
+   LEFT -> CENTER -> RIGHT -> CENTER -> LEFT
+
+   No extra audio file is required.
+============================================================ */
+
+function createRoomsSpiralBuffer(context) {
+  const duration = 2;
+
+  const frameCount =
+    Math.max(
+      1,
+      Math.floor(
+        context.sampleRate *
+        duration
+      )
+    );
+
+  const buffer =
+    context.createBuffer(
+      1,
+      frameCount,
+      context.sampleRate
+    );
+
+  const data =
+    buffer.getChannelData(0);
+
+  let previous = 0;
+
+  for (
+    let i = 0;
+    i < frameCount;
+    i += 1
+  ) {
+    const random =
+      Math.random() * 2 - 1;
+
+    previous =
+      previous * 0.92 +
+      random * 0.08;
+
+    data[i] = previous;
+  }
+
+  return buffer;
+}
+
+
+function ensureRoomsSpiralAudio() {
+  if (
+    roomsSpiral.started &&
+    roomsSpiral.context
+  ) {
+    if (
+      roomsSpiral.context.state ===
+      'suspended'
+    ) {
+      roomsSpiral.context
+        .resume()
+        .catch(() => {});
+    }
+
+    return true;
+  }
+
+  const AudioContextClass =
+    window.AudioContext ||
+    window.webkitAudioContext;
+
+  if (!AudioContextClass) {
+    roomsSpiral.available = false;
+    return false;
+  }
+
+  try {
+    const context =
+      new AudioContextClass();
+
+    if (
+      typeof context.createStereoPanner !==
+      'function'
+    ) {
+      roomsSpiral.available = false;
+
+      context.close().catch(() => {});
+
+      return false;
+    }
+
+    const source =
+      context.createBufferSource();
+
+    const filter =
+      context.createBiquadFilter();
+
+    const panner =
+      context.createStereoPanner();
+
+    const gain =
+      context.createGain();
+
+    source.buffer =
+      createRoomsSpiralBuffer(context);
+
+    source.loop = true;
+
+    filter.type = 'lowpass';
+    filter.frequency.value = 520;
+    filter.Q.value = 0.8;
+
+    panner.pan.value = 0;
+    gain.gain.value = 0;
+
+    source.connect(filter);
+    filter.connect(panner);
+    panner.connect(gain);
+    gain.connect(context.destination);
+
+    source.start();
+
+    roomsSpiral.context = context;
+    roomsSpiral.source = source;
+    roomsSpiral.filter = filter;
+    roomsSpiral.panner = panner;
+    roomsSpiral.gain = gain;
+    roomsSpiral.started = true;
+    roomsSpiral.available = true;
+    roomsSpiral.startTime =
+      performance.now();
+
+    roomsSpiral.timer =
+      window.setInterval(
+        updateRoomsSpiralPan,
+        50
+      );
+
+    if (context.state === 'suspended') {
+      context.resume().catch(() => {});
+    }
+
+    updateRoomsSpiralPan();
+    updateRoomsSpiralVolume();
+
+    return true;
+  } catch (error) {
+    roomsSpiral.available = false;
+
+    console.warn(
+      'Rooms Within: spiral ambience unavailable:',
+      error
+    );
+
+    return false;
+  }
+}
+
+
+function updateRoomsSpiralPan() {
+  if (
+    !roomsSpiral.started ||
+    !roomsSpiral.context ||
+    !roomsSpiral.panner ||
+    !roomsSpiral.filter
+  ) {
     return;
   }
 
+  const elapsedSeconds =
+    (
+      performance.now() -
+      roomsSpiral.startTime
+    ) /
+    1000;
+
+  const phase =
+    elapsedSeconds /
+    ROOMS_SPIRAL_CYCLE_SECONDS *
+    Math.PI *
+    2;
+
+  const pan = Math.sin(phase);
+
+  const filterFrequency =
+    430 +
+    180 *
+    (
+      0.5 +
+      0.5 *
+      Math.sin(
+        phase * 0.5 +
+        Math.PI * 0.35
+      )
+    );
+
+  try {
+    roomsSpiral.panner.pan
+      .setTargetAtTime(
+        pan,
+        roomsSpiral.context.currentTime,
+        0.08
+      );
+
+    roomsSpiral.filter.frequency
+      .setTargetAtTime(
+        filterFrequency,
+        roomsSpiral.context.currentTime,
+        0.15
+      );
+  } catch (error) {
+    roomsSpiral.panner.pan.value = pan;
+    roomsSpiral.filter.frequency.value =
+      filterFrequency;
+  }
+}
+
+
+function updateRoomsSpiralVolume() {
+  if (
+    !roomsSpiral.started ||
+    !roomsSpiral.context ||
+    !roomsSpiral.gain
+  ) {
+    return;
+  }
+
+  const target =
+    shouldRoomsAudioBeAudible()
+      ? ROOMS_SPIRAL_BASE_VOLUME *
+        roomsMasterVolume
+      : 0;
+
+  try {
+    roomsSpiral.gain.gain
+      .setTargetAtTime(
+        target,
+        roomsSpiral.context.currentTime,
+        0.08
+      );
+  } catch (error) {
+    roomsSpiral.gain.gain.value = target;
+  }
+}
+
+
+/* ============================================================
+   FOOTSTEP AUDIO PRIMING
+============================================================ */
+
+function primeQuietAudioElement(audio) {
+  if (!audio) {
+    return;
+  }
+
+  const previousMuted = audio.muted;
+  const previousVolume = audio.volume;
+
+  audio.muted = true;
+  audio.volume = 0;
+
+  try {
+    const result = audio.play();
+
+    const finish = () => {
+      audio.pause();
+
+      try {
+        audio.currentTime = 0;
+      } catch (error) {
+        /* ignore seek error */
+      }
+
+      audio.muted = previousMuted;
+      audio.volume = previousVolume;
+    };
+
+    if (
+      result &&
+      typeof result.then === 'function'
+    ) {
+      result
+        .then(finish)
+        .catch(() => {
+          audio.muted = previousMuted;
+          audio.volume = previousVolume;
+        });
+    } else {
+      finish();
+    }
+  } catch (error) {
+    audio.muted = previousMuted;
+    audio.volume = previousVolume;
+  }
+}
+
+
+/* ============================================================
+   START AUDIO FROM USER GESTURE
+============================================================ */
+
+function startRoomsAudioFromGesture(source) {
+  ensureRoomsTracks();
+
+  roomsLastUnlockSource =
+    String(
+      source ||
+      'vr-user-gesture'
+    );
+
+  roomsVRStarted = true;
+
+  /*
+    Never force SOUND: OFF back to SOUND: ON.
+  */
+  if (roomsMuted) {
+    pauseAllRoomsNativeAudio();
+    updateRoomsSpiralVolume();
+    updateRoomsVolumeUI();
+
+    return false;
+  }
+
+  updateRoomsTrackVolumes();
 
   ROOM_SOUND_DEFINITIONS.forEach(
     (definition) => {
-      if (
-        definition.auto
-      ) {
-        roomsDesiredPlaying.add(
+      if (definition.auto) {
+        requestRoomsTrackPlay(
           definition.id
         );
       }
     }
   );
 
-
-  if (
-    roomsTVOn
-  ) {
-    roomsDesiredPlaying.add(
+  if (roomsTVOn) {
+    requestRoomsTrackPlay(
       'tvStaticSound'
     );
-
-  } else {
-    roomsDesiredPlaying.delete(
-      'tvStaticSound'
-    );
-
-
-    stopTrack(
-      'tvStaticSound',
-      true
-    );
   }
 
-
-  if (
-    !roomsAudioUnlocked
-  ) {
-    return;
-  }
-
-
-  roomsDesiredPlaying.forEach(
-    (id) => {
-      const track =
-        roomsTracks.get(
-          id
-        );
-
-
-      if (
-        track &&
-        track.audio &&
-        track.audio.paused &&
-        !track.playRequested
-      ) {
-        requestTrackPlay(
-          id
-        );
-      }
-    }
-  );
-}
-
-
-/* ============================================================
-   PRIME FOOTSTEP/JUMPSCARE AUDIO
-============================================================ */
-
-function primeQuietAudioElement(
-  audio
-) {
-  if (
-    !audio
-  ) {
-    return;
-  }
-
-
-  const oldMuted =
-    audio.muted;
-
-
-  const oldVolume =
-    audio.volume;
-
-
-  audio.muted =
-    true;
-
-
-  audio.volume =
-    0;
-
-
-  try {
-    const result =
-      audio.play();
-
-
-    if (
-      result &&
-      typeof result.then ===
-        'function'
-    ) {
-      result
-        .then(
-          () => {
-            audio.pause();
-
-
-            try {
-              audio.currentTime =
-                0;
-
-            } catch (error) {
-              /* ignore */
-            }
-
-
-            audio.muted =
-              oldMuted;
-
-
-            audio.volume =
-              oldVolume;
-          }
-        )
-        .catch(
-          () => {
-            audio.muted =
-              oldMuted;
-
-
-            audio.volume =
-              oldVolume;
-          }
-        );
-
-    } else {
-      audio.pause();
-
-
-      try {
-        audio.currentTime =
-          0;
-
-      } catch (error) {
-        /* ignore */
-      }
-
-
-      audio.muted =
-        oldMuted;
-
-
-      audio.volume =
-        oldVolume;
-    }
-
-  } catch (error) {
-    audio.muted =
-      oldMuted;
-
-
-    audio.volume =
-      oldVolume;
-  }
-}
-
-
-/* ============================================================
-   START AUDIO FROM REAL USER GESTURE
-============================================================ */
-
-function startRoomsAudioFromGesture(
-  source
-) {
-  ensureRoomsTracks();
-
-
-  roomsLastUnlockSource =
-    String(
-      source ||
-      'user-gesture'
-    );
-
-
-  if (
-    roomsMuted
-  ) {
-    roomsMuted =
-      false;
-
-
-    window.roomsMuted =
-      false;
-  }
-
-
-  updateRoomsTrackVolumes();
-
-
-  /*
-    IMPORTANT:
-
-    play() happens immediately inside the actual user gesture.
-    There is no await and no AudioContext step before this.
-  */
-
-  [
-    'fanSound',
-    'rainSound',
-    'fluorescentSound'
-  ].forEach(
-    (id) => {
-      roomsDesiredPlaying.add(
-        id
-      );
-
-
-      requestTrackPlay(
-        id,
-        true
-      );
-    }
-  );
-
-
-  if (
-    roomsTVOn
-  ) {
-    roomsDesiredPlaying.add(
-      'tvStaticSound'
-    );
-
-
-    requestTrackPlay(
-      'tvStaticSound',
-      true
-    );
-  }
-
+  ensureRoomsSpiralAudio();
 
   primeQuietAudioElement(
     document.querySelector(
@@ -1005,13 +971,11 @@ function startRoomsAudioFromGesture(
     )
   );
 
-
   primeQuietAudioElement(
     document.querySelector(
       '#scareFootstepAudio'
     )
   );
-
 
   window.setTimeout(
     () => {
@@ -1025,38 +989,76 @@ function startRoomsAudioFromGesture(
             !track.audio.paused
         );
 
+      if (anyPlaying) {
+        roomsAudioUnlocked = true;
 
-      if (
-        anyPlaying
-      ) {
-        roomsAudioUnlocked =
-          true;
+        const scene = getScene();
 
-
-        const scene =
-          getScene();
-
-
-        if (
-          scene
-        ) {
-          scene.audioUnlocked =
-            true;
+        if (scene) {
+          scene.audioUnlocked = true;
         }
       }
 
-
-      applyRoomsPlaybackState();
-
-
+      updateRoomsTrackVolumes();
       updateRoomsVolumeUI();
-
     },
-    150
+    120
   );
 
-
   return true;
+}
+
+
+/* ============================================================
+   APPLY CURRENT PLAYBACK STATE
+============================================================ */
+
+function applyRoomsPlaybackState() {
+  ensureRoomsTracks();
+  updateRoomsTrackVolumes();
+
+  if (!shouldRoomsAudioBeAudible()) {
+    pauseAllRoomsNativeAudio();
+    updateRoomsSpiralVolume();
+    return;
+  }
+
+  ROOM_SOUND_DEFINITIONS.forEach(
+    (definition) => {
+      if (definition.auto) {
+        requestRoomsTrackPlay(
+          definition.id
+        );
+      }
+    }
+  );
+
+  if (roomsTVOn) {
+    requestRoomsTrackPlay(
+      'tvStaticSound'
+    );
+  } else {
+    pauseRoomsTrack(
+      'tvStaticSound',
+      true
+    );
+  }
+
+  if (roomsSpiral.started) {
+    if (
+      roomsSpiral.context &&
+      roomsSpiral.context.state ===
+        'suspended'
+    ) {
+      roomsSpiral.context
+        .resume()
+        .catch(() => {});
+    }
+  } else {
+    ensureRoomsSpiralAudio();
+  }
+
+  updateRoomsSpiralVolume();
 }
 
 
@@ -1064,12 +1066,11 @@ function startRoomsAudioFromGesture(
    ENTER VR BUTTON HOOK
 ============================================================ */
 
-function attachEnterVRButtonRecovery() {
+function attachEnterVRButtonAudioHook() {
   const button =
     document.querySelector(
       '.a-enter-vr-button'
     );
-
 
   if (
     !button ||
@@ -1079,25 +1080,20 @@ function attachEnterVRButtonRecovery() {
     return;
   }
 
-
   button.dataset.roomsAudioHook =
     'true';
 
-
-  const start =
-    (event) => {
-      startRoomsAudioFromGesture(
-        `enter-vr-${event.type}`
-      );
-    };
-
+  const start = (event) => {
+    startRoomsAudioFromGesture(
+      `enter-vr-${event.type}`
+    );
+  };
 
   button.addEventListener(
     'pointerdown',
     start,
     true
   );
-
 
   button.addEventListener(
     'touchstart',
@@ -1107,7 +1103,6 @@ function attachEnterVRButtonRecovery() {
       passive: true
     }
   );
-
 
   button.addEventListener(
     'click',
@@ -1117,53 +1112,15 @@ function attachEnterVRButtonRecovery() {
 }
 
 
-/* ============================================================
-   GENERAL PAGE GESTURES
-============================================================ */
-
-function setupRoomsAudioGestureRecovery() {
-  const start =
-    (event) => {
-      startRoomsAudioFromGesture(
-        event.type
-      );
-    };
-
-
-  document.addEventListener(
-    'pointerdown',
-    start,
-    true
-  );
-
-
-  document.addEventListener(
-    'touchstart',
-    start,
-    {
-      capture: true,
-      passive: true
-    }
-  );
-
-
-  document.addEventListener(
-    'keydown',
-    start,
-    true
-  );
-
-
-  attachEnterVRButtonRecovery();
-
+function setupEnterVRButtonWatcher() {
+  attachEnterVRButtonAudioHook();
 
   const observer =
     new MutationObserver(
       () => {
-        attachEnterVRButtonRecovery();
+        attachEnterVRButtonAudioHook();
       }
     );
-
 
   observer.observe(
     document.documentElement,
@@ -1173,25 +1130,23 @@ function setupRoomsAudioGestureRecovery() {
     }
   );
 
-
   window.setTimeout(
-    attachEnterVRButtonRecovery,
+    attachEnterVRButtonAudioHook,
     300
   );
 
-
   window.setTimeout(
-    attachEnterVRButtonRecovery,
+    attachEnterVRButtonAudioHook,
     1000
   );
 }
 
 
 /* ============================================================
-   QUEST CONTROLLER BACKUP
+   QUEST CONTROLLER AUDIO RECOVERY
 ============================================================ */
 
-function attachQuestControllerRecovery() {
+function attachQuestControllerAudioRecovery() {
   const events = [
     'triggerdown',
     'gripdown',
@@ -1202,17 +1157,13 @@ function attachQuestControllerRecovery() {
     'ybuttondown'
   ];
 
-
   [
     '#leftHand',
     '#rightHand'
   ].forEach(
     (selector) => {
       const hand =
-        document.querySelector(
-          selector
-        );
-
+        document.querySelector(selector);
 
       if (
         !hand ||
@@ -1222,19 +1173,32 @@ function attachQuestControllerRecovery() {
         return;
       }
 
-
       hand.dataset.roomsAudioControllerHook =
         'true';
-
 
       events.forEach(
         (eventName) => {
           hand.addEventListener(
             eventName,
             () => {
-              startRoomsAudioFromGesture(
-                `controller-${eventName}`
-              );
+              const scene = getScene();
+
+              if (
+                roomsVRStarted ||
+                hasRoomsImmersiveXRSession(
+                  scene
+                )
+              ) {
+                /*
+                  Do not change the mute state.
+                  This only helps recover browser permission.
+                */
+                if (!roomsMuted) {
+                  startRoomsAudioFromGesture(
+                    `controller-${eventName}`
+                  );
+                }
+              }
             }
           );
         }
@@ -1245,114 +1209,100 @@ function attachQuestControllerRecovery() {
 
 
 /* ============================================================
-   SCENE AUDIO MANAGER
-
-   Keeps the same component name index.html already uses.
+   A-FRAME AUDIO MANAGER COMPATIBILITY
 ============================================================ */
 
 AFRAME.registerComponent(
   'spatial-audio-manager',
   {
-    init:
-      function () {
-        this.lastVolumeUpdate =
-          0;
+    init: function () {
+      this.lastVolumeUpdate = 0;
 
+      ensureRoomsTracks();
 
-        ensureRoomsTracks();
+      this.onEnterVR = () => {
+        roomsVRStarted = true;
 
-
-        this.onEnterVR =
-          () => {
-            /*
-              The real click should already have started the audio.
-              Once XR is active, just reapply volume/play state.
-            */
-
-            window.setTimeout(
-              () => {
-                applyRoomsPlaybackState();
-              },
-              100
-            );
-          };
-
-
-        this.onPauseChanged =
-          () => {
-            applyRoomsPlaybackState();
-          };
-
-
-        this.el.addEventListener(
-          'enter-vr',
-          this.onEnterVR
-        );
-
-
-        this.el.addEventListener(
-          'rooms-pause-changed',
-          this.onPauseChanged
-        );
-
-
-        attachQuestControllerRecovery();
-
-
-        window.setTimeout(
-          attachQuestControllerRecovery,
-          500
-        );
-
-
-        window.setTimeout(
-          attachQuestControllerRecovery,
-          1500
-        );
-      },
-
-
-    tick:
-      function (
-        time
-      ) {
-        if (
-          time -
-          this.lastVolumeUpdate <
-          125
-        ) {
-          return;
+        if (!roomsMuted) {
+          startRoomsAudioFromGesture(
+            'enter-vr-event'
+          );
         }
+      };
+
+      this.onExitVR = () => {
+        roomsVRStarted = false;
+
+        pauseAllRoomsNativeAudio();
+        updateRoomsSpiralVolume();
+      };
+
+      this.onPauseChanged = () => {
+        applyRoomsPlaybackState();
+      };
+
+      this.el.addEventListener(
+        'enter-vr',
+        this.onEnterVR
+      );
+
+      this.el.addEventListener(
+        'exit-vr',
+        this.onExitVR
+      );
+
+      this.el.addEventListener(
+        'rooms-pause-changed',
+        this.onPauseChanged
+      );
+
+      attachQuestControllerAudioRecovery();
+
+      window.setTimeout(
+        attachQuestControllerAudioRecovery,
+        500
+      );
+
+      window.setTimeout(
+        attachQuestControllerAudioRecovery,
+        1500
+      );
+    },
 
 
-        this.lastVolumeUpdate =
-          time;
+    tick: function (time) {
+      if (
+        time -
+        this.lastVolumeUpdate <
+        125
+      ) {
+        return;
+      }
+
+      this.lastVolumeUpdate = time;
+      updateRoomsTrackVolumes();
+    },
 
 
-        updateRoomsTrackVolumes();
-      },
+    pauseAll: function () {
+      pauseAllRoomsNativeAudio();
+      updateRoomsSpiralVolume();
+    },
 
 
-    pauseAll:
+    pauseAllWithoutChangingIntent:
       function () {
-        roomsTracks.forEach(
-          (track) => {
-            if (
-              track &&
-              track.audio
-            ) {
-              track.audio.pause();
-
-
-              track.playRequested =
-                false;
-            }
-          }
-        );
+        this.pauseAll();
       },
 
 
     applyPlaybackState:
+      function () {
+        applyRoomsPlaybackState();
+      },
+
+
+    playNormalAmbience:
       function () {
         applyRoomsPlaybackState();
       },
@@ -1364,10 +1314,7 @@ AFRAME.registerComponent(
         worldPosition
       ) {
         const definition =
-          getDefinition(
-            id
-          );
-
+          getDefinition(id);
 
         if (
           !definition ||
@@ -1376,164 +1323,103 @@ AFRAME.registerComponent(
           return;
         }
 
-
         definition.position.set(
-          Number(
-            worldPosition.x
-          ) || 0,
-
-          Number(
-            worldPosition.y
-          ) || 0,
-
-          Number(
-            worldPosition.z
-          ) || 0
+          Number(worldPosition.x) || 0,
+          Number(worldPosition.y) || 0,
+          Number(worldPosition.z) || 0
         );
+
+        updateRoomsTrackVolumes();
       },
 
 
     playOneShot:
-      function (
-        id
-      ) {
-        const track =
-          roomsTracks.get(
-            id
-          );
-
-
+      function (id) {
         if (
-          !track ||
-          !track.audio ||
-          roomsMuted ||
-          isRoomsPauseMenuOpen()
+          !shouldRoomsAudioBeAudible()
         ) {
           return false;
         }
 
+        const track = roomsTracks.get(id);
 
-        try {
-          track.audio.currentTime =
-            0;
-
-        } catch (error) {
-          /* ignore */
+        if (
+          !track ||
+          !track.audio
+        ) {
+          return false;
         }
 
+        track.audio.volume =
+          clamp01(
+            track.definition.baseVolume *
+            roomsMasterVolume
+          );
 
-        requestTrackPlay(
-          id
+        return requestRoomsTrackPlay(
+          id,
+          true
         );
-
-
-        return true;
       },
 
 
-    remove:
-      function () {
-        this.el.removeEventListener(
-          'enter-vr',
-          this.onEnterVR
-        );
+    remove: function () {
+      this.el.removeEventListener(
+        'enter-vr',
+        this.onEnterVR
+      );
 
+      this.el.removeEventListener(
+        'exit-vr',
+        this.onExitVR
+      );
 
-        this.el.removeEventListener(
-          'rooms-pause-changed',
-          this.onPauseChanged
-        );
-      }
+      this.el.removeEventListener(
+        'rooms-pause-changed',
+        this.onPauseChanged
+      );
+    }
   }
 );
 
 
 /* ============================================================
-   TV
+   TV SOUND STATE
 ============================================================ */
 
-function setRoomsTVState(
-  shouldBeOn
-) {
-  roomsTVOn =
-    Boolean(
-      shouldBeOn
-    );
+function setRoomsTVState(shouldBeOn) {
+  roomsTVOn = Boolean(shouldBeOn);
 
-
-  if (
-    roomsTVOn
-  ) {
-    roomsDesiredPlaying.add(
-      'tvStaticSound'
-    );
-
-
-    if (
-      roomsAudioUnlocked &&
-      !roomsMuted
-    ) {
-      requestTrackPlay(
-        'tvStaticSound'
-      );
-    }
-
-  } else {
-    roomsDesiredPlaying.delete(
-      'tvStaticSound'
-    );
-
-
-    stopTrack(
+  if (!roomsTVOn) {
+    pauseRoomsTrack(
       'tvStaticSound',
       true
     );
   }
 
-
   applyRoomsPlaybackState();
 }
 
 
-function setRoomsTVPosition(
-  worldPosition
-) {
-  if (
-    !worldPosition
-  ) {
+function setRoomsTVPosition(worldPosition) {
+  if (!worldPosition) {
     return;
   }
 
-
-  roomsTVWorldPosition =
-    new THREE.Vector3(
-      Number(
-        worldPosition.x
-      ) || 0,
-
-      Number(
-        worldPosition.y
-      ) || 0,
-
-      Number(
-        worldPosition.z
-      ) || 0
-    );
-
-
   const definition =
-    getDefinition(
-      'tvStaticSound'
-    );
+    getDefinition('tvStaticSound');
 
-
-  if (
-    definition
-  ) {
-    definition.position.copy(
-      roomsTVWorldPosition
-    );
+  if (!definition) {
+    return;
   }
+
+  definition.position.set(
+    Number(worldPosition.x) || 0,
+    Number(worldPosition.y) || 0,
+    Number(worldPosition.z) || 0
+  );
+
+  updateRoomsTrackVolumes();
 }
 
 
@@ -1542,31 +1428,24 @@ function setRoomsTVPosition(
 ============================================================ */
 
 function playRoomsThunder() {
-  const now =
-    performance.now();
-
+  const now = performance.now();
 
   if (
     now -
-      roomsLastThunderTime <
-      250 ||
-    roomsMuted ||
-    isRoomsPauseMenuOpen() ||
-    !roomsAudioUnlocked
+    roomsLastThunderTime <
+    250
   ) {
     return false;
   }
 
+  if (!shouldRoomsAudioBeAudible()) {
+    return false;
+  }
 
-  roomsLastThunderTime =
-    now;
-
+  roomsLastThunderTime = now;
 
   const track =
-    roomsTracks.get(
-      'thunderSound'
-    );
-
+    roomsTracks.get('thunderSound');
 
   if (
     !track ||
@@ -1575,116 +1454,108 @@ function playRoomsThunder() {
     return false;
   }
 
-
   track.audio.volume =
     clamp01(
       track.definition.baseVolume *
       roomsMasterVolume
     );
 
-
-  try {
-    track.audio.currentTime =
-      0;
-
-  } catch (error) {
-    /* ignore */
-  }
-
-
-  return requestTrackPlay(
-    'thunderSound'
+  return requestRoomsTrackPlay(
+    'thunderSound',
+    true
   );
 }
 
 
 /* ============================================================
-   VOLUME
-============================================================ */
-
-function changeRoomsVolume(
-  amount
-) {
-  roomsMasterVolume =
-    clamp01(
-      roomsMasterVolume +
-      Number(
-        amount || 0
-      )
-    );
-
-
-  applyRoomsAudioSettings();
-}
-
-
-/* ============================================================
    SOUND ON / OFF
+
+   IMPORTANT FIX:
+   Always toggle immediately.
+
+   The old version refused to switch to SOUND: OFF when the
+   browser's audio-unlocked flag was still false. Quest can report
+   that flag late, so the Settings button appeared to do nothing.
 ============================================================ */
 
 function toggleRoomsMute() {
+  roomsMuted = !roomsMuted;
+  window.roomsMuted = roomsMuted;
+
   /*
-    If audio has not started yet, pressing the SOUND button becomes
-    another start attempt instead of turning an already-silent
-    project OFF.
+    Change the Settings label immediately.
   */
+  updateRoomsVolumeUI();
 
-  if (
-    !roomsAudioUnlocked
-  ) {
-    roomsMuted =
-      false;
+  const scene = getScene();
 
-
-    window.roomsMuted =
-      false;
-
-
-    startRoomsAudioFromGesture(
-      'settings-sound-button'
+  if (scene) {
+    scene.emit(
+      'audio-settings-changed',
+      getRoomsAudioState(),
+      false
     );
-
-
-    updateRoomsVolumeUI();
-
-
-    return false;
   }
 
+  /* ========================================================
+     SOUND: OFF
+  ======================================================== */
 
-  roomsMuted =
-    !roomsMuted;
+  if (roomsMuted) {
+    pauseAllRoomsNativeAudio();
+    updateRoomsSpiralVolume();
 
+    return true;
+  }
 
-  window.roomsMuted =
-    roomsMuted;
+  /* ========================================================
+     SOUND: ON
 
+     If Settings is currently open, the game is paused, so the
+     tracks stay paused until Resume. The ON state is still saved.
+  ======================================================== */
 
-  applyRoomsAudioSettings();
+  if (
+    roomsVRStarted &&
+    !isRoomsPauseMenuOpen()
+  ) {
+    startRoomsAudioFromGesture(
+      'settings-sound-on'
+    );
+  } else {
+    applyRoomsPlaybackState();
+  }
 
-
-  return roomsMuted;
+  return false;
 }
 
 
 /* ============================================================
-   APPLY SETTINGS
+   MASTER VOLUME
+============================================================ */
+
+function changeRoomsVolume(amount) {
+  roomsMasterVolume =
+    clamp01(
+      roomsMasterVolume +
+      Number(amount || 0)
+    );
+
+  applyRoomsAudioSettings();
+}
+
+
+/* ============================================================
+   APPLY AUDIO SETTINGS
 ============================================================ */
 
 function applyRoomsAudioSettings() {
   applyRoomsPlaybackState();
-
-
   updateRoomsVolumeUI();
 
+  const scene = getScene();
 
-  const scene =
-    getScene();
-
-
-  if (
-    scene
-  ) {
+  if (scene) {
     scene.emit(
       'audio-settings-changed',
       getRoomsAudioState(),
@@ -1695,73 +1566,40 @@ function applyRoomsAudioSettings() {
 
 
 /* ============================================================
-   UI
+   SETTINGS LABEL
 ============================================================ */
 
 function updateRoomsVolumeUI() {
-  const soundText =
+  const text =
     roomsMuted
       ? 'SOUND: OFF'
       : 'SOUND: ON';
-
 
   const screenSoundButton =
     document.querySelector(
       '#screenSoundButton'
     );
 
-
-  if (
-    screenSoundButton
-  ) {
-    screenSoundButton.textContent =
-      soundText;
-  }
-
-
   const vrSoundLabel =
     document.querySelector(
       '#vrSoundLabel'
     );
 
+  if (screenSoundButton) {
+    screenSoundButton.textContent = text;
+  }
 
-  if (
-    vrSoundLabel
-  ) {
+  if (vrSoundLabel) {
     vrSoundLabel.setAttribute(
       'value',
-      soundText
+      text
     );
   }
 }
 
 
 /* ============================================================
-   STATE
-============================================================ */
-
-function getRoomsAudioState() {
-  return {
-    muted:
-      roomsMuted,
-
-    volume:
-      roomsMasterVolume,
-
-    tvOn:
-      roomsTVOn,
-
-    unlocked:
-      roomsAudioUnlocked,
-
-    lastUnlockSource:
-      roomsLastUnlockSource
-  };
-}
-
-
-/* ============================================================
-   FOOTSTEPS
+   FOOTSTEP PLAYER
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1769,290 +1607,269 @@ AFRAME.registerComponent(
   {
     schema: {
       minSpeed: {
-        default:
-          0.02
+        default: 0.02
       },
 
       maxSpeed: {
-        default:
-          4
+        default: 4
       },
 
       volume: {
-        default:
-          0.11
+        default: 0.11
       }
     },
 
 
-    init:
-      function () {
-        this.audio =
-          document.querySelector(
-            '#footstepAudio'
-          );
+    init: function () {
+      this.audio =
+        document.querySelector(
+          '#footstepAudio'
+        );
+
+      this.previousPosition =
+        new THREE.Vector3();
+
+      this.currentPosition =
+        new THREE.Vector3();
+
+      this.hasPrevious = false;
+      this.playing = false;
+
+      if (this.audio) {
+        this.audio.loop = true;
+        this.audio.playsInline = true;
+      }
+    },
 
 
-        this.previousPosition =
-          new THREE.Vector3();
+    stopSteps: function () {
+      if (!this.audio) {
+        return;
+      }
+
+      this.audio.pause();
+      this.playing = false;
+    },
 
 
-        this.currentPosition =
-          new THREE.Vector3();
+    pause: function () {
+      this.stopSteps();
+      this.hasPrevious = false;
+    },
 
 
-        this.hasPrevious =
-          false;
+    play: function () {
+      this.hasPrevious = false;
+    },
 
 
-        this.playing =
-          false;
-
-
-        if (
-          this.audio
-        ) {
-          this.audio.loop =
-            true;
-
-
-          this.audio.playsInline =
-            true;
-        }
-      },
-
-
-    stop:
-      function () {
-        if (
-          !this.audio
-        ) {
-          return;
-        }
-
-
-        this.audio.pause();
-
-
-        this.playing =
-          false;
-      },
-
-
-    pause:
-      function () {
-        this.stop();
-
-
-        this.hasPrevious =
-          false;
-      },
-
-
-    play:
-      function () {
-        this.hasPrevious =
-          false;
-      },
-
-
-    tick:
-      function (
-        time,
-        deltaTime
+    tick: function (
+      time,
+      deltaTime
+    ) {
+      if (
+        !this.audio ||
+        !deltaTime
       ) {
-        if (
-          !this.audio ||
-          !deltaTime
-        ) {
-          return;
+        return;
+      }
+
+      if (!shouldRoomsAudioBeAudible()) {
+        if (this.playing) {
+          this.stopSteps();
         }
 
+        this.hasPrevious = false;
+        return;
+      }
 
-        if (
-          !roomsAudioUnlocked ||
-          roomsMuted ||
-          isRoomsPauseMenuOpen()
-        ) {
-          if (
-            this.playing
-          ) {
-            this.stop();
-          }
-
-
-          this.hasPrevious =
-            false;
-
-
-          return;
-        }
-
-
-        this.el.object3D.getWorldPosition(
+      this.el.object3D
+        .getWorldPosition(
           this.currentPosition
         );
 
-
-        if (
-          !this.hasPrevious
-        ) {
-          this.previousPosition.copy(
-            this.currentPosition
-          );
-
-
-          this.hasPrevious =
-            true;
-
-
-          return;
-        }
-
-
-        const dx =
-          this.currentPosition.x -
-          this.previousPosition.x;
-
-
-        const dz =
-          this.currentPosition.z -
-          this.previousPosition.z;
-
-
-        const distance =
-          Math.sqrt(
-            dx * dx +
-            dz * dz
-          );
-
-
-        const speed =
-          distance /
-          Math.max(
-            deltaTime / 1000,
-            0.001
-          );
-
-
-        const walking =
-          speed >=
-            this.data.minSpeed &&
-          speed <=
-            this.data.maxSpeed;
-
-
-        this.audio.volume =
-          clamp01(
-            this.data.volume *
-            roomsMasterVolume
-          );
-
-
-        if (
-          walking &&
-          !this.playing
-        ) {
-          try {
-            const result =
-              this.audio.play();
-
-
-            this.playing =
-              true;
-
-
-            if (
-              result &&
-              result.catch
-            ) {
-              result.catch(
-                () => {
-                  this.playing =
-                    false;
-                }
-              );
-            }
-
-          } catch (error) {
-            this.playing =
-              false;
-          }
-
-        } else if (
-          !walking &&
-          this.playing
-        ) {
-          this.stop();
-        }
-
-
+      if (!this.hasPrevious) {
         this.previousPosition.copy(
           this.currentPosition
         );
+
+        this.hasPrevious = true;
+        return;
       }
+
+      const dx =
+        this.currentPosition.x -
+        this.previousPosition.x;
+
+      const dz =
+        this.currentPosition.z -
+        this.previousPosition.z;
+
+      const distance =
+        Math.sqrt(
+          dx * dx +
+          dz * dz
+        );
+
+      const speed =
+        distance /
+        Math.max(
+          deltaTime / 1000,
+          0.001
+        );
+
+      const walking =
+        speed >= this.data.minSpeed &&
+        speed <= this.data.maxSpeed;
+
+      this.audio.volume =
+        clamp01(
+          this.data.volume *
+          roomsMasterVolume
+        );
+
+      if (
+        walking &&
+        !this.playing
+      ) {
+        try {
+          const result =
+            this.audio.play();
+
+          this.playing = true;
+
+          if (
+            result &&
+            result.catch
+          ) {
+            result.catch(() => {
+              this.playing = false;
+            });
+          }
+        } catch (error) {
+          this.playing = false;
+        }
+      } else if (
+        !walking &&
+        this.playing
+      ) {
+        this.stopSteps();
+      }
+
+      this.previousPosition.copy(
+        this.currentPosition
+      );
+    }
   }
 );
 
 
 /* ============================================================
+   AUDIO STATE
+============================================================ */
+
+function getRoomsAudioState() {
+  return {
+    muted: roomsMuted,
+    volume: roomsMasterVolume,
+    tvOn: roomsTVOn,
+    unlocked: roomsAudioUnlocked,
+    vrStarted: roomsVRStarted,
+    immersiveXR:
+      hasRoomsImmersiveXRSession(
+        getScene()
+      ),
+    lastUnlockSource:
+      roomsLastUnlockSource,
+    spiralAvailable:
+      roomsSpiral.available
+  };
+}
+
+
+/* ============================================================
    DEBUG
+
+   Browser console:
+   getRoomsAudioDebug()
 ============================================================ */
 
 function getRoomsAudioDebug() {
   return {
-    unlocked:
-      roomsAudioUnlocked,
-
-    muted:
-      roomsMuted,
-
-    volume:
-      roomsMasterVolume,
-
-    tvOn:
-      roomsTVOn,
-
+    muted: roomsMuted,
+    masterVolume: roomsMasterVolume,
+    vrStarted: roomsVRStarted,
+    unlocked: roomsAudioUnlocked,
+    immersiveXR:
+      hasRoomsImmersiveXRSession(
+        getScene()
+      ),
     lastUnlockSource:
       roomsLastUnlockSource,
+
+    spiral: {
+      available:
+        roomsSpiral.available,
+      started:
+        roomsSpiral.started,
+      contextState:
+        roomsSpiral.context
+          ? roomsSpiral.context.state
+          : 'none',
+      pan:
+        roomsSpiral.panner
+          ? Number(
+              roomsSpiral.panner.pan.value
+                .toFixed(3)
+            )
+          : null,
+      gain:
+        roomsSpiral.gain
+          ? Number(
+              roomsSpiral.gain.gain.value
+                .toFixed(4)
+            )
+          : null
+    },
 
     tracks:
       Array.from(
         roomsTracks.entries()
       ).map(
-        (
-          [
-            id,
-            track
-          ]
-        ) => ({
+        ([id, track]) => ({
           id,
-
           src:
             track.definition.src,
-
           paused:
             track.audio.paused,
-
           readyState:
             track.audio.readyState,
-
           networkState:
             track.audio.networkState,
-
           volume:
-            track.audio.volume,
-
-          playRequested:
-            track.playRequested,
-
+            Number(
+              track.audio.volume
+                .toFixed(3)
+            ),
+          distance:
+            Number.isFinite(
+              track.lastDistance
+            )
+              ? Number(
+                  track.lastDistance
+                    .toFixed(2)
+                )
+              : null,
+          distanceGain:
+            Number(
+              track.lastGain
+                .toFixed(3)
+            ),
           lastPlaySucceeded:
             track.lastPlaySucceeded,
-
           error:
-            roomsTrackErrors.get(
-              id
-            ) || null
+            roomsTrackErrors.get(id) ||
+            null
         })
       )
   };
@@ -2063,15 +1880,15 @@ function getRoomsAudioDebug() {
    GLOBAL EXPORTS
 ============================================================ */
 
+/*
+  Compatibility only.
+  There is no separate ENABLE SOUND button anymore.
+*/
+
 window.enableSound =
   function () {
-    startRoomsAudioFromGesture(
+    return startRoomsAudioFromGesture(
       'legacy-enableSound-call'
-    );
-
-
-    return Promise.resolve(
-      true
     );
   };
 
@@ -2127,15 +1944,14 @@ window.getRoomsAudioDebug =
 window.addEventListener(
   'DOMContentLoaded',
   () => {
+    /*
+      PRELOAD ONLY.
+      The normal webpage remains silent.
+    */
+
     ensureRoomsTracks();
-
-
-    setupRoomsAudioGestureRecovery();
-
-
-    attachQuestControllerRecovery();
-
-
+    setupEnterVRButtonWatcher();
+    attachQuestControllerAudioRecovery();
     updateRoomsVolumeUI();
   }
 );
