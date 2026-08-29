@@ -74,7 +74,7 @@
 
 
     /* ======================================================
-       MAC / DESKTOP SETTINGS BUTTON
+       MAC / DESKTOP PAUSE BUTTON
     ======================================================= */
 
     .screen-vr-control {
@@ -206,7 +206,7 @@
 
 
     /* ======================================================
-       MAC / DESKTOP SETTINGS MENU
+       MAC / DESKTOP PAUSE MENU
     ======================================================= */
 
     #screenPauseMenuOverlay {
@@ -537,7 +537,7 @@
 
 
   <!-- ======================================================
-       DESKTOP SETTINGS MENU
+       DESKTOP PAUSE MENU
   ======================================================= -->
 
   <div
@@ -643,7 +643,7 @@
 
 
   <!-- ======================================================
-       FOOTSTEP AUDIO FALLBACKS
+       FOOTSTEP AUDIO
   ======================================================= -->
 
   <audio
@@ -901,17 +901,15 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         KITCHEN
-    ===================================================== -->
+    <!-- KITCHEN -->
 
     <a-entity
 
       id="kitchen"
 
-      class="roompart"
-
       visible="true"
+
+      class="roompart"
 
       gltf-model="url(kitchenasset.glb)"
 
@@ -924,9 +922,7 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         BEDROOM
-    ===================================================== -->
+    <!-- BEDROOM -->
 
     <a-entity
 
@@ -947,9 +943,7 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         TOILET
-    ===================================================== -->
+    <!-- TOILET -->
 
     <a-entity
 
@@ -971,7 +965,7 @@
 
 
     <!-- ====================================================
-         ALTAR
+         ALTAR / BAN THO
     ===================================================== -->
 
     <a-entity
@@ -991,11 +985,11 @@
 
       temporary-offering-table-smoke="
         burnDuration: 60000;
-        smokeOffsetX: 0.1;
-        smokeOffsetY: 0.10;
+        smokeOffsetX: 0;
+        smokeOffsetY: 0.03;
         smokeOffsetZ: 0;
         count: 24;
-        height: 1;
+        height: 0.85;
         speed: 0.20;
         width: 0.13;
         opacity: 0.24;
@@ -1037,9 +1031,7 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         INCENSE FLAME HOT ZONE
-    ===================================================== -->
+    <!-- INCENSE FLAME ZONE -->
 
     <a-sphere
 
@@ -1057,9 +1049,7 @@
     </a-sphere>
 
 
-    <!-- ====================================================
-         ALTAR FLAME
-    ===================================================== -->
+    <!-- ALTAR FLAME -->
 
     <a-entity
 
@@ -1103,9 +1093,7 @@
     </a-entity>
 
 
-    <!-- ====================================================
-         INCENSE BOWL ZONE
-    ===================================================== -->
+    <!-- INCENSE BOWL -->
 
     <a-sphere
 
@@ -1122,10 +1110,6 @@
 
     </a-sphere>
 
-
-    <!-- ====================================================
-         INCENSE FINAL LOCATION
-    ===================================================== -->
 
     <a-entity
 
@@ -1180,8 +1164,6 @@
 
       </a-cylinder>
 
-
-      <!-- INCENSE TIP -->
 
       <a-entity
 
@@ -1248,8 +1230,6 @@
 
       </a-entity>
 
-
-      <!-- INCENSE BOTTOM -->
 
       <a-entity
 
@@ -1436,7 +1416,7 @@
 
 
     <!-- ====================================================
-         TELEPORT FLOOR
+         TELEPORT FALLBACK FLOOR
     ===================================================== -->
 
     <a-plane
@@ -1501,7 +1481,7 @@
 
 
     <!-- ====================================================
-         TEDDY
+         QUEST ITEM 1 — TEDDY BEAR
     ===================================================== -->
 
     <a-entity
@@ -1511,7 +1491,10 @@
       class="
         item
         interactable
+        quest-item
       "
+
+      data-quest-item="teddy"
 
       visible="true"
 
@@ -1528,6 +1511,96 @@
       animation__hoverin="
         property: scale;
         to: 1.1 1.1 1.1;
+        startEvents: mouseenter;
+        dur: 200
+      "
+
+      animation__hoverout="
+        property: scale;
+        to: 1 1 1;
+        startEvents: mouseleave;
+        dur: 200
+      ">
+
+    </a-entity>
+
+
+    <!-- ====================================================
+         QUEST ITEM 2 — HAIR CLIPPER
+    ===================================================== -->
+
+    <a-entity
+
+      id="hairClipper"
+
+      class="
+        item
+        interactable
+        quest-item
+      "
+
+      data-quest-item="hair-clipper"
+
+      visible="true"
+
+      gltf-model="url(hairclipper.glb)"
+
+      position="0 0 0"
+
+      natural-grabbable
+
+      model-status="
+        name: Hair clipper
+      "
+
+      animation__hoverin="
+        property: scale;
+        to: 1.1 1.1 1.1;
+        startEvents: mouseenter;
+        dur: 200
+      "
+
+      animation__hoverout="
+        property: scale;
+        to: 1 1 1;
+        startEvents: mouseleave;
+        dur: 200
+      ">
+
+    </a-entity>
+
+
+    <!-- ====================================================
+         QUEST ITEM 3 — PICTURE
+    ===================================================== -->
+
+    <a-entity
+
+      id="picture"
+
+      class="
+        item
+        interactable
+        quest-item
+      "
+
+      data-quest-item="picture"
+
+      visible="true"
+
+      gltf-model="url(picture.glb)"
+
+      position="0 0 0"
+
+      natural-grabbable
+
+      model-status="
+        name: Picture
+      "
+
+      animation__hoverin="
+        property: scale;
+        to: 1.08 1.08 1.08;
         startEvents: mouseenter;
         dur: 200
       "
@@ -1574,7 +1647,7 @@
 
 
     <!-- ====================================================
-         PLAYER RIG
+         PLAYER
     ===================================================== -->
 
     <a-entity
@@ -1604,9 +1677,7 @@
       ">
 
 
-      <!-- ==================================================
-           CAMERA
-      =================================================== -->
+      <!-- CAMERA -->
 
       <a-entity
 
@@ -1631,13 +1702,6 @@
 
         <!-- ==================================================
              QUEST HEADSET-FOLLOWING SETTINGS BUTTON
-
-             This is a CHILD OF #cam.
-
-             Therefore:
-             turn head left  -> button follows
-             turn head right -> button follows
-             look up/down    -> button follows
         =================================================== -->
 
         <a-circle
@@ -1669,9 +1733,9 @@
 
           <a-ring
 
-            radius-inner="0.034"
+            radius-inner="0.038"
 
-            radius-outer="0.040"
+            radius-outer="0.044"
 
             segments-theta="40"
 
@@ -1786,10 +1850,6 @@
 
         <!-- ==================================================
              QUEST HEADSET-FOLLOWING SETTINGS PANEL
-
-             This is ALSO a child of #cam.
-
-             The whole panel follows the headset.
         =================================================== -->
 
         <a-entity
@@ -1833,9 +1893,7 @@
           </a-text>
 
 
-          <!-- ==================================================
-               RESUME
-          =================================================== -->
+          <!-- RESUME -->
 
           <a-plane
 
@@ -1879,9 +1937,7 @@
           </a-text>
 
 
-          <!-- ==================================================
-               SOUND — MIDDLE TOGGLE
-          =================================================== -->
+          <!-- SOUND -->
 
           <a-plane
 
@@ -1925,9 +1981,7 @@
           </a-text>
 
 
-          <!-- ==================================================
-               RESTART
-          =================================================== -->
+          <!-- RESTART -->
 
           <a-plane
 
@@ -1969,9 +2023,7 @@
           </a-text>
 
 
-          <!-- ==================================================
-               EXIT
-          =================================================== -->
+          <!-- EXIT -->
 
           <a-plane
 
@@ -2069,99 +2121,100 @@
            LEFT QUEST CONTROLLER
       =================================================== -->
 
-     <a-entity
+      <a-entity
 
-  id="leftHand"
+        id="leftHand"
 
-  hand-controls="
-    hand: left
-  "
+        hand-controls="
+          hand: left
+        "
 
-  controller-hand-visual-offset="
-    pitch: 45;
-    yaw: 0;
-    roll: 0
-  "
+        controller-hand-visual-offset="
+          pitch: 40;
+          yaw: 0;
+          roll: 0
+        "
 
-  blink-controls="
-    cameraRig: #rig;
-    teleportOrigin: #cam;
-    collisionEntities: .floor;
-    button: trigger;
-    snapTurn: false;
-    rotateOnTeleport: false
-  "
+        blink-controls="
+          cameraRig: #rig;
+          teleportOrigin: #cam;
+          collisionEntities: .floor;
+          button: trigger;
+          snapTurn: false;
+          rotateOnTeleport: false
+        "
 
-  natural-grab-hand="
-    radius: 0.4;
-    velocitySmoothing: 0.35
-  ">
+        natural-grab-hand="
+          radius: 0.4;
+          velocitySmoothing: 0.35
+        ">
 
-</a-entity>
+      </a-entity>
 
 
       <!-- ==================================================
            RIGHT QUEST CONTROLLER
       =================================================== -->
 
-<a-entity
+      <a-entity
 
-  id="rightHand"
+        id="rightHand"
 
-  hand-controls="
-    hand: right
-  "
+        hand-controls="
+          hand: right
+        "
 
-  controller-hand-visual-offset="
-    pitch: 45;
-    yaw: 0;
-    roll: 0
-  "
+        controller-hand-visual-offset="
+          pitch: 40;
+          yaw: 0;
+          roll: 0
+        "
 
-  raycaster="
-    objects:
-      #door,
-      .mirror-interactable,
-      .tv-interactable,
-      .offering-smoke-interactable,
-      .offering-smoke-hitbox,
-      .vr-control;
+        raycaster="
+          objects:
+            #door,
+            .mirror-interactable,
+            .tv-interactable,
+            .offering-smoke-interactable,
+            .offering-smoke-hitbox,
+            .vr-control;
 
-    direction:
-      0 0 -1;
+          direction:
+            0 0 -1;
 
-    far:
-      3;
+          far:
+            3;
 
-    interval:
-      50;
+          interval:
+            50;
 
-    showLine:
-      true;
+          showLine:
+            true;
 
-    lineColor:
-      #ffffff;
+          lineColor:
+            #ffffff;
 
-    lineOpacity:
-      0.8
-  "
+          lineOpacity:
+            0.8
+        "
 
-  natural-grab-hand="
-    radius: 0.4;
-    velocitySmoothing: 0.35
-  "
+        natural-grab-hand="
+          radius: 0.4;
+          velocitySmoothing: 0.35
+        "
 
-  vr-door-interactor
+        vr-door-interactor
 
-  vr-tv-interactor
+        vr-tv-interactor
 
-  vr-mirror-interactor
+        vr-mirror-interactor
 
-  vr-offering-table-smoke-interactor
+        vr-offering-table-smoke-interactor
 
-  vr-ui-interactor>
+        vr-ui-interactor>
 
-</a-entity>
+      </a-entity>
+
 
     </a-entity>
 
@@ -2171,4 +2224,4 @@
 
 </body>
 
-</html>
+</html></html>

@@ -1,42 +1,45 @@
 /* ============================================================
    story.js — ROOMS WITHIN
-   FULL REPLACEMENT
+   FULL REPLACEMENT — 3 ITEM QUEST STORY
 
-   Five story milestones:
-   1. Teddy picked up.
-   2. TV turned on.
-   3. Mirror inspected.
-   4. Incense lit.
-   5. Offering completed.
+   The story now follows the new FIND 3 ITEMS objective:
 
-   When all five are complete:
-   - #story-manager emits "all-clues-collected"
-   - the scene emits "story-completed"
+   1. Inspect the Teddy Bear.
+   2. Inspect the Hair Clipper.
+   3. Inspect the Picture.
 
-   ui-scare.js listens to "all-clues-collected" for the
-   final jumpscare sequence.
+   interaction-prompts.js emits:
+   - quest-item-found
+   - quest-items-complete
+
+   This story manager converts those events into the existing
+   story events already used elsewhere in the project:
+
+   - clue-collected
+   - all-clues-collected
+   - story-progress
+   - story-completed
+
+   That means ui-scare.js / jumpscare-controller can continue
+   listening for all-clues-collected without needing another rewrite.
 ============================================================ */
 
 
 /* ============================================================
-   STORY DEFINITION
+   STORY MILESTONES
 ============================================================ */
 
 const ROOMS_STORY_MILESTONES = [
   'teddy',
-  'tv',
-  'mirror',
-  'incense-lit',
-  'offering'
+  'hair-clipper',
+  'picture'
 ];
 
 
 const ROOMS_STORY_LABELS = {
-  teddy: 'Teddy picked up',
-  tv: 'TV turned on',
-  mirror: 'Mirror inspected',
-  'incense-lit': 'Incense lit',
-  offering: 'Offering completed'
+  'teddy': 'Teddy Bear inspected',
+  'hair-clipper': 'Hair Clipper inspected',
+  'picture': 'Picture inspected'
 };
 
 
@@ -54,120 +57,58 @@ AFRAME.registerComponent(
       this.completed =
         false;
 
-      this.removed =
-        false;
-
       this.listeners =
         [];
 
-      this.boundEvents =
-        new WeakMap();
 
-      this.bindCurrentStory =
-        this.bindCurrentStory
+      this.onQuestItemFound =
+        this.onQuestItemFound
           .bind(this);
 
-      this.onTeddyStateAdded =
-        this.onTeddyStateAdded
+
+      this.onQuestItemsComplete =
+        this.onQuestItemsComplete
           .bind(this);
 
-      this.onTVStateChanged =
-        this.onTVStateChanged
-          .bind(this);
-
-      this.onMirrorInspected =
-        this.onMirrorInspected
-          .bind(this);
-
-      this.onIncenseLit =
-        this.onIncenseLit
-          .bind(this);
-
-      this.onOfferingCompleted =
-        this.onOfferingCompleted
-          .bind(this);
-
-      this.onSceneLoaded =
-        this.onSceneLoaded
-          .bind(this);
 
       this.bindCurrentStory();
 
-      /*
-        Re-bind once the scene is fully loaded.
 
-        listen() prevents duplicate event bindings,
-        so this is safe if some components initialize
-        slightly later on Quest.
-      */
+      /* ======================================================
+         DEBUG
 
-      if (
-        this.el.sceneEl &&
-        !this.el.sceneEl.hasLoaded
-      ) {
-        this.el.sceneEl
-          .addEventListener(
-            'loaded',
-            this.onSceneLoaded,
-            {
-              once: true
-            }
-          );
-      }
+         Browser console:
 
-      window.setTimeout(
-        this.bindCurrentStory,
-        250
-      );
-
-      window.setTimeout(
-        this.bindCurrentStory,
-        1000
-      );
-
-      /*
-        Debug command:
-
-        getRoomsStoryState()
-      */
+         getRoomsStoryState()
+      ====================================================== */
 
       window.getRoomsStoryState =
-        () => this.getState();
+        () => ({
+          collected:
+            Array.from(
+              this.collected
+            ),
 
-      /*
-        Pretty console debug:
+          count:
+            this.collected.size,
 
-        printRoomsStoryDebug()
-      */
+          total:
+            ROOMS_STORY_MILESTONES.length,
 
-      window.printRoomsStoryDebug =
-        () => {
-          const state =
-            this.getState();
+          completed:
+            this.completed
+        });
 
-          console.log(
-            'Rooms Within story state:',
-            state
-          );
-
-          return state;
-        };
 
       console.log(
-        'Story manager ready: 5 milestones.'
+        'Story manager ready.',
+        'Waiting for 3 inspected quest items.'
       );
-    },
-
-
-    onSceneLoaded: function () {
-      this.bindCurrentStory();
     },
 
 
     /* ========================================================
-       SAFE EVENT BINDING
-
-       The same target/event pair is only registered once.
+       SAFE LISTENER REGISTRATION
     ======================================================== */
 
     listen: function (
@@ -178,346 +119,222 @@ AFRAME.registerComponent(
       if (
         !target ||
         !eventName ||
-        !handler ||
-        this.removed
+        !handler
       ) {
-        return false;
+        return;
       }
 
-      let events =
-        this.boundEvents
-          .get(target);
-
-      if (!events) {
-        events =
-          new Set();
-
-        this.boundEvents
-          .set(
-            target,
-            events
-          );
-      }
-
-      if (
-        events.has(
-          eventName
-        )
-      ) {
-        return false;
-      }
-
-      events.add(
-        eventName
-      );
 
       target.addEventListener(
         eventName,
         handler
       );
 
+
       this.listeners.push({
         target,
         eventName,
         handler
       });
-
-      return true;
     },
 
 
     /* ========================================================
-       CONNECT STORY EVENTS
+       BIND NEW QUEST SYSTEM
     ======================================================== */
 
     bindCurrentStory: function () {
-      if (this.removed) {
-        return;
-      }
-
       const scene =
         this.el.sceneEl;
 
-      const teddy =
-        document.querySelector(
-          '#teddy'
+
+      if (!scene) {
+        console.warn(
+          'Story manager: scene was not found.'
         );
 
-      const living =
-        document.querySelector(
-          '#living'
-        );
-
-      const mirror =
-        document.querySelector(
-          '#mirror'
-        );
-
-      const incense =
-        document.querySelector(
-          '#incenseStick'
-        );
-
-
-      /* ------------------------------------------------------
-         TEDDY
-
-         natural-grabbable adds state "grabbed".
-      ------------------------------------------------------ */
-
-      if (teddy) {
-        this.listen(
-          teddy,
-          'stateadded',
-          this.onTeddyStateAdded
-        );
+        return;
       }
 
 
-      /* ------------------------------------------------------
-         TV
+      /*
+        interaction-prompts.js emits these on the scene.
+      */
+      this.listen(
+        scene,
+        'quest-item-found',
+        this.onQuestItemFound
+      );
 
-         embedded-tv emits tv-state-changed from #living.
-      ------------------------------------------------------ */
 
-      if (living) {
-        this.listen(
-          living,
-          'tv-state-changed',
-          this.onTVStateChanged
+      this.listen(
+        scene,
+        'quest-items-complete',
+        this.onQuestItemsComplete
+      );
+    },
+
+
+    /* ========================================================
+       QUEST ITEM FOUND
+    ======================================================== */
+
+    onQuestItemFound: function (
+      event
+    ) {
+      const detail =
+        event &&
+        event.detail
+          ? event.detail
+          : {};
+
+
+      const key =
+        String(
+          detail.key || ''
         );
-      }
 
-
-      /* ------------------------------------------------------
-         MIRROR
-
-         haunted-mirror emits directly from #mirror.
-      ------------------------------------------------------ */
-
-      if (mirror) {
-        this.listen(
-          mirror,
-          'mirror-inspected',
-          this.onMirrorInspected
-        );
-      }
-
-
-      /* ------------------------------------------------------
-         INCENSE LIGHTING
-
-         incense-offering emits directly from #incenseStick.
-      ------------------------------------------------------ */
-
-      if (incense) {
-        this.listen(
-          incense,
-          'incense-lit',
-          this.onIncenseLit
-        );
-      }
-
-
-      /* ------------------------------------------------------
-         OFFERING COMPLETION
-
-         incense.js emits offering-completed from the scene.
-      ------------------------------------------------------ */
-
-      if (scene) {
-        this.listen(
-          scene,
-          'offering-completed',
-          this.onOfferingCompleted
-        );
-      }
-
-
-      const missing = [];
-
-      if (!teddy) {
-        missing.push(
-          '#teddy'
-        );
-      }
-
-      if (!living) {
-        missing.push(
-          '#living'
-        );
-      }
-
-      if (!mirror) {
-        missing.push(
-          '#mirror'
-        );
-      }
-
-      if (!incense) {
-        missing.push(
-          '#incenseStick'
-        );
-      }
 
       if (
-        missing.length
+        !ROOMS_STORY_MILESTONES
+          .includes(key)
       ) {
         console.warn(
-          'Story manager is waiting for:',
-          missing.join(', ')
+          `Story manager ignored unknown quest item: ${key}`
         );
-      }
-    },
 
-
-    /* ========================================================
-       TEDDY
-    ======================================================== */
-
-    onTeddyStateAdded: function (
-      event
-    ) {
-      if (
-        !event ||
-        !event.detail ||
-        event.detail.state !==
-          'grabbed'
-      ) {
         return;
       }
 
+
       this.collectMilestone(
-        'teddy'
+        key,
+        ROOMS_STORY_LABELS[key] ||
+        detail.title ||
+        key
       );
     },
 
 
     /* ========================================================
-       TV
+       QUEST COMPLETE FALLBACK
+
+       Normally the third quest-item-found already completes the
+       story. This listener is an extra safety net in case the UI
+       emits quest-items-complete directly.
     ======================================================== */
 
-    onTVStateChanged: function (
-      event
-    ) {
-      const isOn =
-        Boolean(
-          event &&
-          event.detail &&
-          event.detail.isOn
-        );
-
-      if (!isOn) {
-        return;
-      }
-
-      this.collectMilestone(
-        'tv'
-      );
-    },
-
-
-    /* ========================================================
-       MIRROR
-    ======================================================== */
-
-    onMirrorInspected:
+    onQuestItemsComplete:
       function () {
-        this.collectMilestone(
-          'mirror'
-        );
+        if (
+          this.completed
+        ) {
+          return;
+        }
+
+
+        /*
+          If all 3 item-found events were received,
+          complete normally.
+        */
+        if (
+          this.collected.size >=
+          ROOMS_STORY_MILESTONES.length
+        ) {
+          this.completeStory();
+
+          return;
+        }
+
+
+        /*
+          If quest-items-complete arrives before one of the
+          individual events for any reason, synchronize the story
+          to the completed quest state instead of getting stuck.
+        */
+        ROOMS_STORY_MILESTONES
+          .forEach(
+            (id) => {
+              if (
+                !this.collected
+                  .has(id)
+              ) {
+                this.collectMilestone(
+                  id,
+                  ROOMS_STORY_LABELS[id]
+                );
+              }
+            }
+          );
       },
 
 
     /* ========================================================
-       INCENSE LIT
-    ======================================================== */
-
-    onIncenseLit:
-      function () {
-        this.collectMilestone(
-          'incense-lit'
-        );
-      },
-
-
-    /* ========================================================
-       OFFERING COMPLETED
-    ======================================================== */
-
-    onOfferingCompleted:
-      function () {
-        this.collectMilestone(
-          'offering'
-        );
-      },
-
-
-    /* ========================================================
-       COLLECT ONE MILESTONE
+       REGISTER STORY PROGRESS
     ======================================================== */
 
     collectMilestone: function (
-      id
+      id,
+      label
     ) {
       if (
         this.completed ||
         !id ||
-        !ROOMS_STORY_MILESTONES
-          .includes(id) ||
-        this.collected
-          .has(id)
+        this.collected.has(id)
       ) {
         return false;
       }
 
-      this.collected.add(
-        id
-      );
+
+      if (
+        !ROOMS_STORY_MILESTONES
+          .includes(id)
+      ) {
+        console.warn(
+          `Story manager ignored unknown milestone: ${id}`
+        );
+
+        return false;
+      }
+
+
+      this.collected.add(id);
+
+
+      const count =
+        this.collected.size;
+
+
+      const total =
+        ROOMS_STORY_MILESTONES.length;
+
 
       const detail = {
         id,
 
         label:
-          ROOMS_STORY_LABELS[
-            id
-          ] ||
-          id,
+          label || id,
 
-        count:
-          this.collected
-            .size,
+        count,
 
-        total:
-          ROOMS_STORY_MILESTONES
-            .length,
+        total,
 
         collected:
           Array.from(
             this.collected
-          ),
-
-        remaining:
-          ROOMS_STORY_MILESTONES
-            .filter(
-              (milestone) =>
-                !this.collected
-                  .has(
-                    milestone
-                  )
-            )
+          )
       };
 
+
       console.log(
-        `Story progress: ${detail.count}/${detail.total} — ${detail.label}`
+        `Story progress: ${detail.label} (${count}/${total})`
       );
 
 
       /*
-        ui-scare.js tutorial logic listens
-        to clue-collected on #story-manager.
+        Keep compatibility with tutorial/UI systems
+        that already listen for clue-collected.
       */
-
       this.el.emit(
         'clue-collected',
         detail,
@@ -526,10 +343,8 @@ AFRAME.registerComponent(
 
 
       /*
-        Scene-wide event for debug or
-        future progress UI.
+        Scene-level progress event for other systems.
       */
-
       this.el.sceneEl.emit(
         'story-progress',
         detail,
@@ -538,200 +353,99 @@ AFRAME.registerComponent(
 
 
       if (
-        this.collected.size >=
-        ROOMS_STORY_MILESTONES
-          .length
+        count >= total &&
+        !this.completed
       ) {
         this.completeStory();
       }
+
 
       return true;
     },
 
 
     /* ========================================================
-       COMPLETE STORY
+       STORY COMPLETE
     ======================================================== */
 
-    completeStory:
-      function () {
-        if (
-          this.completed
-        ) {
-          return false;
-        }
-
-        const allComplete =
-          ROOMS_STORY_MILESTONES
-            .every(
-              (milestone) =>
-                this.collected
-                  .has(
-                    milestone
-                  )
-            );
-
-        if (
-          !allComplete
-        ) {
-          return false;
-        }
-
-        this.completed =
-          true;
-
-        const detail = {
-          total:
-            ROOMS_STORY_MILESTONES
-              .length,
-
-          collected:
-            Array.from(
-              this.collected
-            ),
-
-          completed:
-            true
-        };
-
-        console.log(
-          'All story milestones complete.'
-        );
+    completeStory: function () {
+      if (
+        this.completed
+      ) {
+        return;
+      }
 
 
-        /*
-          IMPORTANT:
-
-          jumpscare-controller inside
-          ui-scare.js listens for THIS
-          event on #story-manager.
-        */
-
-        this.el.emit(
-          'all-clues-collected',
-          detail,
-          false
-        );
+      this.completed =
+        true;
 
 
-        this.el.sceneEl.emit(
-          'story-completed',
-          detail,
-          false
-        );
+      const detail = {
+        total:
+          ROOMS_STORY_MILESTONES.length,
 
-        return true;
-      },
-
-
-    /* ========================================================
-       DEBUG STATE
-    ======================================================== */
-
-    getState:
-      function () {
-        return {
-          milestones:
-            ROOMS_STORY_MILESTONES
-              .map(
-                (id) => ({
-                  id,
-
-                  label:
-                    ROOMS_STORY_LABELS[
-                      id
-                    ] ||
-                    id,
-
-                  collected:
-                    this.collected
-                      .has(id)
-                })
-              ),
-
-          collected:
-            Array.from(
-              this.collected
-            ),
-
-          remaining:
-            ROOMS_STORY_MILESTONES
-              .filter(
-                (id) =>
-                  !this.collected
-                    .has(id)
-              ),
-
-          count:
+        collected:
+          Array.from(
             this.collected
-              .size,
+          )
+      };
 
-          total:
-            ROOMS_STORY_MILESTONES
-              .length,
 
-          completed:
-            this.completed
-        };
-      },
+      console.log(
+        'All 3 quest items inspected. Story objective complete.'
+      );
+
+
+      /*
+        IMPORTANT:
+        ui-scare.js jumpscare-controller already listens for this
+        exact event on #story-manager.
+      */
+      this.el.emit(
+        'all-clues-collected',
+        detail,
+        false
+      );
+
+
+      this.el.sceneEl.emit(
+        'story-completed',
+        detail,
+        false
+      );
+    },
 
 
     /* ========================================================
        CLEANUP
     ======================================================== */
 
-    remove:
-      function () {
-        this.removed =
-          true;
-
-        this.listeners
-          .forEach(
-            ({
-              target,
+    remove: function () {
+      this.listeners
+        .forEach(
+          ({
+            target,
+            eventName,
+            handler
+          }) => {
+            target.removeEventListener(
               eventName,
               handler
-            }) => {
-              if (
-                target
-              ) {
-                target
-                  .removeEventListener(
-                    eventName,
-                    handler
-                  );
-              }
-            }
-          );
-
-        this.listeners =
-          [];
-
-        if (
-          this.el.sceneEl
-        ) {
-          this.el.sceneEl
-            .removeEventListener(
-              'loaded',
-              this.onSceneLoaded
             );
-        }
+          }
+        );
 
-        if (
-          window
-            .getRoomsStoryState
-        ) {
-          delete window
-            .getRoomsStoryState;
-        }
 
-        if (
-          window
-            .printRoomsStoryDebug
-        ) {
-          delete window
-            .printRoomsStoryDebug;
-        }
+      this.listeners =
+        [];
+
+
+      if (
+        window.getRoomsStoryState
+      ) {
+        delete window
+          .getRoomsStoryState;
       }
+    }
   }
 );
