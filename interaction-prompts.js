@@ -69,7 +69,21 @@ const roomsPromptState = {
   inspectionOpen: false,
   inspectedEntity: null,
   inspectedItem: null,
+
+  /*
+    inspectedItems controls the first-click information behavior.
+    A quest item becomes "inspected" after its information panel
+    has been opened once. This does NOT tick the checklist.
+  */
+  inspectedItems: new Set(),
+
+  /*
+    foundItems now represents the CHECKLIST state only.
+    story.js sets these when the real physical objects are
+    placed on #truocbantho.
+  */
   foundItems: new Set(),
+
   pausedByInspection: false
 };
 
@@ -147,14 +161,6 @@ function roomsCreateText(
 
 /* ============================================================
    QUEST ITEM INVISIBLE AIM HITBOXES
-
-   The GLB itself can be small or have gaps between its meshes.
-   These boxes are invisible, follow the real object, and make
-   hover / Trigger / first-click inspection much easier.
-
-   They DO NOT replace the real object:
-   - Quest Grip still grabs the real natural-grabbable entity.
-   - Mac clicks after inspection still pick up/drop the real object.
 ============================================================ */
 
 function roomsGetEntityLocalModelBox(entity) {
@@ -188,16 +194,11 @@ function roomsGetEntityLocalModelBox(entity) {
       return;
     }
 
-    if (
-      !node.geometry.boundingBox
-    ) {
-      node.geometry
-        .computeBoundingBox();
+    if (!node.geometry.boundingBox) {
+      node.geometry.computeBoundingBox();
     }
 
-    if (
-      !node.geometry.boundingBox
-    ) {
+    if (!node.geometry.boundingBox) {
       return;
     }
 
@@ -209,8 +210,7 @@ function roomsGetEntityLocalModelBox(entity) {
         );
 
     box.union(
-      node.geometry
-        .boundingBox
+      node.geometry.boundingBox
         .clone()
         .applyMatrix4(
           toEntityLocal
@@ -233,9 +233,7 @@ function roomsQuestHitboxSettings(item) {
     };
   }
 
-  if (
-    item.key === 'teddy'
-  ) {
+  if (item.key === 'teddy') {
     return {
       scale: 1.70,
       minX: 0.30,
@@ -244,9 +242,7 @@ function roomsQuestHitboxSettings(item) {
     };
   }
 
-  if (
-    item.key === 'hair-clipper'
-  ) {
+  if (item.key === 'hair-clipper') {
     return {
       scale: 1.75,
       minX: 0.24,
@@ -255,9 +251,7 @@ function roomsQuestHitboxSettings(item) {
     };
   }
 
-  if (
-    item.key === 'picture'
-  ) {
+  if (item.key === 'picture') {
     return {
       scale: 1.45,
       minX: 0.28,
@@ -276,9 +270,7 @@ function roomsQuestHitboxSettings(item) {
 
 function roomsCreateOrUpdateQuestHitbox(entity) {
   const item =
-    roomsGetQuestItemForEntity(
-      entity
-    );
+    roomsGetQuestItemForEntity(entity);
 
   if (
     !entity ||
@@ -328,10 +320,6 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
       item.key
     );
 
-    /*
-      A click can land on the invisible box instead of the GLB.
-      Handle that explicitly so info + pickup both remain reliable.
-    */
     hitbox.addEventListener(
       'click',
       (event) => {
@@ -339,29 +327,22 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
           roomsPromptsImmersiveXR(
             entity.sceneEl
           ) ||
-          roomsPromptState
-            .inspectionOpen ||
+          roomsPromptState.inspectionOpen ||
           window.roomsPaused ||
           window.roomsInputLocked
         ) {
           return;
         }
 
-        if (
-          event.preventDefault
-        ) {
+        if (event.preventDefault) {
           event.preventDefault();
         }
 
-        if (
-          event.stopPropagation
-        ) {
+        if (event.stopPropagation) {
           event.stopPropagation();
         }
 
-        if (
-          event.stopImmediatePropagation
-        ) {
+        if (event.stopImmediatePropagation) {
           event.stopImmediatePropagation();
         }
 
@@ -374,7 +355,7 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
 
         if (
           !roomsPromptState
-            .foundItems
+            .inspectedItems
             .has(item.key)
         ) {
           system.openInspection(
@@ -385,11 +366,6 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
           return;
         }
 
-        /*
-          Already inspected:
-          perform same Mac pickup/drop action
-          natural-grabbable normally performs.
-        */
         const grabbable =
           entity.components &&
           entity.components[
@@ -398,19 +374,15 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
 
         if (
           grabbable &&
-          typeof grabbable
-            .onDesktopClick ===
+          typeof grabbable.onDesktopClick ===
             'function'
         ) {
-          grabbable
-            .onDesktopClick();
+          grabbable.onDesktopClick();
         }
       }
     );
 
-    entity.appendChild(
-      hitbox
-    );
+    entity.appendChild(hitbox);
   }
 
   const box =
@@ -433,21 +405,16 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
     );
 
   const settings =
-    roomsQuestHitboxSettings(
-      item
-    );
+    roomsQuestHitboxSettings(item);
 
   hitbox.object3D
     .position
-    .copy(
-      center
-    );
+    .copy(center);
 
   hitbox.setAttribute(
     'width',
     Math.max(
-      size.x *
-        settings.scale,
+      size.x * settings.scale,
       settings.minX
     )
   );
@@ -455,8 +422,7 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
   hitbox.setAttribute(
     'height',
     Math.max(
-      size.y *
-        settings.scale,
+      size.y * settings.scale,
       settings.minY
     )
   );
@@ -464,8 +430,7 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
   hitbox.setAttribute(
     'depth',
     Math.max(
-      size.z *
-        settings.scale,
+      size.z * settings.scale,
       settings.minZ
     )
   );
@@ -641,9 +606,7 @@ function roomsGetRayTarget(
   const raycaster =
     rayEntity.components.raycaster;
 
-  if (
-    raycaster.refreshObjects
-  ) {
+  if (raycaster.refreshObjects) {
     raycaster.refreshObjects();
   }
 
@@ -719,9 +682,7 @@ function roomsAppendRaySelector(
       selector
     )
   ) {
-    selectors.push(
-      selector
-    );
+    selectors.push(selector);
   }
 
   rayEntity.setAttribute(
@@ -732,8 +693,7 @@ function roomsAppendRaySelector(
 
   const component =
     rayEntity.components &&
-    rayEntity.components
-      .raycaster;
+    rayEntity.components.raycaster;
 
   if (
     component &&
@@ -856,27 +816,17 @@ function roomsGetActionTarget(
   const raycaster =
     rayEntity.components.raycaster;
 
-  if (
-    raycaster.refreshObjects
-  ) {
+  if (raycaster.refreshObjects) {
     raycaster.refreshObjects();
   }
 
   const intersections =
     raycaster.intersections || [];
 
-  if (
-    !intersections.length
-  ) {
+  if (!intersections.length) {
     return null;
   }
 
-  /*
-    Scan intersections from nearest to farthest.
-
-    This is more reliable than checking
-    intersections[0] only.
-  */
   for (
     const intersection
     of intersections
@@ -927,9 +877,7 @@ function roomsGetActionTarget(
 
 function roomsGetTVComponent() {
   const tv =
-    document.querySelector(
-      '#tv'
-    );
+    document.querySelector('#tv');
 
   if (
     tv &&
@@ -991,10 +939,6 @@ function roomsGetActionPromptText(
     return '';
   }
 
-  /*
-    Quest items only show their NAME while aimed at.
-    Clicking / Trigger still opens the full information.
-  */
   if (
     target.type ===
       'quest-item' &&
@@ -1057,12 +1001,6 @@ function roomsHideLegacyIncenseTooltip() {
 
 /* ============================================================
    MAC INFO-PANEL POINTER RAYCAST
-
-   During item inspection on Mac, the camera is frozen and the
-   real mouse pointer is used.
-
-   This ray is built from event.clientX / event.clientY instead
-   of the centre A-Frame crosshair.
 ============================================================ */
 
 function roomsDesktopPointerHitsEntity(
@@ -1199,11 +1137,11 @@ AFRAME.registerComponent(
       this.inspectPreviewHolder = null;
       this.previewObject = null;
 
-      /*
-        Mac inspection-pointer state.
-      */
-      this.savedCanvasCursor = null;
-      this.desktopCursorWasVisible = true;
+      this.savedCanvasCursor =
+        null;
+
+      this.desktopCursorWasVisible =
+        true;
 
       this.boundQuestEntities =
         new Set();
@@ -1405,10 +1343,6 @@ AFRAME.registerComponent(
               return;
             }
 
-            /*
-              Build larger invisible target
-              around real GLB.
-            */
             roomsCreateOrUpdateQuestHitbox(
               entity
             );
@@ -1434,12 +1368,6 @@ AFRAME.registerComponent(
               );
             }
 
-            /*
-              First direct GLB click = info.
-
-              Once inspected, normal
-              natural-grabbable click continues.
-            */
             entity.addEventListener(
               'click',
               this.onQuestEntityClick,
@@ -1454,9 +1382,7 @@ AFRAME.registerComponent(
 
 
     attachListeners: function () {
-      if (
-        this.rightHand
-      ) {
+      if (this.rightHand) {
         this.rightHand.addEventListener(
           'triggerdown',
           this.onRightTrigger
@@ -1495,22 +1421,17 @@ AFRAME.registerComponent(
         this.onExitVR
       );
 
-      if (
-        this.inspectClose
-      ) {
-        this.inspectClose
-          .addEventListener(
-            'click',
-            () => {
-              this.closeInspection();
-            }
-          );
+      if (this.inspectClose) {
+        this.inspectClose.addEventListener(
+          'click',
+          () => this.closeInspection()
+        );
       }
     },
 
 
     /* ======================================================
-       OBJECTIVE CHECKLIST
+       OBJECTIVE HUD
     ====================================================== */
 
     buildQuestUI: function () {
@@ -1742,12 +1663,9 @@ AFRAME.registerComponent(
           }
         );
 
-      /*
-        Child of #cam = follows
-        Mac camera / Quest headset.
-      */
-      this.camera
-        .appendChild(root);
+      this.camera.appendChild(
+        root
+      );
 
       this.questRoot =
         root;
@@ -1755,7 +1673,7 @@ AFRAME.registerComponent(
 
 
     /* ======================================================
-       ITEM NAME / TV / INCENSE PROMPT
+       ACTION PROMPT
     ====================================================== */
 
     buildActionPrompt: function () {
@@ -1822,8 +1740,9 @@ AFRAME.registerComponent(
         this.actionText
       );
 
-      this.camera
-        .appendChild(root);
+      this.camera.appendChild(
+        root
+      );
 
       this.actionRoot =
         root;
@@ -1831,9 +1750,7 @@ AFRAME.registerComponent(
 
 
     setActionPrompt:
-      function (
-        label
-      ) {
+      function (label) {
         const nextLabel =
           String(
             label || ''
@@ -2066,13 +1983,6 @@ AFRAME.registerComponent(
           36
         );
 
-      /*
-        RED X EXIT BUTTON
-
-        .vr-control is important:
-        while paused, Quest raycaster still
-        allows .vr-control.
-      */
       const closeButton =
         roomsCreateEntity(
           'a-plane',
@@ -2102,17 +2012,16 @@ AFRAME.registerComponent(
           }
         );
 
-      closeButton
-        .appendChild(
-          roomsCreateText(
-            'X',
-            '0 0 0.008',
-            '0.20',
-            'center',
-            '#ffffff',
-            3
-          )
-        );
+      closeButton.appendChild(
+        roomsCreateText(
+          'X',
+          '0 0 0.008',
+          '0.20',
+          'center',
+          '#ffffff',
+          3
+        )
+      );
 
       root.append(
         blackout,
@@ -2125,8 +2034,9 @@ AFRAME.registerComponent(
         closeButton
       );
 
-      this.camera
-        .appendChild(root);
+      this.camera.appendChild(
+        root
+      );
 
       this.inspectionRoot =
         root;
@@ -2137,13 +2047,11 @@ AFRAME.registerComponent(
 
 
     /* ======================================================
-       MAC LEFT CLICK ON QUEST ITEM
+       MAC QUEST ITEM CLICK
     ====================================================== */
 
     onQuestEntityClick:
-      function (
-        event
-      ) {
+      function (event) {
         if (
           roomsPromptsImmersiveXR(
             this.scene
@@ -2173,23 +2081,14 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          ALREADY INSPECTED:
-          allow natural-grabbable
-          pickup/drop.
-        */
         if (
           roomsPromptState
-            .foundItems
+            .inspectedItems
             .has(item.key)
         ) {
           return;
         }
 
-        /*
-          FIRST CLICK:
-          open info instead.
-        */
         if (
           event.preventDefault
         ) {
@@ -2217,27 +2116,10 @@ AFRAME.registerComponent(
 
     /* ======================================================
        MAC MOUSE INPUT
-
-       INFO OPEN:
-       real Mac pointer clicks red X.
-
-       INFO CLOSED:
-       centre A-Frame crosshair is used.
-
-       First left-click:
-       info.
-
-       Later left-click:
-       pickup/drop.
-
-       Middle-click:
-       reopen info.
     ====================================================== */
 
     onDesktopMouseDown:
-      function (
-        event
-      ) {
+      function (event) {
         if (
           roomsPromptsImmersiveXR(
             this.scene
@@ -2246,11 +2128,6 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          ====================================================
-          INFO PANEL OPEN
-          ====================================================
-        */
         if (
           roomsPromptState
             .inspectionOpen
@@ -2277,8 +2154,7 @@ AFRAME.registerComponent(
             if (
               event.stopImmediatePropagation
             ) {
-              event
-                .stopImmediatePropagation();
+              event.stopImmediatePropagation();
             }
 
             this.closeInspection();
@@ -2286,12 +2162,6 @@ AFRAME.registerComponent(
 
           return;
         }
-
-        /*
-          ====================================================
-          NORMAL GAMEPLAY
-          ====================================================
-        */
 
         if (
           !this.desktopCursor ||
@@ -2325,10 +2195,6 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          Middle mouse:
-          reopen item info.
-        */
         if (
           event.button === 1
         ) {
@@ -2343,22 +2209,14 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          After inspection:
-          allow normal pickup click.
-        */
         if (
           roomsPromptState
-            .foundItems
+            .inspectedItems
             .has(item.key)
         ) {
           return;
         }
 
-        /*
-          First left click:
-          open item information.
-        */
         event.preventDefault();
         event.stopPropagation();
 
@@ -2370,9 +2228,7 @@ AFRAME.registerComponent(
 
 
     onAuxClick:
-      function (
-        event
-      ) {
+      function (event) {
         if (
           event.button === 1
         ) {
@@ -2383,22 +2239,10 @@ AFRAME.registerComponent(
 
     /* ======================================================
        QUEST TRIGGER
-
-       Quest Trigger:
-         open info.
-
-       Info open:
-         point laser at RED X
-         + Trigger = close.
-
-       Quest Grip / Squeeze:
-         pickup object through natural-grab-hand.
     ====================================================== */
 
     onRightTrigger:
-      function (
-        event
-      ) {
+      function (event) {
         if (
           !roomsPromptsImmersiveXR(
             this.scene
@@ -2407,9 +2251,6 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          INFO OPEN
-        */
         if (
           roomsPromptState
             .inspectionOpen
@@ -2427,8 +2268,7 @@ AFRAME.registerComponent(
               event &&
               event.stopPropagation
             ) {
-              event
-                .stopPropagation();
+              event.stopPropagation();
             }
 
             this.closeInspection();
@@ -2437,9 +2277,6 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          NORMAL GAMEPLAY
-        */
         if (
           window.roomsPaused
         ) {
@@ -2482,9 +2319,7 @@ AFRAME.registerComponent(
     ====================================================== */
 
     onKeyDown:
-      function (
-        event
-      ) {
+      function (event) {
         if (
           event.key ===
             'Escape' &&
@@ -2502,9 +2337,7 @@ AFRAME.registerComponent(
 
 
     onPauseChanged:
-      function (
-        event
-      ) {
+      function (event) {
         const paused =
           Boolean(
             event &&
@@ -2512,10 +2345,6 @@ AFRAME.registerComponent(
             event.detail.paused
           );
 
-        /*
-          Keep info pause active until
-          X / Escape closes it.
-        */
         if (
           roomsPromptState
             .inspectionOpen &&
@@ -2600,10 +2429,6 @@ AFRAME.registerComponent(
           return;
         }
 
-        /*
-          Set BEFORE setRoomsPaused(true)
-          because pause event emits immediately.
-        */
         roomsPromptState
           .inspectionOpen =
             true;
@@ -2630,22 +2455,17 @@ AFRAME.registerComponent(
         );
 
         /*
-          Opening info checks the
-          corresponding objective.
+          Opening info does NOT tick checklist.
         */
-        this.markQuestItemFound(
-          item
-        );
+        roomsPromptState
+          .inspectedItems
+          .add(item.key);
 
         roomsSetVisible(
           this.inspectionRoot,
           true
         );
 
-        /*
-          Keep checklist visible during
-          item information.
-        */
         this.syncQuestVisibility();
 
         this.pauseGameForInspection();
@@ -2700,9 +2520,6 @@ AFRAME.registerComponent(
         window.roomsInspectionOpen =
           false;
 
-        /*
-          Resume game when X closes info.
-        */
         this.resumeGameAfterInspection();
 
         this.syncQuestVisibility();
@@ -2731,8 +2548,7 @@ AFRAME.registerComponent(
             true;
 
         if (
-          typeof window
-            .setRoomsPaused ===
+          typeof window.setRoomsPaused ===
           'function'
         ) {
           window.setRoomsPaused(
@@ -2785,19 +2601,6 @@ AFRAME.registerComponent(
           }
         }
 
-        /*
-          ====================================================
-          MAC INSPECTION MODE
-          ====================================================
-
-          Freeze camera and release pointer lock.
-
-          The real mouse pointer can now move
-          independently over the red X.
-
-          Hide centre A-Frame crosshair because
-          it is not used while info is open.
-        */
         if (
           !roomsPromptsImmersiveXR(
             this.scene
@@ -2821,13 +2624,9 @@ AFRAME.registerComponent(
             document.exitPointerLock
           ) {
             try {
-              document
-                .exitPointerLock();
+              document.exitPointerLock();
             } catch (error) {
-              /*
-                Browser may reject this
-                in some situations.
-              */
+              // Browser may reject.
             }
           }
 
@@ -2862,11 +2661,10 @@ AFRAME.registerComponent(
                 ) !==
               false;
 
-            this.desktopCursor
-              .setAttribute(
-                'visible',
-                false
-              );
+            this.desktopCursor.setAttribute(
+              'visible',
+              false
+            );
           }
         }
 
@@ -2885,8 +2683,7 @@ AFRAME.registerComponent(
             .pausedByInspection
         ) {
           if (
-            typeof window
-              .setRoomsPaused ===
+            typeof window.setRoomsPaused ===
             'function'
           ) {
             window.setRoomsPaused(
@@ -2947,9 +2744,6 @@ AFRAME.registerComponent(
           }
         }
 
-        /*
-          Restore normal Mac mouse/crosshair.
-        */
         if (
           !roomsPromptsImmersiveXR(
             this.scene
@@ -2976,11 +2770,10 @@ AFRAME.registerComponent(
           if (
             this.desktopCursor
           ) {
-            this.desktopCursor
-              .setAttribute(
-                'visible',
-                this.desktopCursorWasVisible
-              );
+            this.desktopCursor.setAttribute(
+              'visible',
+              this.desktopCursorWasVisible
+            );
           }
         }
 
@@ -3045,31 +2838,27 @@ AFRAME.registerComponent(
 
 
     /* ======================================================
-       INFO CONTENT / 3D PREVIEW
+       INFO CONTENT
     ====================================================== */
 
     setInspectionText:
-      function (
-        item
-      ) {
+      function (item) {
         if (
           this.inspectTitle
         ) {
-          this.inspectTitle
-            .setAttribute(
-              'value',
-              item.title
-            );
+          this.inspectTitle.setAttribute(
+            'value',
+            item.title
+          );
         }
 
         if (
           this.inspectDescription
         ) {
-          this.inspectDescription
-            .setAttribute(
-              'value',
-              item.description
-            );
+          this.inspectDescription.setAttribute(
+            'value',
+            item.description
+          );
         }
       },
 
@@ -3080,11 +2869,9 @@ AFRAME.registerComponent(
           this.previewObject &&
           this.previewObject.parent
         ) {
-          this.previewObject
-            .parent
-            .remove(
-              this.previewObject
-            );
+          this.previewObject.parent.remove(
+            this.previewObject
+          );
         }
 
         this.previewObject =
@@ -3093,9 +2880,7 @@ AFRAME.registerComponent(
 
 
     setInspectionPreview:
-      function (
-        entity
-      ) {
+      function (entity) {
         this.clearInspectionPreview();
 
         if (
@@ -3157,10 +2942,9 @@ AFRAME.registerComponent(
               new THREE.Vector3()
             );
 
-          clone.position
-            .sub(
-              center
-            );
+          clone.position.sub(
+            center
+          );
 
           const maxDimension =
             Math.max(
@@ -3177,24 +2961,21 @@ AFRAME.registerComponent(
             clone
           );
 
-          group.scale
-            .setScalar(
-              0.285 /
-              maxDimension
-            );
+          group.scale.setScalar(
+            0.285 /
+            maxDimension
+          );
 
-          group.rotation
-            .set(
-              0,
-              THREE.MathUtils
-                .degToRad(
-                  18
-                ),
-              0
-            );
+          group.rotation.set(
+            0,
+            THREE.MathUtils
+              .degToRad(
+                18
+              ),
+            0
+          );
 
-          this
-            .inspectPreviewHolder
+          this.inspectPreviewHolder
             .object3D
             .add(
               group
@@ -3202,7 +2983,6 @@ AFRAME.registerComponent(
 
           this.previewObject =
             group;
-
         } catch (error) {
           console.warn(
             'Item preview could not be cloned:',
@@ -3213,47 +2993,81 @@ AFRAME.registerComponent(
 
 
     /* ======================================================
-       QUEST PROGRESS
+       CHECKLIST STATE
     ====================================================== */
 
-    markQuestItemFound:
+    setQuestItemChecked:
       function (
-        item
+        itemOrKey,
+        checked
       ) {
-        if (!item) {
-          return;
+        const key =
+          typeof itemOrKey ===
+            'string'
+            ? itemOrKey
+            : (
+                itemOrKey &&
+                itemOrKey.key
+                  ? itemOrKey.key
+                  : ''
+              );
+
+        if (!key) {
+          return false;
         }
 
-        const wasNew =
-          !roomsPromptState
+        const item =
+          ROOMS_QUEST_ITEMS.find(
+            (candidate) =>
+              candidate.key ===
+              key
+          );
+
+        if (!item) {
+          return false;
+        }
+
+        const shouldCheck =
+          checked !== false;
+
+        const wasChecked =
+          roomsPromptState
             .foundItems
             .has(
-              item.key
+              key
             );
 
-        roomsPromptState
-          .foundItems
-          .add(
-            item.key
-          );
+        if (shouldCheck) {
+          roomsPromptState
+            .foundItems
+            .add(
+              key
+            );
+        } else {
+          roomsPromptState
+            .foundItems
+            .delete(
+              key
+            );
+        }
 
         this.updateQuestUI();
 
-        if (!wasNew) {
-          return;
+        if (
+          shouldCheck ===
+          wasChecked
+        ) {
+          return true;
         }
 
-        const story =
-          document.querySelector(
-            '#story-manager'
-          );
-
         const detail = {
-          key:
-            item.key,
+          key,
 
           title:
             item.title,
+
+          checked:
+            shouldCheck,
 
           found:
             roomsPromptState
@@ -3265,41 +3079,65 @@ AFRAME.registerComponent(
               .length
         };
 
-        if (story) {
-          story.emit(
-            'quest-item-found',
-            detail,
-            false
-          );
-        }
+        if (shouldCheck) {
+          const story =
+            document.querySelector(
+              '#story-manager'
+            );
 
-        this.scene.emit(
-          'quest-item-found',
-          detail,
-          false
-        );
-
-        if (
-          roomsPromptState
-            .foundItems
-            .size >=
-          ROOMS_QUEST_ITEMS
-            .length
-        ) {
           if (story) {
             story.emit(
-              'quest-items-complete',
+              'quest-item-found',
               detail,
               false
             );
           }
 
           this.scene.emit(
-            'quest-items-complete',
+            'quest-item-found',
+            detail,
+            false
+          );
+
+          if (
+            roomsPromptState
+              .foundItems
+              .size >=
+            ROOMS_QUEST_ITEMS
+              .length
+          ) {
+            if (story) {
+              story.emit(
+                'quest-items-complete',
+                detail,
+                false
+              );
+            }
+
+            this.scene.emit(
+              'quest-items-complete',
+              detail,
+              false
+            );
+          }
+        } else {
+          this.scene.emit(
+            'quest-item-unchecked',
             detail,
             false
           );
         }
+
+        return true;
+      },
+
+
+    markQuestItemFound:
+      function (item) {
+        return this.setQuestItemChecked(
+          item,
+          true
+        );
       },
 
 
@@ -3340,7 +3178,7 @@ AFRAME.registerComponent(
 
 
     /* ======================================================
-       CHECKLIST VISIBILITY
+       QUEST VISIBILITY
     ====================================================== */
 
     syncQuestVisibility:
@@ -3361,11 +3199,6 @@ AFRAME.registerComponent(
           ROOMS_DESCRIPTION_UI
             .showQuestTrackerOnDesktop;
 
-        /*
-          Visible while item info is open.
-
-          Hidden during normal Settings pause.
-        */
         const allowedPauseState =
           !window.roomsPaused ||
           roomsPromptState
@@ -3388,10 +3221,6 @@ AFRAME.registerComponent(
         time,
         delta
       ) {
-        /*
-          Slowly rotate the item
-          preview in info screen.
-        */
         if (
           roomsPromptState
             .inspectionOpen &&
@@ -3404,9 +3233,6 @@ AFRAME.registerComponent(
               0.00018;
         }
 
-        /*
-          Prevent duplicate incense prompt.
-        */
         roomsHideLegacyIncenseTooltip();
 
         if (!delta) {
@@ -3416,9 +3242,6 @@ AFRAME.registerComponent(
         this.actionScanElapsed +=
           delta;
 
-        /*
-          About 15 checks per second.
-        */
         if (
           this.actionScanElapsed <
           65
@@ -3442,33 +3265,30 @@ AFRAME.registerComponent(
         if (
           this.rightHand
         ) {
-          this.rightHand
-            .removeEventListener(
-              'triggerdown',
-              this.onRightTrigger
-            );
+          this.rightHand.removeEventListener(
+            'triggerdown',
+            this.onRightTrigger
+          );
         }
 
         this.boundQuestEntities
           .forEach(
             (entity) => {
-              entity
-                .removeEventListener(
-                  'click',
-                  this.onQuestEntityClick,
-                  true
-                );
+              entity.removeEventListener(
+                'click',
+                this.onQuestEntityClick,
+                true
+              );
 
               if (
                 entity
                   .__roomsQuestHitboxRefresh
               ) {
-                entity
-                  .removeEventListener(
-                    'model-loaded',
-                    entity
-                      .__roomsQuestHitboxRefresh
-                  );
+                entity.removeEventListener(
+                  'model-loaded',
+                  entity
+                    .__roomsQuestHitboxRefresh
+                );
 
                 delete entity
                   .__roomsQuestHitboxRefresh;
@@ -3534,7 +3354,19 @@ AFRAME.registerComponent(
 window.getRoomsQuestState =
   function () {
     return {
+      inspected:
+        Array.from(
+          roomsPromptState
+            .inspectedItems
+        ),
+
       found:
+        Array.from(
+          roomsPromptState
+            .foundItems
+        ),
+
+      checked:
         Array.from(
           roomsPromptState
             .foundItems
@@ -3555,6 +3387,31 @@ window.getRoomsQuestState =
         roomsPromptState
           .inspectionOpen
     };
+  };
+
+
+window.setRoomsQuestItemChecked =
+  function (
+    key,
+    checked = true
+  ) {
+    const system =
+      roomsPromptState.system;
+
+    if (
+      !system ||
+      typeof system
+        .setQuestItemChecked !==
+        'function'
+    ) {
+      return false;
+    }
+
+    return system
+      .setQuestItemChecked(
+        key,
+        checked
+      );
   };
 
 

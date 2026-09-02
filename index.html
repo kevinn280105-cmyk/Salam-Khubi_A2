@@ -450,7 +450,7 @@
 
   <script src="mirror.js"></script>
 
-
+  <script src="monster.js"></script>
 </head>
 
 
@@ -812,13 +812,13 @@
 
     <a-entity
 
-      id="wallandground"
+      id="wall"
 
       class="roompart"
 
       visible="true"
 
-      gltf-model="url(wallandground.glb)"
+      gltf-model="url(wall.glb)"
 
       position="0 0 0"
 
@@ -963,7 +963,79 @@
 
     </a-entity>
 
+<!-- ====================================================
+     ALTAR / BAN THO
+===================================================== -->
 
+<a-entity
+  id="bantho"
+  class="
+    roompart
+    offering-smoke-interactable
+  "
+  visible="true"
+  gltf-model="url(bantho.glb)"
+  position="0 0 0"
+
+  temporary-offering-table-smoke="
+    burnDuration: 60000;
+    smokeOffsetX: 0.14;
+    smokeOffsetY: 0.3;
+    smokeOffsetZ: 0;
+    count: 24;
+    height: 0.85;
+    speed: 0.20;
+    width: 0.13;
+    opacity: 0.24;
+    size: 0.052;
+    color: #d4d4d4;
+    hitboxScale: 1.08
+  "
+
+  model-status="
+    name: Ban tho
+  ">
+</a-entity>
+
+
+<!-- ====================================================
+     FRONT OF ALTAR / TRUOC BAN THO
+===================================================== -->
+
+<a-entity
+  id="truocbantho"
+  class="roompart"
+  visible="true"
+  gltf-model="url(truocbantho.glb)"
+  position="0 0 0"
+  model-status="
+    name: Truoc ban tho
+  ">
+</a-entity>
+
+
+<!-- ====================================================
+     INCENSE OFFERING MANAGER
+===================================================== -->
+
+<a-entity
+  id="offeringManager"
+
+  offering-layout="
+    altar: #bantho;
+    surfaceRatio: 0.62;
+    pickupSide: -0.28;
+    flameSide: 0.28;
+    frontOffset: 0;
+    temporaryFlame: true;
+    debugVisible: false
+  "
+
+  offering-blackout="
+    delay: 1400;
+    blackoutDuration: 1900
+  ">
+</a-entity>
     <!-- ====================================================
          ALTAR / BAN THO
     ===================================================== -->
@@ -1242,7 +1314,12 @@
 
     </a-entity>
 
-
+<a-entity
+  id="walkingMonster"
+  gltf-model="url(walking.glb)"
+  position="0 0 0"
+  visible="false">
+</a-entity>
     <!-- ====================================================
          MIRROR
     ===================================================== -->
@@ -1654,7 +1731,9 @@
 
       id="rig"
 
-      position="1 0.08 0.5"
+      position="7.2 0.08 -1
+      "
+      rotation="0 90 0"
 
       movement-controls="
         speed: 0.15;
