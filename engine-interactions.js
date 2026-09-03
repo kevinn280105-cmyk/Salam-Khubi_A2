@@ -1,1850 +1,1010 @@
 /* ============================================================
-   engine-environment.js — ROOMS WITHIN
+   engine-interactions.js — ROOMS WITHIN
    FULL REPLACEMENT
 
-   Includes:
-   - Dark irregular room-light flicker.
-   - Thunder on each flicker sequence.
-   - Model load debugging.
-   - Optional generated teleport floors from named Blender objects.
-   - Player collision for GLBs + .solid-collider objects.
-   - VR teleport path validation so walls cannot be teleported through.
-   - Desktop head bob, disabled in real immersive VR.
-   - Proximity light reactions.
-   - VR locomotion mode: smooth joystick walking + teleport both enabled.
-   - 90 Hz WebXR request when supported.
+   Standalone TV version:
+   - Door opens/closes automatically by proximity.
+   - Manual desktop / Quest door interaction still works.
+   - #tv uses tv.glb and is the ONLY TV interaction target.
+   - No #tvScreenHitbox and no TV guessing inside livingasset.glb.
+   - TV glow + spatial audio use the standalone TV model position.
+   - Teddy / incense style objects remain grabbable.
+   - Quest grab-hand behavior remains enabled.
+   - Pause / input lock is respected.
 ============================================================ */
 
 
 /* ============================================================
-   SHARED PAUSE CHECK
+   SHARED HELPERS
 ============================================================ */
 
-function roomsEnvironmentPaused() {
+function roomsGameplayInputLocked() {
   return Boolean(
-    window.roomsPaused ||
-    window.roomsInputLocked
+    window.roomsInputLocked ||
+    window.roomsPaused
   );
 }
 
 
-/* ============================================================
-   IRREGULAR HORROR FLICKER + THUNDER
-============================================================ */
-
-AFRAME.registerComponent('flicker', {
-  schema: {
-    min: { default: 0.8 },
-    max: { default: 1.2 },
-    speed: { default: 0.5 }
-  },
-
-  init: function () {
-    const light =
-      this.el.getAttribute(
-        'light'
-      ) || {};
-
-    const originalIntensity =
-      typeof light.intensity ===
-      'number'
-        ? light.intensity
-        : this.data.max;
-
-    this.stableIntensity =
-      THREE.MathUtils.clamp(
-        originalIntensity,
-        Math.min(
-          this.data.min,
-          this.data.max
-        ),
-        Math.max(
-          this.data.min,
-          this.data.max
-        )
-      );
-
-    this.sequence = [];
-    this.sequenceIndex = 0;
-    this.stepRemaining = 0;
-
-    this.nextEventRemaining =
-      this.randomEventDelay();
-
-    this.componentPaused =
-      false;
-
-    this.applyIntensity(
-      this.stableIntensity
-    );
-  },
+function isImmersiveXRScene(scene) {
+  return Boolean(
+    scene &&
+    scene.renderer &&
+    scene.renderer.xr &&
+    scene.renderer.xr.isPresenting
+  );
+}
 
 
-  randomBetween:
-    function (
-      minimum,
-      maximum
+function objectBelongsToEntity(
+  hitObject,
+  entity
+) {
+  if (
+    !hitObject ||
+    !entity
+  ) {
+    return false;
+  }
+
+
+  const root =
+    entity.getObject3D(
+      'mesh'
+    ) ||
+    entity.object3D;
+
+
+  if (!root) {
+    return false;
+  }
+
+
+  let current =
+    hitObject;
+
+
+  while (current) {
+
+    if (
+      current === root
     ) {
-      return (
-        minimum +
-        Math.random() *
-          (
-            maximum -
-            minimum
-          )
-      );
-    },
-
-
-  randomEventDelay:
-    function () {
-      const speed =
-        THREE.MathUtils.clamp(
-          Number(
-            this.data.speed
-          ) || 0.5,
-          0.1,
-          1.5
-        );
-
-      const frequencyScale =
-        THREE.MathUtils.clamp(
-          0.55 / speed,
-          0.72,
-          1.35
-        );
-
-      return (
-        this.randomBetween(
-          3000,
-          11000
-        ) *
-        frequencyScale
-      );
-    },
-
-
-  applyIntensity:
-    function (value) {
-      this.el.setAttribute(
-        'light',
-        'intensity',
-        Math.max(
-          0,
-          value
-        )
-      );
-    },
-
-
-  darkDip:
-    function (
-      minimum,
-      maximum
-    ) {
-      return (
-        this.stableIntensity *
-        this.randomBetween(
-          minimum,
-          maximum
-        )
-      );
-    },
-
-
-  buildSingleFlicker:
-    function () {
-      return [
-        {
-          intensity:
-            this.darkDip(
-              0.12,
-              0.28
-            ),
-
-          duration:
-            this.randomBetween(
-              70,
-              130
-            )
-        },
-
-        {
-          intensity:
-            this.stableIntensity,
-
-          duration:
-            this.randomBetween(
-              100,
-              180
-            )
-        }
-      ];
-    },
-
-
-  buildDoubleFlicker:
-    function () {
-      return [
-        {
-          intensity:
-            this.darkDip(
-              0.08,
-              0.22
-            ),
-
-          duration:
-            this.randomBetween(
-              65,
-              120
-            )
-        },
-
-        {
-          intensity:
-            this.stableIntensity,
-
-          duration:
-            this.randomBetween(
-              45,
-              100
-            )
-        },
-
-        {
-          intensity:
-            this.darkDip(
-              0.04,
-              0.16
-            ),
-
-          duration:
-            this.randomBetween(
-              80,
-              150
-            )
-        },
-
-        {
-          intensity:
-            this.stableIntensity,
-
-          duration:
-            this.randomBetween(
-              120,
-              220
-            )
-        }
-      ];
-    },
-
-
-  buildChaoticFlicker:
-    function () {
-      const steps = [];
-
-      const count =
-        Math.floor(
-          this.randomBetween(
-            6,
-            11
-          )
-        );
-
-      for (
-        let i = 0;
-        i < count;
-        i++
-      ) {
-        const fullFlash =
-          Math.random() <
-          0.25;
-
-        steps.push({
-          intensity:
-            fullFlash
-              ? this.stableIntensity
-              : this.darkDip(
-                  0.03,
-                  0.32
-                ),
-
-          duration:
-            this.randomBetween(
-              35,
-              100
-            )
-        });
-      }
-
-      steps.push({
-        intensity:
-          this.stableIntensity,
-
-        duration:
-          this.randomBetween(
-            150,
-            260
-          )
-      });
-
-      return steps;
-    },
-
-
-  buildNearBlackout:
-    function () {
-      return [
-        {
-          intensity:
-            this.darkDip(
-              0.10,
-              0.20
-            ),
-
-          duration:
-            this.randomBetween(
-              70,
-              120
-            )
-        },
-
-        {
-          intensity:
-            this.stableIntensity *
-            this.randomBetween(
-              0.002,
-              0.018
-            ),
-
-          duration:
-            this.randomBetween(
-              180,
-              380
-            )
-        },
-
-        {
-          intensity:
-            this.darkDip(
-              0.08,
-              0.20
-            ),
-
-          duration:
-            this.randomBetween(
-              50,
-              100
-            )
-        },
-
-        {
-          intensity:
-            this.stableIntensity,
-
-          duration:
-            this.randomBetween(
-              180,
-              320
-            )
-        }
-      ];
-    },
-
-
-  playThunder:
-    function () {
-      if (
-        roomsEnvironmentPaused()
-      ) {
-        return;
-      }
-
-      if (
-        typeof window
-          .playRoomsThunder ===
-        'function'
-      ) {
-        window
-          .playRoomsThunder();
-
-        return;
-      }
-
-      const thunder =
-        document.querySelector(
-          '#thunderAudio'
-        );
-
-      if (!thunder) {
-        return;
-      }
-
-      const audioState =
-        window.getRoomsAudioState
-          ? window
-              .getRoomsAudioState()
-          : {
-              muted: false,
-              volume: 1
-            };
-
-      if (
-        audioState.muted
-      ) {
-        return;
-      }
-
-      thunder.pause();
-
-      thunder.currentTime =
-        0;
-
-      thunder.volume =
-        Math.min(
-          1,
-
-          0.55 *
-            (
-              audioState.volume !==
-              undefined
-                ? audioState.volume
-                : 1
-            )
-        );
-
-      thunder
-        .play()
-        .catch(
-          (error) => {
-            console.warn(
-              'Thunder could not play:',
-              error
-            );
-          }
-        );
-    },
-
-
-  beginRandomEvent:
-    function () {
-      const roll =
-        Math.random();
-
-      if (
-        roll < 0.48
-      ) {
-        this.sequence =
-          this.buildSingleFlicker();
-
-      } else if (
-        roll < 0.76
-      ) {
-        this.sequence =
-          this.buildDoubleFlicker();
-
-      } else if (
-        roll < 0.93
-      ) {
-        this.sequence =
-          this.buildChaoticFlicker();
-
-      } else {
-        this.sequence =
-          this.buildNearBlackout();
-      }
-
-      this.playThunder();
-
-      this.sequenceIndex =
-        0;
-
-      this.startCurrentStep();
-    },
-
-
-  startCurrentStep:
-    function () {
-      if (
-        !this.sequence ||
-        this.sequenceIndex >=
-          this.sequence.length
-      ) {
-        this.sequence = [];
-
-        this.sequenceIndex =
-          0;
-
-        this.stepRemaining =
-          0;
-
-        this.applyIntensity(
-          this.stableIntensity
-        );
-
-        this.nextEventRemaining =
-          this.randomEventDelay();
-
-        return;
-      }
-
-      const step =
-        this.sequence[
-          this.sequenceIndex
-        ];
-
-      this.applyIntensity(
-        step.intensity
-      );
-
-      this.stepRemaining =
-        Math.max(
-          1,
-          step.duration
-        );
-    },
-
-
-  tick:
-    function (
-      time,
-      deltaTime
-    ) {
-      if (
-        !deltaTime ||
-        this.componentPaused ||
-        roomsEnvironmentPaused()
-      ) {
-        return;
-      }
-
-      if (
-        this.sequence.length
-      ) {
-        this.stepRemaining -=
-          deltaTime;
-
-        if (
-          this.stepRemaining <=
-          0
-        ) {
-          this.sequenceIndex +=
-            1;
-
-          this.startCurrentStep();
-        }
-
-        return;
-      }
-
-      this.nextEventRemaining -=
-        deltaTime;
-
-      if (
-        this.nextEventRemaining <=
-        0
-      ) {
-        this.beginRandomEvent();
-      }
-    },
-
-
-  triggerReaction:
-    function (kind) {
-      if (
-        this.componentPaused ||
-        roomsEnvironmentPaused()
-      ) {
-        return false;
-      }
-
-      if (
-        kind === 'single'
-      ) {
-        this.sequence =
-          this.buildSingleFlicker();
-
-      } else if (
-        kind === 'chaotic'
-      ) {
-        this.sequence =
-          this.buildChaoticFlicker();
-
-      } else if (
-        kind === 'blackout'
-      ) {
-        this.sequence =
-          this.buildNearBlackout();
-
-      } else {
-        this.sequence =
-          this.buildDoubleFlicker();
-      }
-
-      this.playThunder();
-
-      this.sequenceIndex =
-        0;
-
-      this.startCurrentStep();
-
       return true;
-    },
+    }
 
 
-  pause: function () {
-    this.componentPaused =
-      true;
-  },
+    current =
+      current.parent;
+  }
 
 
-  play: function () {
-    this.componentPaused =
-      false;
-  },
+  return false;
+}
 
 
-  remove: function () {
-    this.applyIntensity(
-      this.stableIntensity
+function appendRaycasterObjectSelector(
+  entity,
+  selector
+) {
+
+  if (
+    !entity ||
+    !selector
+  ) {
+    return;
+  }
+
+
+  const data =
+    entity.getAttribute(
+      'raycaster'
+    ) || {};
+
+
+  const selectors =
+    String(
+      data.objects || ''
+    )
+      .split(',')
+      .map(
+        (value) =>
+          value.trim()
+      )
+      .filter(Boolean);
+
+
+  if (
+    !selectors.includes(
+      selector
+    )
+  ) {
+    selectors.push(
+      selector
     );
   }
-});
+
+
+  entity.setAttribute(
+    'raycaster',
+    'objects',
+    selectors.join(
+      ', '
+    )
+  );
+
+
+  const raycaster =
+    entity.components
+      .raycaster;
+
+
+  if (
+    raycaster &&
+    raycaster.refreshObjects
+  ) {
+    raycaster
+      .refreshObjects();
+  }
+}
+
+
+function getIntersectionMaterialIndex(
+  intersection
+) {
+
+  if (
+    intersection &&
+    intersection.face &&
+    typeof intersection
+      .face
+      .materialIndex ===
+      'number'
+  ) {
+    return intersection
+      .face
+      .materialIndex;
+  }
+
+
+  return 0;
+}
+
+
+function getClosestRayIntersection(
+  raycaster
+) {
+
+  if (!raycaster) {
+    return null;
+  }
+
+
+  if (
+    raycaster.refreshObjects
+  ) {
+    raycaster
+      .refreshObjects();
+  }
+
+
+  const intersections =
+    raycaster.intersections ||
+    [];
+
+
+  return intersections.length
+    ? intersections[0]
+    : null;
+}
+
 
 
 /* ============================================================
-   MODEL LOAD STATUS
+   DOOR HINGE
 ============================================================ */
 
 AFRAME.registerComponent(
-  'model-status',
+  'door-hinge',
   {
+
     schema: {
-      name: {
-        default:
-          '3D model'
+
+      openAngle: {
+        default: 100
+      },
+
+
+      hingeSide: {
+        default: 'left',
+
+        oneOf: [
+          'left',
+          'right'
+        ]
+      },
+
+
+      direction: {
+        default: 1
+      },
+
+
+      duration: {
+        default: 650
       }
+
     },
 
 
     init: function () {
+
+      this.root =
+        null;
+
+
+      this.parts =
+        [];
+
+
+      this.partStates =
+        new Map();
+
+
+      this.lastActivation =
+        0;
+
+
       this.onModelLoaded =
         this.onModelLoaded
           .bind(this);
 
-      this.onModelError =
-        this.onModelError
+
+      this.onActivateObject =
+        this.onActivateObject
           .bind(this);
 
-      this.el.addEventListener(
-        'model-loaded',
-        this.onModelLoaded
-      );
 
-      this.el.addEventListener(
-        'model-error',
-        this.onModelError
-      );
+      this.onDesktopClick =
+        this.onDesktopClick
+          .bind(this);
+
+
+      this.el
+        .addEventListener(
+          'model-loaded',
+          this.onModelLoaded
+        );
+
+
+      this.el
+        .addEventListener(
+          'activate-object',
+          this.onActivateObject
+        );
+
+
+      this.el
+        .addEventListener(
+          'click',
+          this.onDesktopClick
+        );
+
+
+      if (
+        this.el
+          .getObject3D(
+            'mesh'
+          )
+      ) {
+
+        this
+          .onModelLoaded();
+
+      }
+
     },
+
+
+    hasMeshDescendant:
+      function (
+        object
+      ) {
+
+        let found =
+          false;
+
+
+        object
+          .traverse(
+            (node) => {
+
+              if (
+                node.isMesh
+              ) {
+                found =
+                  true;
+              }
+
+            }
+          );
+
+
+        return found;
+
+      },
 
 
     onModelLoaded:
       function () {
-        console.log(
-          `${this.data.name} loaded successfully.`
-        );
 
-        const root =
-          this.el.getObject3D(
-            'mesh'
-          );
-
-        if (!root) {
-          return;
-        }
-
-        root.updateMatrixWorld(
-          true
-        );
-
-        const box =
-          new THREE.Box3()
-            .setFromObject(
-              root
+        this.root =
+          this.el
+            .getObject3D(
+              'mesh'
             );
 
+
         if (
-          box.isEmpty()
+          !this.root
         ) {
           return;
         }
 
+
+        let container =
+          this.root;
+
+
+        while (
+          true
+        ) {
+
+          const children =
+            container
+              .children
+              .filter(
+                (child) =>
+                  this
+                    .hasMeshDescendant(
+                      child
+                    )
+              );
+
+
+          if (
+            children.length !==
+              1 ||
+            children[0]
+              .isMesh
+          ) {
+            break;
+          }
+
+
+          container =
+            children[0];
+
+        }
+
+
+        this.parts =
+          container
+            .children
+            .filter(
+              (child) =>
+                this
+                  .hasMeshDescendant(
+                    child
+                  )
+            );
+
+
+        if (
+          !this.parts.length
+        ) {
+
+          this.parts = [
+            container
+          ];
+
+        }
+
+
+        console.log(
+          `Door ready with ${this.parts.length} movable part(s).`
+        );
+
+      },
+
+
+    getLocalBoundingBox:
+      function (
+        part
+      ) {
+
+        const box =
+          new THREE
+            .Box3();
+
+
+        box.makeEmpty();
+
+
+        this.el
+          .object3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        part
+          .updateMatrixWorld(
+            true
+          );
+
+
+        const inverseEntityWorld =
+          new THREE
+            .Matrix4()
+            .copy(
+              this.el
+                .object3D
+                .matrixWorld
+            )
+            .invert();
+
+
+        part
+          .traverse(
+            (node) => {
+
+              if (
+                !node.isMesh ||
+                !node.geometry
+              ) {
+                return;
+              }
+
+
+              if (
+                !node.geometry
+                  .boundingBox
+              ) {
+
+                node.geometry
+                  .computeBoundingBox();
+
+              }
+
+
+              if (
+                !node.geometry
+                  .boundingBox
+              ) {
+                return;
+              }
+
+
+              const matrix =
+                new THREE
+                  .Matrix4()
+                  .multiplyMatrices(
+                    inverseEntityWorld,
+                    node.matrixWorld
+                  );
+
+
+              box.union(
+                node.geometry
+                  .boundingBox
+                  .clone()
+                  .applyMatrix4(
+                    matrix
+                  )
+              );
+
+            }
+          );
+
+
+        return box;
+
+      },
+
+
+    findPartFromHit:
+      function (
+        hitObject
+      ) {
+
+        if (
+          !hitObject
+        ) {
+
+          return this.parts.length ===
+            1
+
+            ? this.parts[0]
+
+            : null;
+
+        }
+
+
+        let current =
+          hitObject;
+
+
+        while (
+          current
+        ) {
+
+          if (
+            current.userData &&
+            current.userData
+              .roomsDoorState
+          ) {
+
+            return current
+              .userData
+              .roomsDoorState
+              .part;
+
+          }
+
+
+          if (
+            this.parts
+              .includes(
+                current
+              )
+          ) {
+
+            return current;
+
+          }
+
+
+          if (
+            current ===
+            this.root
+          ) {
+            break;
+          }
+
+
+          current =
+            current.parent;
+
+        }
+
+
+        return this.parts.length ===
+          1
+
+          ? this.parts[0]
+
+          : null;
+
+      },
+
+
+    createState:
+      function (
+        part
+      ) {
+
+        if (
+          !part
+        ) {
+          return null;
+        }
+
+
+        if (
+          this.partStates
+            .has(
+              part
+            )
+        ) {
+
+          return this.partStates
+            .get(
+              part
+            );
+
+        }
+
+
+        const box =
+          this
+            .getLocalBoundingBox(
+              part
+            );
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return null;
+        }
+
+
+        const size =
+          new THREE
+            .Vector3();
+
+
         const center =
-          new THREE.Vector3();
+          new THREE
+            .Vector3();
+
+
+        box.getSize(
+          size
+        );
+
 
         box.getCenter(
           center
         );
 
-        console.log(
-          `  -> ${this.data.name} world bounding box center:`,
 
-          center
-            .toArray()
-            .map(
-              (number) =>
-                number.toFixed(
-                  2
-                )
-            )
-        );
-      },
+        const widthAlongX =
+          size.x >=
+          size.z;
 
 
-    onModelError:
-      function (event) {
-        console.error(
-          `${this.data.name} failed to load.`,
-          event.detail
-        );
-      },
+        const hinge =
+          center.clone();
 
-
-    remove: function () {
-      this.el
-        .removeEventListener(
-          'model-loaded',
-          this.onModelLoaded
-        );
-
-      this.el
-        .removeEventListener(
-          'model-error',
-          this.onModelError
-        );
-    }
-  }
-);
-
-
-/* ============================================================
-   CREATE TELEPORT FLOORS FROM NAMED BLENDER OBJECTS
-============================================================ */
-
-AFRAME.registerComponent(
-  'tag-floors',
-  {
-    schema: {
-      floorNames: {
-        type: 'array',
-
-        default: [
-          'san nha phong khach',
-          'san nha phong an',
-          'san nha TOILET',
-          'san giat do',
-          'SAN PHONG NGU'
-        ]
-      }
-    },
-
-
-    init: function () {
-      this.generatedPlanes =
-        [];
-
-      this.onModelLoaded =
-        this.onModelLoaded
-          .bind(this);
-
-      this.el.addEventListener(
-        'model-loaded',
-        this.onModelLoaded
-      );
-
-      if (
-        this.el.getObject3D(
-          'mesh'
-        )
-      ) {
-        this.onModelLoaded();
-      }
-    },
-
-
-    getContainer:
-      function () {
-        let container =
-          document.querySelector(
-            '#generated-teleport-floors'
-          );
 
         if (
-          !container
+          widthAlongX
         ) {
-          container =
-            document.createElement(
-              'a-entity'
-            );
 
-          container.setAttribute(
-            'id',
-            'generated-teleport-floors'
-          );
+          hinge.x =
+            this.data.hingeSide ===
+            'left'
 
-          this.el.sceneEl
-            .appendChild(
-              container
-            );
+              ? box.min.x
+
+              : box.max.x;
+
+        } else {
+
+          hinge.z =
+            this.data.hingeSide ===
+            'left'
+
+              ? box.min.z
+
+              : box.max.z;
+
         }
 
-        return container;
-      },
 
+        const pivot =
+          new THREE
+            .Group();
 
-    clearGeneratedPlanes:
-      function () {
-        this.generatedPlanes
-          .forEach(
-            (plane) => {
-              if (
-                plane &&
-                plane.parentNode
-              ) {
-                plane.parentNode
-                  .removeChild(
-                    plane
-                  );
-              }
-            }
-          );
 
-        this.generatedPlanes =
-          [];
-      },
+        pivot.name =
+          'rooms-door-hinge';
 
 
-    onModelLoaded:
-      function () {
-        const root =
-          this.el.getObject3D(
-            'mesh'
-          );
-
-        if (!root) {
-          return;
-        }
-
-        this.clearGeneratedPlanes();
-
-        root.updateMatrixWorld(
-          true
-        );
-
-        const container =
-          this.getContainer();
-
-        this.data.floorNames
-          .forEach(
-            (name) => {
-              const object =
-                root.getObjectByName(
-                  name
-                );
-
-              if (
-                !object
-              ) {
-                return;
-              }
-
-              object
-                .updateMatrixWorld(
-                  true
-                );
-
-              const box =
-                new THREE.Box3()
-                  .setFromObject(
-                    object
-                  );
-
-              if (
-                box.isEmpty()
-              ) {
-                return;
-              }
-
-              const size =
-                new THREE.Vector3();
-
-              const center =
-                new THREE.Vector3();
-
-              box.getSize(
-                size
-              );
-
-              box.getCenter(
-                center
-              );
-
-              const plane =
-                document
-                  .createElement(
-                    'a-plane'
-                  );
-
-              plane.setAttribute(
-                'class',
-                'floor'
-              );
-
-              plane.setAttribute(
-                'rotation',
-                '-90 0 0'
-              );
-
-              plane.setAttribute(
-                'width',
-                Math.max(
-                  size.x,
-                  0.1
-                )
-              );
-
-              plane.setAttribute(
-                'height',
-                Math.max(
-                  size.z,
-                  0.1
-                )
-              );
-
-              plane.setAttribute(
-                'position',
-                `${center.x} ${box.min.y + 0.02} ${center.z}`
-              );
-
-              plane.setAttribute(
-                'material',
-                'opacity: 0; transparent: true; depthWrite: false'
-              );
-
-              container
-                .appendChild(
-                  plane
-                );
-
-              this.generatedPlanes
-                .push(
-                  plane
-                );
-            }
-          );
-      },
-
-
-    remove: function () {
-      this.el
-        .removeEventListener(
-          'model-loaded',
-          this.onModelLoaded
-        );
-
-      this.clearGeneratedPlanes();
-    }
-  }
-);
-
-
-/* ============================================================
-   QUEST / PLAYER ROOM COLLIDER
-
-   IMPORTANT VR FIX:
-   A teleport is NOT allowed to skip collision anymore.
-   Long moves are checked from start to destination in small steps.
-============================================================ */
-
-AFRAME.registerComponent(
-  'quest-room-collider',
-  {
-    schema: {
-      objects: {
-        default:
-          '[gltf-model], .solid-collider'
-      },
-
-      radius: {
-        default:
-          0.32
-      },
-
-      skin: {
-        default:
-          0.035
-      },
-
-      maxSubstep: {
-        default:
-          0.12
-      },
-
-      teleportDistance: {
-        default:
-          0.75
-      },
-
-      teleportCheckStep: {
-        default:
-          0.20
-      }
-    },
-
-
-    init: function () {
-      this.colliderMeshes =
-        [];
-
-      this.lastPosition =
-        this.el.object3D
-          .position
-          .clone();
-
-      this.raycaster =
-        new THREE.Raycaster();
-
-      this.from =
-        new THREE.Vector3();
-
-      this.to =
-        new THREE.Vector3();
-
-      this.delta =
-        new THREE.Vector3();
-
-      this.direction =
-        new THREE.Vector3();
-
-      this.side =
-        new THREE.Vector3();
-
-      this.origin =
-        new THREE.Vector3();
-
-      this.safePosition =
-        new THREE.Vector3();
-
-      this.step =
-        new THREE.Vector3();
-
-      this.testPosition =
-        new THREE.Vector3();
-
-      this.teleportStart =
-        new THREE.Vector3();
-
-      this.teleportEnd =
-        new THREE.Vector3();
-
-      this.teleportPrevious =
-        new THREE.Vector3();
-
-      this.teleportNext =
-        new THREE.Vector3();
-
-      this.componentPaused =
-        false;
-
-      this.modelListeners =
-        [];
-
-      this.refreshColliders =
-        this.refreshColliders
-          .bind(this);
-
-      this.resetPosition =
-        this.resetPosition
-          .bind(this);
-
-      this.el.sceneEl
-        .addEventListener(
-          'loaded',
-          this.refreshColliders
-        );
-
-      this.el.sceneEl
-        .addEventListener(
-          'enter-vr',
-          this.resetPosition
-        );
-
-      this.el.sceneEl
-        .addEventListener(
-          'exit-vr',
-          this.resetPosition
-        );
-
-      this.el.sceneEl
-        .querySelectorAll(
-          this.data.objects
-        )
-        .forEach(
-          (entity) => {
-            const handler =
-              this.refreshColliders;
-
-            entity
-              .addEventListener(
-                'model-loaded',
-                handler
-              );
-
-            this.modelListeners
-              .push({
-                entity,
-                handler
-              });
-          }
-        );
-
-      window.setTimeout(
-        this.refreshColliders,
-        1000
-      );
-    },
-
-
-    resetPosition:
-      function () {
-        this.lastPosition
+        pivot.position
           .copy(
-            this.el.object3D
-              .position
-          );
-      },
-
-
-    refreshColliders:
-      function () {
-        const meshes =
-          [];
-
-        this.el.sceneEl
-          .querySelectorAll(
-            this.data.objects
-          )
-          .forEach(
-            (entity) => {
-              const root =
-                entity.getObject3D(
-                  'mesh'
-                ) ||
-                entity.object3D;
-
-              if (!root) {
-                return;
-              }
-
-              root.traverse(
-                (node) => {
-                  if (
-                    node.isMesh &&
-                    node.geometry &&
-                    node.visible
-                  ) {
-                    node.userData
-                      .collisionEntity =
-                        entity;
-
-                    meshes.push(
-                      node
-                    );
-                  }
-                }
-              );
-            }
+            hinge
           );
 
-        this.colliderMeshes =
-          meshes;
 
-        console.log(
-          `Player collision loaded ${meshes.length} mesh collider(s).`
+        this.el
+          .object3D
+          .add(
+            pivot
+          );
+
+
+        pivot.attach(
+          part
         );
+
+
+        const state = {
+
+          part,
+
+          pivot,
+
+          isOpen:
+            false,
+
+          currentAngle:
+            0,
+
+          startAngle:
+            0,
+
+          targetAngle:
+            0,
+
+          elapsed:
+            0,
+
+          animating:
+            false
+
+        };
+
+
+        part
+          .userData
+          .roomsDoorState =
+          state;
+
+
+        this.partStates
+          .set(
+            part,
+            state
+          );
+
+
+        return state;
+
       },
 
 
-    isBlocked:
+    startDoorAnimation:
       function (
-        from,
-        to
+        state,
+        open,
+        automatic
       ) {
+
         if (
-          !this.colliderMeshes
-            .length
+          !state
         ) {
           return false;
         }
 
-        this.delta
-          .subVectors(
-            to,
-            from
+
+        const shouldOpen =
+          Boolean(
+            open
           );
 
-        this.delta.y =
+
+        if (
+          state.isOpen ===
+            shouldOpen &&
+          !state.animating
+        ) {
+
+          return false;
+
+        }
+
+
+        state.isOpen =
+          shouldOpen;
+
+
+        state.startAngle =
+          state.currentAngle;
+
+
+        state.targetAngle =
+          THREE
+            .MathUtils
+            .degToRad(
+
+              shouldOpen
+
+                ? this.data
+                    .openAngle *
+                  this.data
+                    .direction
+
+                : 0
+
+            );
+
+
+        state.elapsed =
           0;
 
-        const distance =
-          this.delta.length();
 
-        if (
-          distance <
-          0.0001
-        ) {
-          return false;
-        }
-
-        this.direction
-          .copy(
-            this.delta
-          )
-          .normalize();
-
-        this.side.set(
-          -this.direction.z,
-          0,
-          this.direction.x
-        );
-
-        const heights = [
-          0.22,
-          0.85,
-          1.42
-        ];
-
-        const sideOffsets = [
-          -this.data.radius *
-            0.72,
-
-          0,
-
-          this.data.radius *
-            0.72
-        ];
-
-        const rayLength =
-          distance +
-          this.data.radius +
-          this.data.skin;
-
-        for (
-          let heightIndex = 0;
-          heightIndex <
-            heights.length;
-          heightIndex++
-        ) {
-          for (
-            let sideIndex = 0;
-            sideIndex <
-              sideOffsets.length;
-            sideIndex++
-          ) {
-            this.origin
-              .copy(
-                from
-              )
-              .addScaledVector(
-                this.side,
-                sideOffsets[
-                  sideIndex
-                ]
-              );
-
-            this.origin.y +=
-              heights[
-                heightIndex
-              ];
-
-            this.origin
-              .addScaledVector(
-                this.direction,
-                0.004
-              );
-
-            this.raycaster
-              .set(
-                this.origin,
-                this.direction
-              );
-
-            this.raycaster.near =
-              0;
-
-            this.raycaster.far =
-              rayLength;
-
-            const hits =
-              this.raycaster
-                .intersectObjects(
-                  this.colliderMeshes,
-                  false
-                );
-
-            const blockingHit =
-              hits.find(
-                (hit) => {
-                  const owner =
-                    hit.object &&
-                    hit.object
-                      .userData
-                      ? hit.object
-                          .userData
-                          .collisionEntity
-                      : null;
-
-                  if (
-                    owner &&
-                    owner.is &&
-                    owner.is(
-                      'grabbed'
-                    )
-                  ) {
-                    return false;
-                  }
-
-                  return (
-                    hit.distance <=
-                    rayLength
-                  );
-                }
-              );
-
-            if (
-              blockingHit
-            ) {
-              return true;
-            }
-          }
-        }
-
-        return false;
-      },
+        state.animating =
+          true;
 
 
-    isTeleportPathClear:
-      function (
-        from,
-        to
-      ) {
-        if (
-          !this.colliderMeshes
-            .length
-        ) {
-          return true;
-        }
+        this.el
+          .emit(
 
-        this.teleportStart
-          .copy(
-            from
+            shouldOpen
+              ? 'door-opened'
+              : 'door-closed',
+
+            {
+              automatic:
+                Boolean(
+                  automatic
+                )
+            },
+
+            false
+
           );
 
-        this.teleportEnd
-          .copy(
-            to
-          );
-
-        const distance =
-          Math.hypot(
-            this.teleportEnd.x -
-              this.teleportStart.x,
-
-            this.teleportEnd.z -
-              this.teleportStart.z
-          );
-
-        if (
-          distance <
-          0.0001
-        ) {
-          return true;
-        }
-
-        const checkStep =
-          Math.max(
-            0.08,
-
-            Number(
-              this.data
-                .teleportCheckStep
-            ) || 0.20
-          );
-
-        const steps =
-          Math.max(
-            1,
-
-            Math.ceil(
-              distance /
-              checkStep
-            )
-          );
-
-        this.teleportPrevious
-          .copy(
-            this.teleportStart
-          );
-
-        for (
-          let index = 1;
-          index <= steps;
-          index++
-        ) {
-          const progress =
-            index /
-            steps;
-
-          this.teleportNext
-            .lerpVectors(
-              this.teleportStart,
-              this.teleportEnd,
-              progress
-            );
-
-          if (
-            this.isBlocked(
-              this.teleportPrevious,
-              this.teleportNext
-            )
-          ) {
-            return false;
-          }
-
-          this.teleportPrevious
-            .copy(
-              this.teleportNext
-            );
-        }
 
         return true;
+
       },
 
 
-    moveWithSliding:
+    activatePart:
       function (
-        start,
-        desired
+        hitObject
       ) {
-        this.delta
-          .subVectors(
-            desired,
-            start
-          );
-
-        this.delta.y =
-          0;
-
-        const distance =
-          this.delta.length();
 
         if (
-          distance <
-          0.0001
+          roomsGameplayInputLocked()
         ) {
-          this.safePosition
-            .copy(
-              desired
-            );
-
-          return this.safePosition;
+          return false;
         }
 
-        const steps =
-          Math.max(
-            1,
 
-            Math.ceil(
-              distance /
-              this.data
-                .maxSubstep
-            )
-          );
+        const now =
+          performance.now();
 
-        this.step
-          .copy(
-            this.delta
-          )
-          .divideScalar(
-            steps
-          );
-
-        this.safePosition
-          .copy(
-            start
-          );
-
-        for (
-          let index = 0;
-          index < steps;
-          index++
-        ) {
-          this.testPosition
-            .copy(
-              this.safePosition
-            )
-            .add(
-              this.step
-            );
-
-          if (
-            !this.isBlocked(
-              this.safePosition,
-              this.testPosition
-            )
-          ) {
-            this.safePosition
-              .copy(
-                this.testPosition
-              );
-
-            continue;
-          }
-
-          if (
-            Math.abs(
-              this.step.x
-            ) >
-            0.0001
-          ) {
-            this.testPosition
-              .copy(
-                this.safePosition
-              );
-
-            this.testPosition.x +=
-              this.step.x;
-
-            if (
-              !this.isBlocked(
-                this.safePosition,
-                this.testPosition
-              )
-            ) {
-              this.safePosition.x =
-                this.testPosition.x;
-            }
-          }
-
-          if (
-            Math.abs(
-              this.step.z
-            ) >
-            0.0001
-          ) {
-            this.testPosition
-              .copy(
-                this.safePosition
-              );
-
-            this.testPosition.z +=
-              this.step.z;
-
-            if (
-              !this.isBlocked(
-                this.safePosition,
-                this.testPosition
-              )
-            ) {
-              this.safePosition.z =
-                this.testPosition.z;
-            }
-          }
-        }
-
-        this.safePosition.y =
-          desired.y;
-
-        return this.safePosition;
-      },
-
-
-    tick: function () {
-      if (
-        this.componentPaused ||
-        roomsEnvironmentPaused()
-      ) {
-        return;
-      }
-
-      const current =
-        this.el.object3D
-          .position;
-
-      this.from.copy(
-        this.lastPosition
-      );
-
-      this.to.copy(
-        current
-      );
-
-      const horizontalDistance =
-        Math.hypot(
-          this.to.x -
-            this.from.x,
-
-          this.to.z -
-            this.from.z
-        );
-
-
-      /* ------------------------------------------------------
-         TELEPORT
-
-         A large rig jump must have a clear physical path.
-      ------------------------------------------------------ */
-
-      if (
-        horizontalDistance >
-        this.data
-          .teleportDistance
-      ) {
-        const teleportAllowed =
-          this.isTeleportPathClear(
-            this.from,
-            this.to
-          );
 
         if (
-          teleportAllowed
+          now -
+            this.lastActivation <
+          250
         ) {
-          this.lastPosition
-            .copy(
-              current
+
+          return false;
+
+        }
+
+
+        const part =
+          this
+            .findPartFromHit(
+              hitObject
             );
 
-          this.el.emit(
-            'rooms-teleport-accepted',
-            {
-              distance:
-                horizontalDistance
-            },
+
+        if (
+          !part
+        ) {
+          return false;
+        }
+
+
+        const state =
+          this
+            .createState(
+              part
+            );
+
+
+        if (
+          !state
+        ) {
+          return false;
+        }
+
+
+        this.lastActivation =
+          now;
+
+
+        return this
+          .startDoorAnimation(
+            state,
+            !state.isOpen,
             false
           );
 
-          return;
+      },
+
+
+    activateDefaultPart:
+      function () {
+
+        if (
+          !this.parts.length
+        ) {
+          return false;
         }
 
-        current.x =
-          this.from.x;
 
-        current.z =
-          this.from.z;
-
-        this.lastPosition
-          .set(
-            current.x,
-            current.y,
-            current.z
+        return this
+          .activatePart(
+            this.parts[0]
           );
 
-        this.el.emit(
-          'rooms-teleport-blocked',
-          {
-            distance:
-              horizontalDistance
-          },
-          false
-        );
-
-        console.log(
-          'Teleport blocked: solid object between player and destination.'
-        );
-
-        return;
-      }
+      },
 
 
-      /* ------------------------------------------------------
-         NO MOVEMENT
-      ------------------------------------------------------ */
-
-      if (
-        horizontalDistance <
-        0.0001
+    onActivateObject:
+      function (
+        event
       ) {
-        this.lastPosition.y =
-          current.y;
 
-        return;
-      }
-
-
-      /* ------------------------------------------------------
-         NORMAL WALKING
-      ------------------------------------------------------ */
-
-      const corrected =
-        this.moveWithSliding(
-          this.from,
-          this.to
-        );
-
-      current.x =
-        corrected.x;
-
-      current.z =
-        corrected.z;
-
-      this.lastPosition
-        .set(
-          corrected.x,
-          current.y,
-          corrected.z
-        );
-    },
-
-
-    pause: function () {
-      this.componentPaused =
-        true;
-    },
-
-
-    play: function () {
-      this.componentPaused =
-        false;
-
-      this.resetPosition();
-    },
-
-
-    remove: function () {
-      this.el.sceneEl
-        .removeEventListener(
-          'loaded',
-          this.refreshColliders
-        );
-
-      this.el.sceneEl
-        .removeEventListener(
-          'enter-vr',
-          this.resetPosition
-        );
-
-      this.el.sceneEl
-        .removeEventListener(
-          'exit-vr',
-          this.resetPosition
-        );
-
-      this.modelListeners
-        .forEach(
-          ({
-            entity,
-            handler
-          }) => {
-            entity
-              .removeEventListener(
-                'model-loaded',
-                handler
-              );
-          }
-        );
-
-      this.modelListeners =
-        [];
-    }
-  }
-);
-
-
-/* ============================================================
-   HEAD BOB
-
-   Desktop:
-   - subtle camera sway while walking.
-
-   Real immersive headset:
-   - no artificial camera bob.
-============================================================ */
-
-AFRAME.registerComponent(
-  'head-bob',
-  {
-    schema: {
-      verticalAmount: {
-        default:
-          0.026
-      },
-
-      sideAmount: {
-        default:
-          0.014
-      },
-
-      speed: {
-        default:
-          8.5
-      },
-
-      vrMultiplier: {
-        default:
-          0.3
-      }
-    },
-
-
-    init: function () {
-      this.baseX =
-        this.el.object3D
-          .position.x;
-
-      this.baseY =
-        this.el.object3D
-          .position.y;
-
-      this.phase =
-        0;
-
-      this.rig =
-        document.querySelector(
-          '#rig'
-        );
-
-      this.previousRigPosition =
-        new THREE.Vector3();
-
-      this.currentRigPosition =
-        new THREE.Vector3();
-
-      this.componentPaused =
-        false;
-
-      if (
-        this.rig
-      ) {
-        this.rig.object3D
-          .getWorldPosition(
-            this.previousRigPosition
-          );
-      }
-    },
-
-
-    resetMovementSample:
-      function () {
         if (
-          !this.rig
+          roomsGameplayInputLocked()
         ) {
           return;
         }
 
-        this.rig.object3D
-          .getWorldPosition(
-            this.previousRigPosition
+
+        const object =
+          event.detail &&
+          event.detail.object
+
+            ? event.detail.object
+
+            : null;
+
+
+        this
+          .activatePart(
+            object
           );
+
+      },
+
+
+    onDesktopClick:
+      function (
+        event
+      ) {
+
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(
+            this.el
+              .sceneEl
+          )
+        ) {
+          return;
+        }
+
+
+        if (
+          event &&
+          event.stopPropagation
+        ) {
+
+          event
+            .stopPropagation();
+
+        }
+
+
+        const object =
+          event &&
+          event.detail &&
+          event.detail
+            .intersection
+
+            ? event.detail
+                .intersection
+                .object
+
+            : null;
+
+
+        this
+          .activatePart(
+            object
+          );
+
       },
 
 
@@ -1853,783 +1013,3189 @@ AFRAME.registerComponent(
         time,
         deltaTime
       ) {
+
         if (
-          !deltaTime ||
-          !this.rig ||
-          this.componentPaused ||
-          roomsEnvironmentPaused()
+          roomsGameplayInputLocked() ||
+          !deltaTime
         ) {
           return;
         }
 
-        this.rig.object3D
-          .getWorldPosition(
-            this.currentRigPosition
+
+        this.partStates
+          .forEach(
+            (state) => {
+
+              if (
+                !state.animating
+              ) {
+                return;
+              }
+
+
+              state.elapsed +=
+                deltaTime;
+
+
+              const progress =
+                Math.min(
+
+                  state.elapsed /
+                    Math.max(
+                      this.data
+                        .duration,
+                      1
+                    ),
+
+                  1
+
+                );
+
+
+              const eased =
+                progress <
+                0.5
+
+                  ? 2 *
+                    progress *
+                    progress
+
+                  : 1 -
+                    Math.pow(
+                      -2 *
+                        progress +
+                        2,
+                      2
+                    ) /
+                    2;
+
+
+              state.currentAngle =
+                THREE
+                  .MathUtils
+                  .lerp(
+
+                    state.startAngle,
+
+                    state.targetAngle,
+
+                    eased
+
+                  );
+
+
+              state.pivot
+                .rotation
+                .y =
+                state.currentAngle;
+
+
+              if (
+                progress >=
+                1
+              ) {
+
+                state.currentAngle =
+                  state.targetAngle;
+
+
+                state.pivot
+                  .rotation
+                  .y =
+                  state.targetAngle;
+
+
+                state.animating =
+                  false;
+
+              }
+
+            }
           );
 
-        const deltaX =
-          this.currentRigPosition.x -
-          this.previousRigPosition.x;
-
-        const deltaZ =
-          this.currentRigPosition.z -
-          this.previousRigPosition.z;
-
-        const distance =
-          Math.sqrt(
-            deltaX *
-              deltaX +
-            deltaZ *
-              deltaZ
-          );
-
-        const isWalking =
-          distance >
-            0.0001 &&
-          distance <
-            0.5;
-
-        const immersiveXR =
-          Boolean(
-            this.el.sceneEl &&
-            this.el.sceneEl
-              .renderer &&
-            this.el.sceneEl
-              .renderer.xr &&
-            this.el.sceneEl
-              .renderer.xr
-              .isPresenting
-          );
-
-        if (
-          immersiveXR
-        ) {
-          this.el.object3D
-            .position.x =
-              THREE.MathUtils
-                .lerp(
-                  this.el
-                    .object3D
-                    .position.x,
-
-                  this.baseX,
-
-                  0.22
-                );
-
-          this.el.object3D
-            .position.y =
-              THREE.MathUtils
-                .lerp(
-                  this.el
-                    .object3D
-                    .position.y,
-
-                  this.baseY,
-
-                  0.22
-                );
-
-          this.previousRigPosition
-            .copy(
-              this.currentRigPosition
-            );
-
-          return;
-        }
-
-        if (
-          isWalking
-        ) {
-          this.phase +=
-            deltaTime *
-            0.001 *
-            this.data.speed;
-
-          const targetX =
-            this.baseX +
-            Math.sin(
-              this.phase
-            ) *
-              this.data
-                .sideAmount;
-
-          const targetY =
-            this.baseY +
-            Math.sin(
-              this.phase * 2
-            ) *
-              this.data
-                .verticalAmount;
-
-          this.el.object3D
-            .position.x =
-              THREE.MathUtils
-                .lerp(
-                  this.el
-                    .object3D
-                    .position.x,
-
-                  targetX,
-
-                  0.32
-                );
-
-          this.el.object3D
-            .position.y =
-              THREE.MathUtils
-                .lerp(
-                  this.el
-                    .object3D
-                    .position.y,
-
-                  targetY,
-
-                  0.32
-                );
-
-        } else {
-          this.el.object3D
-            .position.x =
-              THREE.MathUtils
-                .lerp(
-                  this.el
-                    .object3D
-                    .position.x,
-
-                  this.baseX,
-
-                  0.14
-                );
-
-          this.el.object3D
-            .position.y =
-              THREE.MathUtils
-                .lerp(
-                  this.el
-                    .object3D
-                    .position.y,
-
-                  this.baseY,
-
-                  0.14
-                );
-        }
-
-        this.previousRigPosition
-          .copy(
-            this.currentRigPosition
-          );
       },
 
 
-    pause: function () {
-      this.componentPaused =
-        true;
-    },
+    remove:
+      function () {
+
+        this.el
+          .removeEventListener(
+            'model-loaded',
+            this.onModelLoaded
+          );
 
 
-    play: function () {
-      this.componentPaused =
-        false;
+        this.el
+          .removeEventListener(
+            'activate-object',
+            this.onActivateObject
+          );
 
-      this.resetMovementSample();
-    }
+
+        this.el
+          .removeEventListener(
+            'click',
+            this.onDesktopClick
+          );
+
+      }
+
   }
 );
 
 
+
 /* ============================================================
-   PROXIMITY LIGHT REACTION
+   AUTOMATIC DOOR PROXIMITY
 ============================================================ */
 
 AFRAME.registerComponent(
-  'proximity-light-reaction',
+  'auto-door-proximity',
   {
+
     schema: {
-      enterDistance: {
-        default:
-          1.85
+
+      openDistance: {
+        default: 1.25
       },
 
-      exitDistance: {
-        default:
-          2.35
+
+      closeDistance: {
+        default: 1.75
       },
+
 
       interval: {
-        default:
-          180
+        default: 120
+      }
+
+    },
+
+
+    init:
+      function () {
+
+        this.lastCheck =
+          0;
+
+
+        this.playerPosition =
+          new THREE
+            .Vector3();
+
+
+        this.closestPoint =
+          new THREE
+            .Vector3();
+
+
+        this.closedBoxes =
+          new WeakMap();
+
       },
 
-      cooldown: {
-        default:
-          9000
-      }
-    },
+
+    getPlayerPosition:
+      function () {
+
+        const source =
+          document
+            .querySelector(
+              '#cam'
+            ) ||
+
+          document
+            .querySelector(
+              '#rig'
+            );
 
 
-    init: function () {
-      this.playerWasNear =
-        false;
+        if (
+          !source
+        ) {
+          return null;
+        }
 
-      this.lastCheck =
-        0;
 
-      this.lastReaction =
-        -Infinity;
+        source
+          .object3D
+          .getWorldPosition(
+            this.playerPosition
+          );
 
-      this.playerWorld =
-        new THREE.Vector3();
 
-      this.lightWorld =
-        new THREE.Vector3();
-    },
+        return this.playerPosition;
+
+      },
+
+
+    getClosedWorldBox:
+      function (
+        part
+      ) {
+
+        if (
+          !part
+        ) {
+          return null;
+        }
+
+
+        const cached =
+          this.closedBoxes
+            .get(
+              part
+            );
+
+
+        if (
+          cached
+        ) {
+          return cached;
+        }
+
+
+        part
+          .updateMatrixWorld(
+            true
+          );
+
+
+        const box =
+          new THREE
+            .Box3()
+            .setFromObject(
+              part
+            );
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return null;
+        }
+
+
+        const saved =
+          box.clone();
+
+
+        this.closedBoxes
+          .set(
+            part,
+            saved
+          );
+
+
+        return saved;
+
+      },
+
+
+    getHorizontalDistance:
+      function (
+        part,
+        player
+      ) {
+
+        if (
+          !part ||
+          !player
+        ) {
+          return Infinity;
+        }
+
+
+        const box =
+          this
+            .getClosedWorldBox(
+              part
+            );
+
+
+        if (
+          !box
+        ) {
+          return Infinity;
+        }
+
+
+        this.closestPoint
+          .set(
+
+            THREE
+              .MathUtils
+              .clamp(
+                player.x,
+                box.min.x,
+                box.max.x
+              ),
+
+            player.y,
+
+            THREE
+              .MathUtils
+              .clamp(
+                player.z,
+                box.min.z,
+                box.max.z
+              )
+
+          );
+
+
+        return Math.hypot(
+
+          player.x -
+            this.closestPoint.x,
+
+          player.z -
+            this.closestPoint.z
+
+        );
+
+      },
 
 
     tick:
-      function (time) {
+      function (
+        time
+      ) {
+
         if (
-          roomsEnvironmentPaused() ||
+          roomsGameplayInputLocked() ||
 
           time -
             this.lastCheck <
-            this.data.interval
+          this.data
+            .interval
         ) {
+
           return;
+
         }
+
 
         this.lastCheck =
           time;
 
-        const camera =
-          document.querySelector(
-            '#cam'
-          ) ||
-          document.querySelector(
-            '[camera]'
-          );
+
+        const door =
+          this.el
+            .components[
+              'door-hinge'
+            ];
+
 
         if (
-          !camera
+          !door ||
+          !door.root ||
+          !door.parts.length
+        ) {
+
+          return;
+
+        }
+
+
+        const player =
+          this
+            .getPlayerPosition();
+
+
+        if (
+          !player
         ) {
           return;
         }
 
-        camera.object3D
-          .getWorldPosition(
-            this.playerWorld
-          );
 
-        this.el.object3D
-          .getWorldPosition(
-            this.lightWorld
-          );
+        door.parts
+          .forEach(
+            (part) => {
 
-        const distance =
-          Math.hypot(
-            this.playerWorld.x -
-              this.lightWorld.x,
+              const distance =
+                this
+                  .getHorizontalDistance(
+                    part,
+                    player
+                  );
 
-            this.playerWorld.z -
-              this.lightWorld.z
-          );
 
-        if (
-          distance <=
-            this.data
-              .enterDistance &&
+              if (
+                !Number
+                  .isFinite(
+                    distance
+                  )
+              ) {
 
-          !this.playerWasNear
-        ) {
-          this.playerWasNear =
-            true;
+                return;
 
-          if (
-            time -
-              this.lastReaction >=
-            this.data.cooldown
-          ) {
-            this.lastReaction =
-              time;
+              }
 
-            const flicker =
-              this.el.components
-                .flicker;
 
-            if (
-              flicker &&
-              flicker
-                .triggerReaction
-            ) {
-              flicker
-                .triggerReaction(
-                  'double'
-                );
+              const state =
+                door
+                  .createState(
+                    part
+                  );
+
+
+              if (
+                !state
+              ) {
+                return;
+              }
+
+
+              if (
+                distance <=
+                  this.data
+                    .openDistance &&
+                !state.isOpen
+              ) {
+
+                door
+                  .startDoorAnimation(
+                    state,
+                    true,
+                    true
+                  );
+
+
+                this.el
+                  .emit(
+                    'door-auto-opened',
+                    {
+                      distance
+                    },
+                    false
+                  );
+
+
+                return;
+
+              }
+
+
+              if (
+                distance >=
+                  this.data
+                    .closeDistance &&
+                state.isOpen
+              ) {
+
+                door
+                  .startDoorAnimation(
+                    state,
+                    false,
+                    true
+                  );
+
+
+                this.el
+                  .emit(
+                    'door-auto-closed',
+                    {
+                      distance
+                    },
+                    false
+                  );
+
+              }
+
             }
+          );
 
-            this.el.sceneEl
-              .emit(
-                'light-proximity-reaction',
-
-                {
-                  light:
-                    this.el.id ||
-                    '',
-
-                  distance
-                },
-
-                false
-              );
-          }
-
-          return;
-        }
-
-        if (
-          distance >=
-          this.data
-            .exitDistance
-        ) {
-          this.playerWasNear =
-            false;
-        }
       }
+
   }
 );
 
 
+
 /* ============================================================
-   VR LOCOMOTION MODE
-
-   In real immersive VR:
-   - smooth joystick locomotion stays enabled
-   - left-controller teleport remains active
-
-   The component name remains "vr-comfort-mode" so index.html
-   does not need to change.
+   QUEST DOOR INTERACTION
 ============================================================ */
 
 AFRAME.registerComponent(
-  'vr-comfort-mode',
+  'vr-door-interactor',
   {
-    init: function () {
-      this.rig =
-        null;
 
-      this.savedMovementEnabled =
-        true;
+    schema: {
 
-      this.isComfortActive =
-        false;
-
-      this.onEnterVR =
-        this.onEnterVR
-          .bind(this);
-
-      this.onExitVR =
-        this.onExitVR
-          .bind(this);
-
-      this.el.addEventListener(
-        'enter-vr',
-        this.onEnterVR
-      );
-
-      this.el.addEventListener(
-        'exit-vr',
-        this.onExitVR
-      );
-    },
-
-
-    getRig: function () {
-      if (
-        this.rig &&
-        this.rig.isConnected
-      ) {
-        return this.rig;
-      }
-
-      this.rig =
-        document.querySelector(
-          '#rig'
-        );
-
-      return this.rig;
-    },
-
-
-    onEnterVR:
-      function () {
-        window
-          .requestAnimationFrame(
-            () => {
-              const scene =
-                this.el;
-
-              const immersiveXR =
-                Boolean(
-                  scene &&
-                  scene.renderer &&
-                  scene.renderer.xr &&
-                  scene.renderer.xr
-                    .isPresenting
-                );
-
-              if (
-                !immersiveXR
-              ) {
-                return;
-              }
-
-              const rig =
-                this.getRig();
-
-              if (
-                !rig
-              ) {
-                return;
-              }
-
-              const data =
-                rig.getAttribute(
-                  'movement-controls'
-                ) || {};
-
-              this.savedMovementEnabled =
-                data.enabled !==
-                false;
-
-              /*
-                IMPORTANT:
-                Keep smooth movement ON in Quest VR.
-                Teleport remains available separately
-                on the left trigger.
-              */
-              rig.setAttribute(
-                'movement-controls',
-                'enabled',
-                true
-              );
-
-              this.isComfortActive =
-                true;
-
-              console.log(
-                'VR locomotion: joystick walking ON; left-trigger teleport also available.'
-              );
-
-              scene.emit(
-                'vr-comfort-mode-changed',
-
-                {
-                  enabled:
-                    false,
-
-                  smoothLocomotion:
-                    true,
-
-                  teleport:
-                    true
-                },
-
-                false
-              );
-            }
-          );
+      pressThreshold: {
+        default: 0.65
       },
 
 
-    onExitVR:
+      releaseThreshold: {
+        default: 0.2
+      }
+
+    },
+
+
+    init:
       function () {
-        if (
-          !this.isComfortActive
-        ) {
-          return;
-        }
 
-        const rig =
-          this.getRig();
-
-        if (
-          rig
-        ) {
-          rig.setAttribute(
-            'movement-controls',
-            'enabled',
-            this.savedMovementEnabled
-          );
-        }
-
-        this.isComfortActive =
+        this.triggerHeld =
           false;
 
-        console.log(
-          'VR locomotion: previous desktop movement state restored.'
-        );
 
-        this.el.emit(
-          'vr-comfort-mode-changed',
+        this.pressTrigger =
+          this.pressTrigger
+            .bind(this);
 
-          {
-            enabled:
-              false,
 
-            smoothLocomotion:
-              false,
+        this.releaseTrigger =
+          this.releaseTrigger
+            .bind(this);
 
-            teleport:
-              true
-          },
 
-          false
-        );
+        this.onTriggerChanged =
+          this.onTriggerChanged
+            .bind(this);
+
+
+        this.el
+          .addEventListener(
+            'triggerdown',
+            this.pressTrigger
+          );
+
+
+        this.el
+          .addEventListener(
+            'triggerup',
+            this.releaseTrigger
+          );
+
+
+        this.el
+          .addEventListener(
+            'triggerchanged',
+            this.onTriggerChanged
+          );
+
+
+        this.el
+          .addEventListener(
+            'controllerdisconnected',
+            this.releaseTrigger
+          );
+
       },
 
 
-    remove: function () {
-      this.el
-        .removeEventListener(
-          'enter-vr',
-          this.onEnterVR
-        );
+    pressTrigger:
+      function () {
 
-      this.el
-        .removeEventListener(
-          'exit-vr',
-          this.onExitVR
-        );
+        if (
+          this.triggerHeld ||
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
 
-      this.onExitVR();
-    }
+
+        this.triggerHeld =
+          true;
+
+
+        this.useDoor();
+
+      },
+
+
+    releaseTrigger:
+      function () {
+
+        this.triggerHeld =
+          false;
+
+      },
+
+
+    onTriggerChanged:
+      function (
+        event
+      ) {
+
+        const value =
+          event &&
+          event.detail &&
+          typeof event
+            .detail
+            .value ===
+            'number'
+
+            ? event.detail
+                .value
+
+            : null;
+
+
+        if (
+          value ===
+          null
+        ) {
+          return;
+        }
+
+
+        if (
+          value >=
+            this.data
+              .pressThreshold &&
+          !this.triggerHeld
+        ) {
+
+          this
+            .pressTrigger();
+
+        } else if (
+          value <=
+            this.data
+              .releaseThreshold
+        ) {
+
+          this
+            .releaseTrigger();
+
+        }
+
+      },
+
+
+    useDoor:
+      function () {
+
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
+
+
+        const door =
+          document
+            .querySelector(
+              '#door'
+            );
+
+
+        const raycaster =
+          this.el
+            .components
+            .raycaster;
+
+
+        if (
+          !door ||
+          !raycaster
+        ) {
+          return;
+        }
+
+
+        if (
+          raycaster.refreshObjects
+        ) {
+
+          raycaster
+            .refreshObjects();
+
+        }
+
+
+        const hit =
+          raycaster
+            .getIntersection
+
+            ? raycaster
+                .getIntersection(
+                  door
+                )
+
+            : getClosestRayIntersection(
+                raycaster
+              );
+
+
+        if (
+          !hit ||
+          !objectBelongsToEntity(
+            hit.object,
+            door
+          )
+        ) {
+
+          return;
+
+        }
+
+
+        const component =
+          door
+            .components[
+              'door-hinge'
+            ];
+
+
+        if (
+          !component
+        ) {
+          return;
+        }
+
+
+        if (
+          !component
+            .activatePart(
+              hit.object
+            )
+        ) {
+
+          component
+            .activateDefaultPart();
+
+        }
+
+      },
+
+
+    remove:
+      function () {
+
+        this.el
+          .removeEventListener(
+            'triggerdown',
+            this.pressTrigger
+          );
+
+
+        this.el
+          .removeEventListener(
+            'triggerup',
+            this.releaseTrigger
+          );
+
+
+        this.el
+          .removeEventListener(
+            'triggerchanged',
+            this.onTriggerChanged
+          );
+
+
+        this.el
+          .removeEventListener(
+            'controllerdisconnected',
+            this.releaseTrigger
+          );
+
+      }
+
   }
 );
 
 
+
 /* ============================================================
-   WEBXR 90 HZ REQUEST
+   STANDALONE TV — tv.glb
+
+   #tv is the model and the interaction target.
+   There is no #tvScreenHitbox anymore.
 ============================================================ */
 
 AFRAME.registerComponent(
-  'vr-refresh-rate-manager',
+  'embedded-tv',
   {
-    init: function () {
-      this.onEnterVR =
-        this.onEnterVR
-          .bind(this);
 
-      this.el.addEventListener(
-        'enter-vr',
-        this.onEnterVR
-      );
+    schema: {
+
+      lightColor: {
+        default:
+          '#b9d8e8'
+      },
+
+
+      lightIntensity: {
+        default:
+          0.65
+      },
+
+
+      lightDistance: {
+        default:
+          1.25
+      },
+
+
+      flickerInterval: {
+        default:
+          180
+      },
+
+
+      glowOffset: {
+        default:
+          0.24
+      }
+
     },
 
 
-    onEnterVR:
+    init:
       function () {
-        window.setTimeout(
-          () => {
-            this.requestNinetyHz();
-          },
 
-          120
-        );
-      },
+        this.root =
+          null;
 
 
-    requestNinetyHz:
-      async function () {
-        const scene =
-          this.el;
+        this.isOn =
+          false;
 
-        if (
-          !scene ||
-          !scene.renderer ||
-          !scene.renderer.xr ||
-          !scene.renderer.xr
-            .isPresenting
-        ) {
-          return;
-        }
 
-        const session =
-          scene.renderer.xr
-            .getSession
-            ? scene.renderer.xr
-                .getSession()
-            : null;
+        this.ready =
+          false;
 
-        if (
-          !session
-        ) {
-          return;
-        }
 
-        const supported =
-          session.supportedFrameRates
-            ? Array.from(
-                session
-                  .supportedFrameRates
-              )
-            : [];
+        this.componentPaused =
+          false;
 
-        const supportsNinety =
-          supported.some(
-            (rate) =>
-              Math.abs(
-                Number(
-                  rate
-                ) -
-                90
-              ) <
-              0.5
+
+        this.screenPointWorld =
+          new THREE
+            .Vector3();
+
+
+        this.screenNormalWorld =
+          new THREE
+            .Vector3(
+              0,
+              0,
+              1
+            );
+
+
+        this.glowLight =
+          null;
+
+
+        this.lastFlickerUpdate =
+          0;
+
+
+        this.onModelLoaded =
+          this.onModelLoaded
+            .bind(this);
+
+
+        this.onDesktopClick =
+          this.onDesktopClick
+            .bind(this);
+
+
+        this.el
+          .addEventListener(
+            'model-loaded',
+            this.onModelLoaded
           );
 
+
+        this.el
+          .addEventListener(
+            'click',
+            this.onDesktopClick
+          );
+
+
         if (
-          supportsNinety &&
-          session
-            .updateTargetFrameRate
+          this.el
+            .getObject3D(
+              'mesh'
+            )
         ) {
-          try {
-            await session
-              .updateTargetFrameRate(
-                90
-              );
 
-            console.log(
-              'WebXR refresh-rate target set to 90 Hz.'
-            );
+          this
+            .onModelLoaded();
 
-            scene.emit(
-              'vr-refresh-rate',
-
-              {
-                target:
-                  90,
-
-                supported
-              },
-
-              false
-            );
-
-            return;
-
-          } catch (
-            error
-          ) {
-            console.warn(
-              'WebXR could not switch to 90 Hz:',
-              error
-            );
-          }
         }
 
-        console.log(
-          supported.length
-            ? `90 Hz not available. Headset-supported rates: ${supported.join(', ')}`
-            : 'Browser does not expose selectable WebXR refresh rates; keeping headset default.'
-        );
       },
 
 
-    remove: function () {
-      this.el
-        .removeEventListener(
-          'enter-vr',
-          this.onEnterVR
+    onModelLoaded:
+      function () {
+
+        this.root =
+          this.el
+            .getObject3D(
+              'mesh'
+            );
+
+
+        if (
+          !this.root
+        ) {
+          return;
+        }
+
+
+        this
+          .updateTVWorldPosition();
+
+
+        this
+          .createGlowLight();
+
+
+        this
+          .positionGlowLight();
+
+
+        this.ready =
+          true;
+
+
+        console.log(
+          'Standalone TV ready: tv.glb is the interaction target.'
         );
-    }
+
+      },
+
+
+    updateTVWorldPosition:
+      function () {
+
+        if (
+          !this.root
+        ) {
+          return false;
+        }
+
+
+        this.root
+          .updateMatrixWorld(
+            true
+          );
+
+
+        const box =
+          new THREE
+            .Box3()
+            .setFromObject(
+              this.root
+            );
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return false;
+        }
+
+
+        box.getCenter(
+          this.screenPointWorld
+        );
+
+
+        const worldQuaternion =
+          this.el
+            .object3D
+            .getWorldQuaternion(
+              new THREE
+                .Quaternion()
+            );
+
+
+        this.screenNormalWorld
+          .set(
+            0,
+            0,
+            1
+          )
+          .applyQuaternion(
+            worldQuaternion
+          )
+          .normalize();
+
+
+        const camera =
+          document
+            .querySelector(
+              '#cam'
+            );
+
+
+        if (
+          camera
+        ) {
+
+          const cameraWorld =
+            camera
+              .object3D
+              .getWorldPosition(
+                new THREE
+                  .Vector3()
+              );
+
+
+          const towardPlayer =
+            cameraWorld
+              .clone()
+              .sub(
+                this.screenPointWorld
+              );
+
+
+          towardPlayer.y *=
+            0.25;
+
+
+          if (
+            towardPlayer.lengthSq() >
+            0.0001
+          ) {
+
+            towardPlayer
+              .normalize();
+
+
+            if (
+              this.screenNormalWorld
+                .dot(
+                  towardPlayer
+                ) <
+              0
+            ) {
+
+              this.screenNormalWorld
+                .multiplyScalar(
+                  -1
+                );
+
+            }
+
+          }
+
+        }
+
+
+        if (
+          window
+            .setRoomsTVPosition
+        ) {
+
+          window
+            .setRoomsTVPosition(
+              this.screenPointWorld
+            );
+
+        }
+
+
+        return true;
+
+      },
+
+
+    createGlowLight:
+      function () {
+
+        if (
+          this.glowLight
+        ) {
+          return;
+        }
+
+
+        const light =
+          document
+            .createElement(
+              'a-entity'
+            );
+
+
+        light
+          .setAttribute(
+            'id',
+            'tvGlowLight'
+          );
+
+
+        light
+          .setAttribute(
+
+            'light',
+
+            `
+              type: point;
+              color: ${this.data.lightColor};
+              intensity: 0;
+              distance: ${this.data.lightDistance};
+              decay: 2;
+              castShadow: false
+            `
+
+          );
+
+
+        this.el
+          .sceneEl
+          .appendChild(
+            light
+          );
+
+
+        this.glowLight =
+          light;
+
+      },
+
+
+    positionGlowLight:
+      function () {
+
+        if (
+          !this.glowLight ||
+          !this.root
+        ) {
+          return;
+        }
+
+
+        this
+          .updateTVWorldPosition();
+
+
+        const world =
+          this.screenPointWorld
+            .clone()
+            .addScaledVector(
+              this.screenNormalWorld,
+              this.data
+                .glowOffset
+            );
+
+
+        world.y +=
+          0.02;
+
+
+        this.el
+          .sceneEl
+          .object3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        const local =
+          this.el
+            .sceneEl
+            .object3D
+            .worldToLocal(
+              world.clone()
+            );
+
+
+        this.glowLight
+          .object3D
+          .position
+          .copy(
+            local
+          );
+
+      },
+
+
+    setState:
+      function (
+        on
+      ) {
+
+        if (
+          !this.ready
+        ) {
+          return false;
+        }
+
+
+        this.isOn =
+          Boolean(
+            on
+          );
+
+
+        this
+          .positionGlowLight();
+
+
+        if (
+          this.glowLight
+        ) {
+
+          this.glowLight
+            .setAttribute(
+
+              'light',
+
+              'intensity',
+
+              this.isOn
+                ? this.data
+                    .lightIntensity
+                : 0
+
+            );
+
+        }
+
+
+        if (
+          window
+            .setRoomsTVState
+        ) {
+
+          window
+            .setRoomsTVState(
+              this.isOn
+            );
+
+        }
+
+
+        const detail = {
+
+          isOn:
+            this.isOn
+
+        };
+
+
+        /*
+          New TV event location.
+        */
+
+        this.el
+          .emit(
+
+            'tv-state-changed',
+
+            detail,
+
+            false
+
+          );
+
+
+        /*
+          Compatibility with older story.js versions
+          that may still listen on #living.
+        */
+
+        const living =
+          document
+            .querySelector(
+              '#living'
+            );
+
+
+        if (
+          living &&
+          living !==
+            this.el
+        ) {
+
+          living
+            .emit(
+
+              'tv-state-changed',
+
+              detail,
+
+              false
+
+            );
+
+        }
+
+
+        console.log(
+
+          this.isOn
+
+            ? 'TV ON'
+
+            : 'TV OFF'
+
+        );
+
+
+        return true;
+
+      },
+
+
+    toggle:
+      function () {
+
+        return this
+          .setState(
+            !this.isOn
+          );
+
+      },
+
+
+    toggleFromIntersection:
+      function (
+        intersection
+      ) {
+
+        if (
+          roomsGameplayInputLocked() ||
+          !this.ready
+        ) {
+          return false;
+        }
+
+
+        if (
+          !intersection ||
+          !intersection.object ||
+          !objectBelongsToEntity(
+            intersection.object,
+            this.el
+          )
+        ) {
+
+          return false;
+
+        }
+
+
+        return this
+          .toggle();
+
+      },
+
+
+    onDesktopClick:
+      function (
+        event
+      ) {
+
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(
+            this.el
+              .sceneEl
+          )
+        ) {
+
+          return;
+
+        }
+
+
+        const intersection =
+          event &&
+          event.detail &&
+          event.detail
+            .intersection
+
+            ? event.detail
+                .intersection
+
+            : null;
+
+
+        if (
+          !intersection ||
+          !objectBelongsToEntity(
+            intersection.object,
+            this.el
+          )
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+          event.stopPropagation
+        ) {
+
+          event
+            .stopPropagation();
+
+        }
+
+
+        this
+          .toggleFromIntersection(
+            intersection
+          );
+
+      },
+
+
+    tick:
+      function (
+        time
+      ) {
+
+        if (
+          this.componentPaused ||
+          roomsGameplayInputLocked() ||
+          !this.isOn ||
+          !this.glowLight
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+          time -
+            this.lastFlickerUpdate <
+          this.data
+            .flickerInterval
+        ) {
+
+          return;
+
+        }
+
+
+        this.lastFlickerUpdate =
+          time;
+
+
+        const brightness =
+          0.88 +
+          Math.random() *
+            0.12;
+
+
+        this.glowLight
+          .setAttribute(
+
+            'light',
+
+            'intensity',
+
+            this.data
+              .lightIntensity *
+              brightness
+
+          );
+
+      },
+
+
+    pause:
+      function () {
+
+        this.componentPaused =
+          true;
+
+      },
+
+
+    play:
+      function () {
+
+        this.componentPaused =
+          false;
+
+
+        if (
+          this.root
+        ) {
+
+          this
+            .positionGlowLight();
+
+        }
+
+      },
+
+
+    remove:
+      function () {
+
+        this.el
+          .removeEventListener(
+            'model-loaded',
+            this.onModelLoaded
+          );
+
+
+        this.el
+          .removeEventListener(
+            'click',
+            this.onDesktopClick
+          );
+
+
+        if (
+          this.glowLight &&
+          this.glowLight
+            .parentNode
+        ) {
+
+          this.glowLight
+            .parentNode
+            .removeChild(
+              this.glowLight
+            );
+
+        }
+
+
+        this.glowLight =
+          null;
+
+
+        this.root =
+          null;
+
+
+        this.ready =
+          false;
+
+      }
+
   }
 );
 
 
+
 /* ============================================================
-   DEBUG
+   QUEST TV INTERACTION
 ============================================================ */
 
-function getRoomsEnvironmentDebug() {
-  const scene =
-    document.querySelector(
-      'a-scene'
-    );
+AFRAME.registerComponent(
+  'vr-tv-interactor',
+  {
 
-  const rig =
-    document.querySelector(
-      '#rig'
-    );
+    schema: {
 
-  const collider =
-    rig &&
-    rig.components
-      ? rig.components[
-          'quest-room-collider'
+      pressThreshold: {
+        default:
+          0.65
+      },
+
+
+      releaseThreshold: {
+        default:
+          0.2
+      }
+
+    },
+
+
+    init:
+      function () {
+
+        this.triggerHeld =
+          false;
+
+
+        this.pressTrigger =
+          this.pressTrigger
+            .bind(this);
+
+
+        this.releaseTrigger =
+          this.releaseTrigger
+            .bind(this);
+
+
+        this.onTriggerChanged =
+          this.onTriggerChanged
+            .bind(this);
+
+
+        this.el
+          .addEventListener(
+            'triggerdown',
+            this.pressTrigger
+          );
+
+
+        this.el
+          .addEventListener(
+            'triggerup',
+            this.releaseTrigger
+          );
+
+
+        this.el
+          .addEventListener(
+            'triggerchanged',
+            this.onTriggerChanged
+          );
+
+
+        this.el
+          .addEventListener(
+            'controllerdisconnected',
+            this.releaseTrigger
+          );
+
+      },
+
+
+    pressTrigger:
+      function () {
+
+        if (
+          this.triggerHeld ||
+          roomsGameplayInputLocked()
+        ) {
+
+          return;
+
+        }
+
+
+        this.triggerHeld =
+          true;
+
+
+        this
+          .useTV();
+
+      },
+
+
+    releaseTrigger:
+      function () {
+
+        this.triggerHeld =
+          false;
+
+      },
+
+
+    onTriggerChanged:
+      function (
+        event
+      ) {
+
+        const value =
+          event &&
+          event.detail &&
+          typeof event
+            .detail
+            .value ===
+            'number'
+
+            ? event.detail
+                .value
+
+            : null;
+
+
+        if (
+          value ===
+          null
+        ) {
+          return;
+        }
+
+
+        if (
+          value >=
+            this.data
+              .pressThreshold &&
+          !this.triggerHeld
+        ) {
+
+          this
+            .pressTrigger();
+
+        } else if (
+          value <=
+            this.data
+              .releaseThreshold
+        ) {
+
+          this
+            .releaseTrigger();
+
+        }
+
+      },
+
+
+    useTV:
+      function () {
+
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return false;
+        }
+
+
+        const tv =
+          document
+            .querySelector(
+              '#tv'
+            );
+
+
+        const raycaster =
+          this.el
+            .components
+            .raycaster;
+
+
+        if (
+          !tv ||
+          !raycaster
+        ) {
+
+          return false;
+
+        }
+
+
+        const component =
+          tv.components[
+            'embedded-tv'
+          ];
+
+
+        if (
+          !component ||
+          !component.ready
+        ) {
+
+          return false;
+
+        }
+
+
+        if (
+          raycaster.refreshObjects
+        ) {
+
+          raycaster
+            .refreshObjects();
+
+        }
+
+
+        const hit =
+          raycaster
+            .getIntersection
+
+            ? raycaster
+                .getIntersection(
+                  tv
+                )
+
+            : getClosestRayIntersection(
+                raycaster
+              );
+
+
+        if (
+          !hit ||
+          !objectBelongsToEntity(
+            hit.object,
+            tv
+          )
+        ) {
+
+          return false;
+
+        }
+
+
+        return component
+          .toggleFromIntersection(
+            hit
+          );
+
+      },
+
+
+    remove:
+      function () {
+
+        this.el
+          .removeEventListener(
+            'triggerdown',
+            this.pressTrigger
+          );
+
+
+        this.el
+          .removeEventListener(
+            'triggerup',
+            this.releaseTrigger
+          );
+
+
+        this.el
+          .removeEventListener(
+            'triggerchanged',
+            this.onTriggerChanged
+          );
+
+
+        this.el
+          .removeEventListener(
+            'controllerdisconnected',
+            this.releaseTrigger
+          );
+
+      }
+
+  }
+);
+
+
+
+/* ============================================================
+   NATURAL GRABBABLE
+============================================================ */
+
+AFRAME.registerComponent(
+  'natural-grabbable',
+  {
+
+    schema: {
+
+      gravity: {
+        default:
+          -9.8
+      },
+
+
+      floorY: {
+        default:
+          0.015
+      },
+
+
+      throwMultiplier: {
+        default:
+          1
+      },
+
+
+      maxThrowSpeed: {
+        default:
+          6
+      }
+
+    },
+
+
+    init:
+      function () {
+
+        this.heldBy =
+          null;
+
+
+        this.velocity =
+          new THREE
+            .Vector3();
+
+
+        this.isMoving =
+          false;
+
+
+        this.lastSurfaceCheck =
+          0;
+
+
+        this.dropRay =
+          new THREE
+            .Raycaster();
+
+
+        this.cachedRoomMeshes =
+          [];
+
+
+        this.roomMeshCacheTime =
+          0;
+
+
+        this.onDesktopClick =
+          this.onDesktopClick
+            .bind(this);
+
+
+        this.el
+          .addEventListener(
+            'click',
+            this.onDesktopClick
+          );
+
+      },
+
+
+    onDesktopClick:
+      function () {
+
+        if (
+          roomsGameplayInputLocked() ||
+          isImmersiveXRScene(
+            this.el
+              .sceneEl
+          )
+        ) {
+
+          return;
+
+        }
+
+
+        const hold =
+          document
+            .querySelector(
+              '#desktopHold'
+            );
+
+
+        if (
+          !hold
+        ) {
+          return;
+        }
+
+
+        if (
+          this.heldBy
+        ) {
+
+          this
+            .release(
+              new THREE
+                .Vector3()
+            );
+
+        } else {
+
+          this
+            .grab(
+              hold
+            );
+
+        }
+
+      },
+
+
+    getWorldBox:
+      function () {
+
+        const object =
+          this.el
+            .getObject3D(
+              'mesh'
+            ) ||
+          this.el
+            .object3D;
+
+
+        object
+          .updateMatrixWorld(
+            true
+          );
+
+
+        return new THREE
+          .Box3()
+          .setFromObject(
+            object
+          );
+
+      },
+
+
+    distanceToPoint:
+      function (
+        point
+      ) {
+
+        const box =
+          this
+            .getWorldBox();
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return Infinity;
+        }
+
+
+        const closest =
+          point
+            .clone()
+            .clamp(
+              box.min,
+              box.max
+            );
+
+
+        return closest
+          .distanceTo(
+            point
+          );
+
+      },
+
+
+    reparentPreserveWorld:
+      function (
+        parentObject3D
+      ) {
+
+        parentObject3D
+          .updateMatrixWorld(
+            true
+          );
+
+
+        parentObject3D
+          .attach(
+            this.el
+              .object3D
+          );
+
+      },
+
+
+    grab:
+      function (
+        handEntity
+      ) {
+
+        if (
+          roomsGameplayInputLocked() ||
+          this.heldBy ||
+          !handEntity
+        ) {
+
+          return false;
+
+        }
+
+
+        this.isMoving =
+          false;
+
+
+        this.velocity
+          .set(
+            0,
+            0,
+            0
+          );
+
+
+        this.heldBy =
+          handEntity;
+
+
+        this
+          .reparentPreserveWorld(
+            handEntity
+              .object3D
+          );
+
+
+        this.el
+          .addState(
+            'grabbed'
+          );
+
+
+        return true;
+
+      },
+
+
+    release:
+      function (
+        velocity
+      ) {
+
+        if (
+          !this.heldBy
+        ) {
+          return;
+        }
+
+
+        const scene =
+          this.el
+            .sceneEl;
+
+
+        this
+          .reparentPreserveWorld(
+            scene.object3D
+          );
+
+
+        this.heldBy =
+          null;
+
+
+        this.el
+          .removeState(
+            'grabbed'
+          );
+
+
+        this.velocity
+          .copy(
+
+            velocity ||
+
+            new THREE
+              .Vector3()
+
+          );
+
+
+        this.velocity
+          .multiplyScalar(
+            this.data
+              .throwMultiplier
+          );
+
+
+        this.velocity
+          .clampLength(
+            0,
+            this.data
+              .maxThrowSpeed
+          );
+
+
+        if (
+          this.velocity
+            .length() <
+          0.22
+        ) {
+
+          this.isMoving =
+            !this
+              .settleOnSurface(
+                0.45
+              );
+
+        } else {
+
+          this.isMoving =
+            true;
+
+        }
+
+      },
+
+
+    getRoomMeshes:
+      function () {
+
+        const now =
+          performance.now();
+
+
+        if (
+          this.cachedRoomMeshes.length &&
+          now -
+            this.roomMeshCacheTime <
+          5000
+        ) {
+
+          return this
+            .cachedRoomMeshes;
+
+        }
+
+
+        const meshes =
+          [];
+
+
+        this.el
+          .sceneEl
+          .querySelectorAll(
+            '.roompart'
+          )
+          .forEach(
+            (entity) => {
+
+              const root =
+                entity
+                  .getObject3D(
+                    'mesh'
+                  );
+
+
+              if (
+                !root
+              ) {
+                return;
+              }
+
+
+              root
+                .traverse(
+                  (node) => {
+
+                    if (
+                      node.isMesh
+                    ) {
+
+                      meshes.push(
+                        node
+                      );
+
+                    }
+
+                  }
+                );
+
+            }
+          );
+
+
+        this.cachedRoomMeshes =
+          meshes;
+
+
+        this.roomMeshCacheTime =
+          now;
+
+
+        return meshes;
+
+      },
+
+
+    settleOnSurface:
+      function (
+        maxDistance
+      ) {
+
+        const meshes =
+          this
+            .getRoomMeshes();
+
+
+        if (
+          !meshes.length
+        ) {
+          return false;
+        }
+
+
+        const box =
+          this
+            .getWorldBox();
+
+
+        if (
+          box.isEmpty()
+        ) {
+          return false;
+        }
+
+
+        const center =
+          box
+            .getCenter(
+              new THREE
+                .Vector3()
+            );
+
+
+        const origin =
+          new THREE
+            .Vector3(
+
+              center.x,
+
+              box.min.y +
+                0.08,
+
+              center.z
+
+            );
+
+
+        this.dropRay
+          .set(
+
+            origin,
+
+            new THREE
+              .Vector3(
+                0,
+                -1,
+                0
+              )
+
+          );
+
+
+        this.dropRay
+          .far =
+          maxDistance +
+          0.08;
+
+
+        const hits =
+          this.dropRay
+            .intersectObjects(
+              meshes,
+              true
+            );
+
+
+        const hit =
+          hits
+            .find(
+              (candidate) =>
+                !objectBelongsToEntity(
+                  candidate.object,
+                  this.el
+                )
+            );
+
+
+        if (
+          !hit
+        ) {
+          return false;
+        }
+
+
+        const gap =
+          box.min.y -
+          hit.point.y;
+
+
+        if (
+          gap <
+            -0.03 ||
+          gap >
+            maxDistance
+        ) {
+
+          return false;
+
+        }
+
+
+        this.el
+          .object3D
+          .position
+          .y +=
+
+          hit.point.y -
+          box.min.y +
+          0.012;
+
+
+        this.velocity
+          .set(
+            0,
+            0,
+            0
+          );
+
+
+        return true;
+
+      },
+
+
+    tick:
+      function (
+        time,
+        deltaTime
+      ) {
+
+        if (
+          roomsGameplayInputLocked() ||
+          this.heldBy ||
+          !this.isMoving ||
+          !deltaTime
+        ) {
+
+          return;
+
+        }
+
+
+        const dt =
+          Math.min(
+
+            deltaTime /
+              1000,
+
+            0.04
+
+          );
+
+
+        this.velocity.y +=
+          this.data
+            .gravity *
+          dt;
+
+
+        this.el
+          .object3D
+          .position
+          .addScaledVector(
+            this.velocity,
+            dt
+          );
+
+
+        const damping =
+          Math.pow(
+            0.985,
+            dt *
+              60
+          );
+
+
+        this.velocity.x *=
+          damping;
+
+
+        this.velocity.z *=
+          damping;
+
+
+        const box =
+          this
+            .getWorldBox();
+
+
+        if (
+          !box.isEmpty()
+        ) {
+
+          const penetration =
+            this.data.floorY -
+            box.min.y;
+
+
+          if (
+            penetration >
+            0
+          ) {
+
+            this.el
+              .object3D
+              .position
+              .y +=
+              penetration;
+
+
+            if (
+              Math.abs(
+                this.velocity.y
+              ) >
+              0.8
+            ) {
+
+              this.velocity.y *=
+                -0.12;
+
+
+              this.velocity.x *=
+                0.72;
+
+
+              this.velocity.z *=
+                0.72;
+
+            } else {
+
+              this.velocity
+                .set(
+                  0,
+                  0,
+                  0
+                );
+
+
+              this.isMoving =
+                false;
+
+            }
+
+          }
+
+        }
+
+
+        if (
+          this.isMoving &&
+          this.velocity.y <=
+            0 &&
+          time -
+            this.lastSurfaceCheck >
+            130
+        ) {
+
+          this.lastSurfaceCheck =
+            time;
+
+
+          if (
+            this
+              .settleOnSurface(
+                0.12
+              )
+          ) {
+
+            this.isMoving =
+              false;
+
+          }
+
+        }
+
+      },
+
+
+    remove:
+      function () {
+
+        this.el
+          .removeEventListener(
+            'click',
+            this.onDesktopClick
+          );
+
+      }
+
+  }
+);
+
+
+
+/* ============================================================
+   QUEST NATURAL GRAB HAND
+============================================================ */
+
+AFRAME.registerComponent(
+  'natural-grab-hand',
+  {
+
+    schema: {
+
+      radius: {
+        default:
+          0.4
+      },
+
+
+      velocitySmoothing: {
+        default:
+          0.35
+      },
+
+
+      gripThreshold: {
+        default:
+          0.5
+      }
+
+    },
+
+
+    init:
+      function () {
+
+        this.heldItem =
+          null;
+
+
+        this.gripHeld =
+          false;
+
+
+        this.previousPosition =
+          new THREE
+            .Vector3();
+
+
+        this.currentPosition =
+          new THREE
+            .Vector3();
+
+
+        this.instantVelocity =
+          new THREE
+            .Vector3();
+
+
+        this.smoothedVelocity =
+          new THREE
+            .Vector3();
+
+
+        this.hasPreviousPosition =
+          false;
+
+
+        this.beginGrip =
+          this.beginGrip
+            .bind(this);
+
+
+        this.endGrip =
+          this.endGrip
+            .bind(this);
+
+
+        this.onGripChanged =
+          this.onGripChanged
+            .bind(this);
+
+
+        [
+          'gripdown',
+          'squeezestart',
+          'abuttondown',
+          'xbuttondown'
         ]
-      : null;
+          .forEach(
+            (name) => {
 
-  return {
-    paused:
-      roomsEnvironmentPaused(),
+              this.el
+                .addEventListener(
+                  name,
+                  this.beginGrip
+                );
 
-    immersiveXR:
-      Boolean(
-        scene &&
-        scene.renderer &&
-        scene.renderer.xr &&
-        scene.renderer.xr
-          .isPresenting
-      ),
+            }
+          );
 
-    collisionReady:
-      Boolean(
-        collider
-      ),
 
-    collisionMeshCount:
-      collider
-        ? collider
-            .colliderMeshes
-            .length
-        : 0,
+        [
+          'gripup',
+          'squeezeend',
+          'abuttonup',
+          'xbuttonup',
+          'controllerdisconnected'
+        ]
+          .forEach(
+            (name) => {
 
-    teleportDistance:
-      collider
-        ? collider
-            .data
-            .teleportDistance
-        : null,
+              this.el
+                .addEventListener(
+                  name,
+                  this.endGrip
+                );
 
-    teleportCheckStep:
-      collider
-        ? collider
-            .data
-            .teleportCheckStep
-        : null,
+            }
+          );
 
-    flickerLightCount:
-      document
-        .querySelectorAll(
-          '[flicker]'
-        )
-        .length
-  };
-}
 
-window.getRoomsEnvironmentDebug =
-  getRoomsEnvironmentDebug;
+        this.el
+          .addEventListener(
+            'gripchanged',
+            this.onGripChanged
+          );
+
+      },
+
+
+    onGripChanged:
+      function (
+        event
+      ) {
+
+        const value =
+          event &&
+          event.detail &&
+          typeof event
+            .detail
+            .value ===
+            'number'
+
+            ? event.detail
+                .value
+
+            : null;
+
+
+        if (
+          value ===
+          null
+        ) {
+          return;
+        }
+
+
+        if (
+          value >=
+          this.data
+            .gripThreshold
+        ) {
+
+          this
+            .beginGrip();
+
+        } else if (
+          value <=
+          0.2
+        ) {
+
+          this
+            .endGrip();
+
+        }
+
+      },
+
+
+    beginGrip:
+      function () {
+
+        if (
+          roomsGameplayInputLocked() ||
+          this.gripHeld
+        ) {
+
+          return;
+
+        }
+
+
+        this.gripHeld =
+          true;
+
+
+        this
+          .grabNearest();
+
+      },
+
+
+    endGrip:
+      function () {
+
+        if (
+          !this.gripHeld &&
+          !this.heldItem
+        ) {
+
+          return;
+
+        }
+
+
+        this.gripHeld =
+          false;
+
+
+        this
+          .releaseHeld();
+
+      },
+
+
+    findNearest:
+      function () {
+
+        const handPosition =
+          new THREE
+            .Vector3();
+
+
+        this.el
+          .object3D
+          .getWorldPosition(
+            handPosition
+          );
+
+
+        let nearest =
+          null;
+
+
+        let nearestDistance =
+          Infinity;
+
+
+        this.el
+          .sceneEl
+          .querySelectorAll(
+            '[natural-grabbable]'
+          )
+          .forEach(
+            (entity) => {
+
+              const component =
+                entity
+                  .components[
+                    'natural-grabbable'
+                  ];
+
+
+              if (
+                !component ||
+                component.heldBy
+              ) {
+                return;
+              }
+
+
+              const distance =
+                component
+                  .distanceToPoint(
+                    handPosition
+                  );
+
+
+              if (
+                distance <
+                nearestDistance
+              ) {
+
+                nearest =
+                  component;
+
+
+                nearestDistance =
+                  distance;
+
+              }
+
+            }
+          );
+
+
+        return {
+
+          nearest,
+
+          nearestDistance
+
+        };
+
+      },
+
+
+    grabNearest:
+      function () {
+
+        if (
+          roomsGameplayInputLocked() ||
+          this.heldItem
+        ) {
+
+          return;
+
+        }
+
+
+        const result =
+          this
+            .findNearest();
+
+
+        if (
+          !result.nearest ||
+          result.nearestDistance >
+            this.data.radius
+        ) {
+
+          return;
+
+        }
+
+
+        if (
+          result.nearest
+            .grab(
+              this.el
+            )
+        ) {
+
+          this.heldItem =
+            result.nearest;
+
+        }
+
+      },
+
+
+    releaseHeld:
+      function () {
+
+        if (
+          !this.heldItem
+        ) {
+          return;
+        }
+
+
+        const item =
+          this.heldItem;
+
+
+        this.heldItem =
+          null;
+
+
+        item.release(
+
+          roomsGameplayInputLocked()
+
+            ? new THREE
+                .Vector3()
+
+            : this.smoothedVelocity
+                .clone()
+
+        );
+
+      },
+
+
+    tick:
+      function (
+        time,
+        deltaTime
+      ) {
+
+        if (
+          !deltaTime
+        ) {
+          return;
+        }
+
+
+        this.el
+          .object3D
+          .getWorldPosition(
+            this.currentPosition
+          );
+
+
+        if (
+          !this.hasPreviousPosition
+        ) {
+
+          this.previousPosition
+            .copy(
+              this.currentPosition
+            );
+
+
+          this.hasPreviousPosition =
+            true;
+
+
+          return;
+
+        }
+
+
+        const seconds =
+          deltaTime /
+          1000;
+
+
+        if (
+          seconds >
+          0
+        ) {
+
+          this.instantVelocity
+            .subVectors(
+
+              this.currentPosition,
+
+              this.previousPosition
+
+            )
+            .divideScalar(
+              seconds
+            );
+
+
+          this.smoothedVelocity
+            .lerp(
+
+              this.instantVelocity,
+
+              this.data
+                .velocitySmoothing
+
+            );
+
+
+          this.previousPosition
+            .copy(
+              this.currentPosition
+            );
+
+        }
+
+      },
+
+
+    remove:
+      function () {
+
+        [
+          'gripdown',
+          'squeezestart',
+          'abuttondown',
+          'xbuttondown'
+        ]
+          .forEach(
+            (name) => {
+
+              this.el
+                .removeEventListener(
+                  name,
+                  this.beginGrip
+                );
+
+            }
+          );
+
+
+        [
+          'gripup',
+          'squeezeend',
+          'abuttonup',
+          'xbuttonup',
+          'controllerdisconnected'
+        ]
+          .forEach(
+            (name) => {
+
+              this.el
+                .removeEventListener(
+                  name,
+                  this.endGrip
+                );
+
+            }
+          );
+
+
+        this.el
+          .removeEventListener(
+            'gripchanged',
+            this.onGripChanged
+          );
+
+
+        if (
+          this.heldItem
+        ) {
+
+          const item =
+            this.heldItem;
+
+
+          this.heldItem =
+            null;
+
+
+          this.gripHeld =
+            false;
+
+
+          item.release(
+            new THREE
+              .Vector3()
+          );
+
+        }
+
+      }
+
+  }
+);
+
 
 
 /* ============================================================
-   AUTOMATIC ENVIRONMENT SETUP
+   AUTOMATIC SETUP
 ============================================================ */
 
-function setupRoomsEnvironmentEnhancements() {
+function setupRoomsInteractions() {
+
   const scene =
-    document.querySelector(
-      'a-scene'
-    );
+    document
+      .querySelector(
+        'a-scene'
+      );
+
+
+  const door =
+    document
+      .querySelector(
+        '#door'
+      );
+
+
+  const living =
+    document
+      .querySelector(
+        '#living'
+      );
+
+
+  const tv =
+    document
+      .querySelector(
+        '#tv'
+      );
+
+
+  const cursor =
+    document
+      .querySelector(
+        'a-cursor'
+      );
+
+
+  const rightHand =
+    document
+      .querySelector(
+        '#rightHand'
+      );
+
 
   if (
     !scene
@@ -2637,60 +4203,475 @@ function setupRoomsEnvironmentEnhancements() {
     return;
   }
 
-  if (
-    !scene.hasAttribute(
-      'vr-comfort-mode'
-    )
-  ) {
-    scene.setAttribute(
-      'vr-comfort-mode',
-      ''
-    );
-  }
+
+  /* ----------------------------------------------------------
+     AUTOMATIC DOOR
+  ---------------------------------------------------------- */
 
   if (
-    !scene.hasAttribute(
-      'vr-refresh-rate-manager'
-    )
+    door &&
+    !door
+      .hasAttribute(
+        'auto-door-proximity'
+      )
   ) {
-    scene.setAttribute(
-      'vr-refresh-rate-manager',
-      ''
-    );
+
+    door
+      .setAttribute(
+
+        'auto-door-proximity',
+
+        `
+          openDistance: 1.25;
+          closeDistance: 1.75;
+          interval: 120
+        `
+
+      );
+
   }
 
-  scene
-    .querySelectorAll(
-      '[flicker]'
-    )
-    .forEach(
-      (light) => {
-        if (
-          !light.hasAttribute(
-            'proximity-light-reaction'
-          )
-        ) {
-          light.setAttribute(
-            'proximity-light-reaction',
-            ''
-          );
-        }
-      }
+
+  /* ----------------------------------------------------------
+     LIVING ROOM IS NOT THE TV ANYMORE
+  ---------------------------------------------------------- */
+
+  if (
+    living
+  ) {
+
+    living
+      .classList
+      .remove(
+        'tv-interactable'
+      );
+
+
+    if (
+      living
+        .hasAttribute(
+          'embedded-tv'
+        )
+    ) {
+
+      living
+        .removeAttribute(
+          'embedded-tv'
+        );
+
+    }
+
+  }
+
+
+  /* ----------------------------------------------------------
+     STANDALONE tv.glb
+  ---------------------------------------------------------- */
+
+  if (
+    tv
+  ) {
+
+    tv
+      .classList
+      .add(
+        'tv-interactable'
+      );
+
+
+    if (
+      !tv
+        .hasAttribute(
+          'embedded-tv'
+        )
+    ) {
+
+      tv
+        .setAttribute(
+          'embedded-tv',
+          ''
+        );
+
+    }
+
+
+    appendRaycasterObjectSelector(
+      cursor,
+      '#tv'
     );
+
+
+    appendRaycasterObjectSelector(
+      rightHand,
+      '#tv'
+    );
+
+  } else {
+
+    console.warn(
+      'TV interaction: #tv was not found. Make sure index.html loads tv.glb with id="tv".'
+    );
+
+  }
+
+
+  if (
+    rightHand &&
+    !rightHand
+      .hasAttribute(
+        'vr-tv-interactor'
+      )
+  ) {
+
+    rightHand
+      .setAttribute(
+        'vr-tv-interactor',
+        ''
+      );
+
+  }
+
 
   console.log(
-    'Environment enhancements ready: wall-safe teleport + collision + comfort mode + light reactions + 90 Hz request.'
+    'Rooms interactions ready: automatic door + standalone tv.glb + grabbing.'
   );
+
 }
 
 
-window.addEventListener(
-  'DOMContentLoaded',
-  () => {
-    const scene =
-      document.querySelector(
+
+/* ============================================================
+   INTERACTION DEBUG
+
+   Browser console:
+
+   getRoomsInteractionDebug()
+============================================================ */
+
+function getRoomsInteractionDebug() {
+
+  const scene =
+    document
+      .querySelector(
         'a-scene'
       );
+
+
+  const door =
+    document
+      .querySelector(
+        '#door'
+      );
+
+
+  const tvEntity =
+    document
+      .querySelector(
+        '#tv'
+      );
+
+
+  const doorComponent =
+    door &&
+    door.components
+
+      ? door.components[
+          'door-hinge'
+        ]
+
+      : null;
+
+
+  const autoDoor =
+    door &&
+    door.components
+
+      ? door.components[
+          'auto-door-proximity'
+        ]
+
+      : null;
+
+
+  const tv =
+    tvEntity &&
+    tvEntity.components
+
+      ? tvEntity.components[
+          'embedded-tv'
+        ]
+
+      : null;
+
+
+  const doorStates =
+    [];
+
+
+  if (
+    doorComponent
+  ) {
+
+    doorComponent
+      .partStates
+      .forEach(
+        (state) => {
+
+          doorStates.push({
+
+            isOpen:
+              Boolean(
+                state.isOpen
+              ),
+
+
+            animating:
+              Boolean(
+                state.animating
+              ),
+
+
+            angleDegrees:
+              Number(
+
+                THREE
+                  .MathUtils
+                  .radToDeg(
+                    state.currentAngle
+                  )
+                  .toFixed(
+                    1
+                  )
+
+              )
+
+          });
+
+        }
+      );
+
+  }
+
+
+  return {
+
+    immersiveXR:
+      isImmersiveXRScene(
+        scene
+      ),
+
+
+    inputLocked:
+      roomsGameplayInputLocked(),
+
+
+    automaticDoorReady:
+      Boolean(
+        autoDoor
+      ),
+
+
+    doorParts:
+      doorComponent
+
+        ? doorComponent
+            .parts
+            .length
+
+        : 0,
+
+
+    doorStates,
+
+
+    standaloneTVFound:
+      Boolean(
+        tvEntity
+      ),
+
+
+    tvReady:
+      Boolean(
+        tv &&
+        tv.ready
+      ),
+
+
+    tvOn:
+      Boolean(
+        tv &&
+        tv.isOn
+      ),
+
+
+    tvWorldPosition:
+      tv &&
+      tv.ready
+
+        ? {
+
+            x:
+              Number(
+                tv.screenPointWorld.x
+                  .toFixed(
+                    3
+                  )
+              ),
+
+
+            y:
+              Number(
+                tv.screenPointWorld.y
+                  .toFixed(
+                    3
+                  )
+              ),
+
+
+            z:
+              Number(
+                tv.screenPointWorld.z
+                  .toFixed(
+                    3
+                  )
+              )
+
+          }
+
+        : null,
+
+
+    grabbableCount:
+      document
+        .querySelectorAll(
+          '[natural-grabbable]'
+        )
+        .length
+
+  };
+
+}
+
+
+window.getRoomsInteractionDebug =
+  getRoomsInteractionDebug;
+
+
+
+/* ============================================================
+   TV DEBUG
+
+   Browser console:
+
+   getRoomsTVDebug()
+============================================================ */
+
+function getRoomsTVDebug() {
+
+  const tvEntity =
+    document
+      .querySelector(
+        '#tv'
+      );
+
+
+  const component =
+    tvEntity &&
+    tvEntity.components
+
+      ? tvEntity.components[
+          'embedded-tv'
+        ]
+
+      : null;
+
+
+  return {
+
+    tvFound:
+      Boolean(
+        tvEntity
+      ),
+
+
+    modelLoaded:
+      Boolean(
+        component &&
+        component.root
+      ),
+
+
+    componentReady:
+      Boolean(
+        component &&
+        component.ready
+      ),
+
+
+    tvOn:
+      Boolean(
+        component &&
+        component.isOn
+      ),
+
+
+    worldPosition:
+      component &&
+      component.ready
+
+        ? component
+            .screenPointWorld
+            .toArray()
+
+        : null,
+
+
+    frontDirection:
+      component &&
+      component.ready
+
+        ? component
+            .screenNormalWorld
+            .toArray()
+
+        : null,
+
+
+    glowFound:
+      Boolean(
+
+        document
+          .querySelector(
+            '#tvGlowLight'
+          )
+
+      )
+
+  };
+
+}
+
+
+window.getRoomsTVDebug =
+  getRoomsTVDebug;
+
+
+
+/* ============================================================
+   STARTUP
+============================================================ */
+
+window.addEventListener(
+  'DOMContentLoaded',
+
+  () => {
+
+    const scene =
+      document
+        .querySelector(
+          'a-scene'
+        );
+
 
     if (
       !scene
@@ -2698,20 +4679,30 @@ window.addEventListener(
       return;
     }
 
+
     if (
       scene.hasLoaded
     ) {
-      setupRoomsEnvironmentEnhancements();
+
+      setupRoomsInteractions();
 
     } else {
-      scene.addEventListener(
-        'loaded',
-        setupRoomsEnvironmentEnhancements,
-        {
-          once:
-            true
-        }
-      );
+
+      scene
+        .addEventListener(
+
+          'loaded',
+
+          setupRoomsInteractions,
+
+          {
+            once:
+              true
+          }
+
+        );
+
     }
+
   }
 );
