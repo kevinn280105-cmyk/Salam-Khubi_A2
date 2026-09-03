@@ -2580,7 +2580,7 @@ AFRAME.registerComponent(
                 .setAttribute(
                   'movement-controls',
                   'enabled',
-                  false
+                  true
                 );
 
               this.isComfortActive =
