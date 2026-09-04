@@ -1,105 +1,96 @@
 /* ============================================================
    monster.js — ROOMS WITHIN
-   BEDROOM / TEDDY WALKING MONSTER EVENT
 
-   EVENT:
-   1. Player enters bedroom.
-   2. Player physically grabs Teddy.
-   3. Player leaves bedroom.
-   4. walking.glb appears.
-   5. Its first embedded GLB animation plays once.
-   6. When animation finishes, the monster disappears.
-   7. This event can only happen once.
+   Event:
+   - Enter bedroom.
+   - Physically grab Teddy at least once.
+   - Leave bedroom.
+   - walking.glb appears at its baked Blender world position.
+   - Its walk animation plays once, then it disappears.
+   - Happens only once.
 
-   Bedroom detection:
-   - Automatically uses #bedroom / bedroomasset.glb.
-   - Works with Mac movement.
-   - Works with Quest teleport.
-   - No manually positioned trigger box required.
-
-   Monster models:
-   - walking.glb
-   - standing.glb
-
-   Both use position 0 0 0 because the Blender/world placement
-   is expected to already be baked into the GLB.
-============================================================ */
-
-
-/* ============================================================
-   SETTINGS
+   standing.glb is loaded hidden for a later event.
 ============================================================ */
 
 const ROOMS_MONSTER_CONFIG = {
-  bedroomSelector:
-    '#bedroom',
+  bedroomSelector: '#bedroom',
+  playerSelector: '#cam',
+  teddySelector: '#teddy',
 
-  playerSelector:
-    '#cam',
-
-  teddySelector:
-    '#teddy',
-
-  walkingModel:
-    'walking.glb',
-
-  standingModel:
-    'standing.glb',
+  walkingModel: 'walking.glb',
+  standingModel: 'standing.glb',
 
   /*
-    Slightly shrink the bedroom GLB bounding box.
+    Slightly shrink the bedroom bounds.
 
-    This helps stop walls or decorations at the edge of the
-    bedroom from counting as "inside" too early.
+    This stops the doorway/wall edge from counting
+    as fully inside the bedroom.
   */
-  bedroomInsetX:
-    0.20,
-
-  bedroomInsetZ:
-    0.20,
+  bedroomInsetX: 0.18,
+  bedroomInsetZ: 0.18,
 
   /*
-    Check player position about 10 times per second.
+    Check player position every 100ms.
   */
-  checkInterval:
-    100,
+  checkInterval: 100,
 
   /*
-    If walking.glb has no animation clips, keep it visible
-    for this long before hiding it.
+    If walking.glb does not contain an animation,
+    show it for this long before hiding it.
   */
-  fallbackWalkingDuration:
-    3500
+  fallbackWalkingDuration: 3500,
+
+  /*
+    Safety timeout.
+
+    Even if the exported animation accidentally loops
+    forever, the monster cannot remain visible forever.
+  */
+  maxWalkingVisibleDuration: 6000
 };
 
 
 /* ============================================================
-   GLOBAL DEBUG STATE
+   GLOBAL MONSTER STATE
 ============================================================ */
 
 window.roomsMonsterState = {
-  playerInsideBedroom:
-    false,
+  playerInsideBedroom: false,
 
-  hasEnteredBedroom:
-    false,
+  hasEnteredBedroom: false,
 
-  teddyGrabbed:
-    false,
+  teddyGrabbed: false,
 
-  walkingTriggered:
-    false,
+  walkingTriggered: false,
 
-  walkingVisible:
-    false
+  walkingVisible: false,
+
+  walkingModelReady: false,
+
+  standingModelReady: false,
+
+  bedroomReady: false
 };
 
 
 /* ============================================================
-   GET WORLD BOX
+   PAUSE CHECK
 ============================================================ */
 
-function roomsMonsterGetWorldBox(
+function roomsMonsterPaused() {
+  return Boolean(
+    window.roomsPaused ||
+    window.roomsInputLocked ||
+    window.roomsGameEnded
+  );
+}
+
+
+/* ============================================================
+   WORLD BOUNDING BOX
+============================================================ */
+
+function roomsMonsterWorldBox(
   entity
 ) {
   if (!entity) {
@@ -109,7 +100,8 @@ function roomsMonsterGetWorldBox(
   const root =
     entity.getObject3D(
       'mesh'
-    );
+    ) ||
+    entity.object3D;
 
   if (!root) {
     return null;
@@ -130,225 +122,597 @@ function roomsMonsterGetWorldBox(
         root
       );
 
-  if (
-    box.isEmpty()
-  ) {
-    return null;
-  }
-
-  return box;
+  return box.isEmpty()
+    ? null
+    : box;
 }
 
 
 /* ============================================================
-   SHRUNK BEDROOM AREA
+   PLAYER POSITION
 ============================================================ */
 
-function roomsMonsterGetBedroomBox(
-  bedroom
+function roomsMonsterPlayerPosition(
+  target
 ) {
-  const box =
-    roomsMonsterGetWorldBox(
-      bedroom
-    );
-
-  if (!box) {
-    return null;
-  }
-
-  const result =
-    box.clone();
-
-  const size =
-    result.getSize(
-      new THREE.Vector3()
-    );
-
-  /*
-    Never shrink the box enough to invert it.
-  */
-  const insetX =
-    Math.min(
+  const player =
+    document.querySelector(
       ROOMS_MONSTER_CONFIG
-        .bedroomInsetX,
-      Math.max(
-        0,
-        size.x * 0.20
-      )
+        .playerSelector
+    ) ||
+    document.querySelector(
+      '#rig'
     );
 
-  const insetZ =
-    Math.min(
-      ROOMS_MONSTER_CONFIG
-        .bedroomInsetZ,
-      Math.max(
-        0,
-        size.z * 0.20
-      )
-    );
-
-  result.min.x +=
-    insetX;
-
-  result.max.x -=
-    insetX;
-
-  result.min.z +=
-    insetZ;
-
-  result.max.z -=
-    insetZ;
-
-  return result;
-}
-
-
-/* ============================================================
-   PLAYER WORLD POSITION
-============================================================ */
-
-function roomsMonsterGetPlayerPosition(
-  player
-) {
   if (!player) {
     return null;
   }
 
-  const position =
-    new THREE.Vector3();
+  /*
+    #cam is used first.
+
+    This means:
+    - Mac walking
+    - Quest joystick
+    - teleport
+    - physical headset movement
+
+    all count.
+  */
 
   player.object3D
     .getWorldPosition(
-      position
+      target
     );
 
-  return position;
+  return target;
 }
 
 
 /* ============================================================
-   INSIDE BEDROOM TEST
+   PHYSICAL TEDDY GRAB CHECK
 ============================================================ */
 
-function roomsMonsterPointInsideBedroom(
-  point,
-  box
-) {
-  if (
-    !point ||
-    !box
-  ) {
+function roomsMonsterTeddyIsGrabbed() {
+  const teddy =
+    document.querySelector(
+      ROOMS_MONSTER_CONFIG
+        .teddySelector
+    );
+
+  if (!teddy) {
     return false;
   }
 
   /*
-    Only X and Z matter.
-
-    We intentionally ignore camera height because:
-    - Mac camera height can bob.
-    - Quest headset height varies by player.
-    - Teleport should still work reliably.
+    natural-grabbable adds the A-Frame state:
+    "grabbed"
   */
-  return Boolean(
-    point.x >= box.min.x &&
-    point.x <= box.max.x &&
-    point.z >= box.min.z &&
-    point.z <= box.max.z
-  );
-}
 
-
-/* ============================================================
-   CREATE MONSTER ENTITY
-============================================================ */
-
-function roomsMonsterCreateModel(
-  id,
-  filename
-) {
-  let entity =
-    document.querySelector(
-      `#${id}`
-    );
-
-  if (entity) {
-    return entity;
+  if (
+    teddy.is &&
+    teddy.is(
+      'grabbed'
+    )
+  ) {
+    return true;
   }
-
-  entity =
-    document.createElement(
-      'a-entity'
-    );
-
-  entity.setAttribute(
-    'id',
-    id
-  );
-
-  entity.setAttribute(
-    'class',
-    'rooms-monster'
-  );
 
   /*
-    Keep 0 0 0 because your Blender GLBs are exported
-    in the room's world coordinates.
+    Extra fallback:
+    also check whether natural-grabbable has a hand holder.
   */
-  entity.setAttribute(
-    'position',
-    '0 0 0'
+
+  const grabbable =
+    teddy.components &&
+    teddy.components[
+      'natural-grabbable'
+    ];
+
+  return Boolean(
+    grabbable &&
+    grabbable.heldBy
   );
-
-  entity.setAttribute(
-    'rotation',
-    '0 0 0'
-  );
-
-  entity.setAttribute(
-    'visible',
-    false
-  );
-
-  entity.setAttribute(
-    'gltf-model',
-    `url(${filename})`
-  );
-
-  entity.setAttribute(
-    'model-status',
-    `name: ${id}`
-  );
-
-  const scene =
-    document.querySelector(
-      'a-scene'
-    );
-
-  if (scene) {
-    scene.appendChild(
-      entity
-    );
-  }
-
-  return entity;
 }
 
 
 /* ============================================================
-   MAIN COMPONENT
+   WALKING MONSTER ANIMATION
+
+   We use THREE.AnimationMixer directly.
+
+   This means you do NOT need another
+   animation-mixer library/component.
+============================================================ */
+
+AFRAME.registerComponent(
+  'rooms-walking-monster-player',
+  {
+    init: function () {
+      this.root =
+        null;
+
+      this.mixer =
+        null;
+
+      this.action =
+        null;
+
+      this.clip =
+        null;
+
+      this.pendingPlay =
+        false;
+
+      this.playing =
+        false;
+
+      this.elapsedVisible =
+        0;
+
+
+      this.onModelLoaded =
+        this.onModelLoaded
+          .bind(
+            this
+          );
+
+      this.onMixerFinished =
+        this.onMixerFinished
+          .bind(
+            this
+          );
+
+
+      this.el.addEventListener(
+        'model-loaded',
+        this.onModelLoaded
+      );
+
+
+      /*
+        In case the model finished loading before
+        this component initialized.
+      */
+
+      if (
+        this.el.getObject3D(
+          'mesh'
+        )
+      ) {
+        this.onModelLoaded({
+          detail: {
+            model:
+              this.el.getObject3D(
+                'mesh'
+              )
+          }
+        });
+      }
+    },
+
+
+    /* ========================================================
+       MODEL READY
+    ======================================================== */
+
+    onModelLoaded:
+      function (
+        event
+      ) {
+        this.root =
+          event &&
+          event.detail &&
+          event.detail.model
+            ? event.detail.model
+            : this.el
+                .getObject3D(
+                  'mesh'
+                );
+
+
+        if (
+          !this.root
+        ) {
+          return;
+        }
+
+
+        const animations =
+          Array.isArray(
+            this.root
+              .animations
+          )
+            ? this.root
+                .animations
+            : [];
+
+
+        /*
+          Prefer an animation with "walk" in its name.
+
+          If Blender exported it under another name,
+          simply use the first animation instead.
+        */
+
+        this.clip =
+          animations.find(
+            (clip) =>
+              String(
+                clip.name ||
+                ''
+              )
+                .toLowerCase()
+                .includes(
+                  'walk'
+                )
+          ) ||
+          animations[0] ||
+          null;
+
+
+        if (
+          this.clip
+        ) {
+          this.mixer =
+            new THREE
+              .AnimationMixer(
+                this.root
+              );
+
+
+          this.mixer
+            .addEventListener(
+              'finished',
+              this
+                .onMixerFinished
+            );
+
+
+          this.action =
+            this.mixer
+              .clipAction(
+                this.clip
+              );
+
+
+          /*
+            ONE PLAY ONLY.
+          */
+
+          this.action
+            .setLoop(
+              THREE.LoopOnce,
+              1
+            );
+
+
+          this.action
+            .clampWhenFinished =
+            true;
+        }
+
+
+        window
+          .roomsMonsterState
+          .walkingModelReady =
+          true;
+
+
+        console.log(
+          'walking.glb ready.',
+
+          {
+            animation:
+              this.clip
+                ? (
+                    this.clip.name ||
+                    '(unnamed clip)'
+                  )
+                : 'none'
+          }
+        );
+
+
+        /*
+          If the player triggered the event before
+          walking.glb finished loading, play it now.
+        */
+
+        if (
+          this.pendingPlay
+        ) {
+          this.pendingPlay =
+            false;
+
+          this.playOnce();
+        }
+      },
+
+
+    /* ========================================================
+       PLAY
+    ======================================================== */
+
+    playOnce:
+      function () {
+        if (
+          this.playing
+        ) {
+          return false;
+        }
+
+
+        if (
+          !this.root
+        ) {
+          this.pendingPlay =
+            true;
+
+          return false;
+        }
+
+
+        this.playing =
+          true;
+
+        this.elapsedVisible =
+          0;
+
+
+        /*
+          walking.glb was loaded hidden.
+
+          NOW reveal it.
+        */
+
+        this.el.setAttribute(
+          'visible',
+          true
+        );
+
+
+        window
+          .roomsMonsterState
+          .walkingVisible =
+          true;
+
+
+        /*
+          Play exported Blender animation.
+        */
+
+        if (
+          this.action &&
+          this.mixer
+        ) {
+          this.action.stop();
+
+          this.action.reset();
+
+          this.action.enabled =
+            true;
+
+          this.action.paused =
+            false;
+
+          this.action
+            .setEffectiveTimeScale(
+              1
+            );
+
+          this.action
+            .setEffectiveWeight(
+              1
+            );
+
+          this.action.play();
+        }
+
+
+        this.el.sceneEl.emit(
+          'rooms-walking-monster-visible',
+
+          {
+            hasAnimation:
+              Boolean(
+                this.action
+              ),
+
+            animationName:
+              this.clip
+                ? (
+                    this.clip.name ||
+                    ''
+                  )
+                : ''
+          },
+
+          false
+        );
+
+
+        return true;
+      },
+
+
+    /* ========================================================
+       HIDE
+    ======================================================== */
+
+    hide:
+      function () {
+        if (
+          !this.playing &&
+          !window
+            .roomsMonsterState
+            .walkingVisible
+        ) {
+          return;
+        }
+
+
+        this.playing =
+          false;
+
+        this.pendingPlay =
+          false;
+
+
+        if (
+          this.action
+        ) {
+          this.action.stop();
+        }
+
+
+        this.el.setAttribute(
+          'visible',
+          false
+        );
+
+
+        window
+          .roomsMonsterState
+          .walkingVisible =
+          false;
+
+
+        this.el.sceneEl.emit(
+          'rooms-walking-monster-hidden',
+          {},
+          false
+        );
+      },
+
+
+    /* ========================================================
+       ANIMATION FINISHED
+    ======================================================== */
+
+    onMixerFinished:
+      function () {
+        this.hide();
+      },
+
+
+    /* ========================================================
+       ANIMATION UPDATE
+    ======================================================== */
+
+    tick:
+      function (
+        time,
+        deltaTime
+      ) {
+        if (
+          !deltaTime ||
+          !this.playing ||
+          roomsMonsterPaused()
+        ) {
+          return;
+        }
+
+
+        this.elapsedVisible +=
+          deltaTime;
+
+
+        if (
+          this.mixer
+        ) {
+          this.mixer.update(
+            deltaTime /
+            1000
+          );
+        }
+
+
+        /*
+          If walking.glb contains NO animation,
+          still show the monster briefly.
+        */
+
+        if (
+          !this.action &&
+          this.elapsedVisible >=
+            ROOMS_MONSTER_CONFIG
+              .fallbackWalkingDuration
+        ) {
+          this.hide();
+
+          return;
+        }
+
+
+        /*
+          Safety:
+          never stay visible forever.
+        */
+
+        if (
+          this.elapsedVisible >=
+            ROOMS_MONSTER_CONFIG
+              .maxWalkingVisibleDuration
+        ) {
+          this.hide();
+        }
+      },
+
+
+    /* ========================================================
+       REMOVE
+    ======================================================== */
+
+    remove:
+      function () {
+        this.el
+          .removeEventListener(
+            'model-loaded',
+            this.onModelLoaded
+          );
+
+
+        if (
+          this.mixer
+        ) {
+          this.mixer
+            .removeEventListener(
+              'finished',
+              this
+                .onMixerFinished
+            );
+        }
+
+
+        this.hide();
+
+
+        this.root =
+          null;
+
+        this.mixer =
+          null;
+
+        this.action =
+          null;
+
+        this.clip =
+          null;
+      }
+  }
+);
+
+
+/* ============================================================
+   MAIN MONSTER EVENT
 ============================================================ */
 
 AFRAME.registerComponent(
   'rooms-monster-events',
   {
     init: function () {
-      this.scene =
-        this.el.sceneEl;
-
       this.bedroom =
-        null;
-
-      this.player =
         null;
 
       this.teddy =
@@ -360,759 +724,1053 @@ AFRAME.registerComponent(
       this.standingMonster =
         null;
 
-      this.walkingMixer =
-        null;
 
-      this.walkingAction =
-        null;
+      this.bedroomBox =
+        new THREE.Box3();
 
-      this.walkingModelRoot =
-        null;
 
-      this.walkingFallbackTimer =
-        null;
+      this.playerWorld =
+        new THREE.Vector3();
+
 
       this.lastCheck =
         0;
 
-      this.wasInsideBedroom =
+
+      /*
+        null =
+        we have not sampled the player's room position yet.
+      */
+
+      this.previousInside =
         null;
 
-      this.removed =
-        false;
 
-      this.teddyListenerBound =
-        false;
+      this.onBedroomModelLoaded =
+        this
+          .onBedroomModelLoaded
+          .bind(
+            this
+          );
+
 
       this.onTeddyStateAdded =
-        this.onTeddyStateAdded
+        this
+          .onTeddyStateAdded
           .bind(
             this
           );
 
-      this.onWalkingModelLoaded =
-        this.onWalkingModelLoaded
-          .bind(
-            this
-          );
 
-      this.refreshReferences =
-        this.refreshReferences
-          .bind(
-            this
-          );
-
-      /*
-        Create both monster GLBs now,
-        but keep both invisible.
-      */
-      this.walkingMonster =
-        roomsMonsterCreateModel(
-          'walkingMonster',
-          ROOMS_MONSTER_CONFIG
-            .walkingModel
+      this.prepare =
+        this.prepare.bind(
+          this
         );
 
-      this.standingMonster =
-        roomsMonsterCreateModel(
-          'standingMonster',
-          ROOMS_MONSTER_CONFIG
-            .standingModel
-        );
-
-      if (
-        this.walkingMonster
-      ) {
-        this.walkingMonster
-          .addEventListener(
-            'model-loaded',
-            this.onWalkingModelLoaded
-          );
-      }
-
-      this.refreshReferences();
 
       /*
-        Some GLBs/components finish loading after this JS,
-        so retry safely.
+        Make the hidden monster entities.
       */
+
+      this.createMonsterEntities();
+
+
+      /*
+        Find bedroom / Teddy.
+      */
+
+      this.prepare();
+
+
+      /*
+        Models/components may initialize slightly later,
+        so retry several times.
+      */
+
       [
         100,
-        300,
-        700,
-        1500,
-        3000
+        400,
+        1000,
+        2000
       ].forEach(
         (delay) => {
           window.setTimeout(
-            this.refreshReferences,
+            this.prepare,
             delay
           );
         }
       );
-
-      /*
-        Debug helper.
-
-        In browser console:
-        getRoomsMonsterState()
-      */
-      window.getRoomsMonsterState =
-        () => ({
-          playerInsideBedroom:
-            window.roomsMonsterState
-              .playerInsideBedroom,
-
-          hasEnteredBedroom:
-            window.roomsMonsterState
-              .hasEnteredBedroom,
-
-          teddyGrabbed:
-            window.roomsMonsterState
-              .teddyGrabbed,
-
-          walkingTriggered:
-            window.roomsMonsterState
-              .walkingTriggered,
-
-          walkingVisible:
-            window.roomsMonsterState
-              .walkingVisible
-        });
-
-      console.log(
-        'Rooms Within monster event ready.'
-      );
     },
 
 
-    /* ======================================================
-       FIND PROJECT OBJECTS
-    ====================================================== */
+    /* ========================================================
+       CREATE MONSTER ENTITIES
+    ======================================================== */
 
-    refreshReferences:
+    createMonsterEntities:
       function () {
-        this.bedroom =
+        /* ----------------------------------------------------
+           WALKING MONSTER
+        ---------------------------------------------------- */
+
+        let walking =
+          document.querySelector(
+            '#walkingMonster'
+          );
+
+
+        if (
+          !walking
+        ) {
+          walking =
+            document
+              .createElement(
+                'a-entity'
+              );
+
+
+          walking.setAttribute(
+            'id',
+            'walkingMonster'
+          );
+
+
+          walking.setAttribute(
+            'class',
+            'rooms-monster'
+          );
+
+
+          walking.setAttribute(
+            'gltf-model',
+
+            `url(${ROOMS_MONSTER_CONFIG.walkingModel})`
+          );
+
+
+          /*
+            IMPORTANT:
+
+            Do NOT manually move it.
+
+            You told me walking.glb already has
+            the intended scene position baked into Blender,
+            beside / left of bantho.
+
+            So it stays:
+          */
+
+          walking.setAttribute(
+            'position',
+            '0 0 0'
+          );
+
+
+          walking.setAttribute(
+            'rotation',
+            '0 0 0'
+          );
+
+
+          walking.setAttribute(
+            'visible',
+            'false'
+          );
+
+
+          walking.setAttribute(
+            'rooms-walking-monster-player',
+            ''
+          );
+
+
+          this.el.appendChild(
+            walking
+          );
+        }
+
+
+        this.walkingMonster =
+          walking;
+
+
+
+        /* ----------------------------------------------------
+           STANDING MONSTER
+
+           Loaded now but NOT USED YET.
+        ---------------------------------------------------- */
+
+        let standing =
+          document.querySelector(
+            '#standingMonster'
+          );
+
+
+        if (
+          !standing
+        ) {
+          standing =
+            document
+              .createElement(
+                'a-entity'
+              );
+
+
+          standing.setAttribute(
+            'id',
+            'standingMonster'
+          );
+
+
+          standing.setAttribute(
+            'class',
+            'rooms-monster'
+          );
+
+
+          standing.setAttribute(
+            'gltf-model',
+
+            `url(${ROOMS_MONSTER_CONFIG.standingModel})`
+          );
+
+
+          /*
+            Also uses its baked Blender position.
+          */
+
+          standing.setAttribute(
+            'position',
+            '0 0 0'
+          );
+
+
+          standing.setAttribute(
+            'rotation',
+            '0 0 0'
+          );
+
+
+          standing.setAttribute(
+            'visible',
+            'false'
+          );
+
+
+          standing.addEventListener(
+            'model-loaded',
+
+            () => {
+              window
+                .roomsMonsterState
+                .standingModelReady =
+                true;
+
+
+              console.log(
+                'standing.glb ready and hidden for later.'
+              );
+            },
+
+            {
+              once:
+                true
+            }
+          );
+
+
+          this.el.appendChild(
+            standing
+          );
+        }
+
+
+        this.standingMonster =
+          standing;
+      },
+
+
+    /* ========================================================
+       FIND BEDROOM + TEDDY
+    ======================================================== */
+
+    prepare:
+      function () {
+        const bedroom =
           document.querySelector(
             ROOMS_MONSTER_CONFIG
               .bedroomSelector
           );
 
-        this.player =
-          document.querySelector(
-            ROOMS_MONSTER_CONFIG
-              .playerSelector
-          ) ||
-          document.querySelector(
-            '#rig'
-          );
 
-        this.teddy =
+        if (
+          bedroom &&
+          bedroom !==
+            this.bedroom
+        ) {
+          if (
+            this.bedroom
+          ) {
+            this.bedroom
+              .removeEventListener(
+                'model-loaded',
+                this
+                  .onBedroomModelLoaded
+              );
+          }
+
+
+          this.bedroom =
+            bedroom;
+
+
+          this.bedroom
+            .addEventListener(
+              'model-loaded',
+              this
+                .onBedroomModelLoaded
+            );
+        }
+
+
+        /*
+          Bedroom might already be loaded.
+        */
+
+        if (
+          this.bedroom &&
+          this.bedroom
+            .getObject3D(
+              'mesh'
+            )
+        ) {
+          this.updateBedroomBox();
+        }
+
+
+
+        const teddy =
           document.querySelector(
             ROOMS_MONSTER_CONFIG
               .teddySelector
           );
 
-        if (
-          this.teddy &&
-          !this.teddyListenerBound
-        ) {
-          this.teddy.addEventListener(
-            'stateadded',
-            this.onTeddyStateAdded
-          );
-
-          this.teddyListenerBound =
-            true;
-        }
 
         if (
-          !this.walkingMonster
+          teddy &&
+          teddy !==
+            this.teddy
         ) {
-          this.walkingMonster =
-            document.querySelector(
-              '#walkingMonster'
+          if (
+            this.teddy
+          ) {
+            this.teddy
+              .removeEventListener(
+                'stateadded',
+                this
+                  .onTeddyStateAdded
+              );
+          }
+
+
+          this.teddy =
+            teddy;
+
+
+          /*
+            We specifically listen for physical
+            A-Frame "grabbed" state.
+          */
+
+          this.teddy
+            .addEventListener(
+              'stateadded',
+              this
+                .onTeddyStateAdded
             );
         }
 
+
+        /*
+          Fallback if Teddy was already being held.
+        */
+
         if (
-          !this.standingMonster
+          roomsMonsterTeddyIsGrabbed()
         ) {
-          this.standingMonster =
-            document.querySelector(
-              '#standingMonster'
-            );
+          this.markTeddyGrabbed();
         }
       },
 
 
-    /* ======================================================
-       TEDDY PHYSICAL GRAB
-    ====================================================== */
+    /* ========================================================
+       BEDROOM MODEL READY
+    ======================================================== */
+
+    onBedroomModelLoaded:
+      function () {
+        this.updateBedroomBox();
+      },
+
+
+    /* ========================================================
+       BEDROOM BOUNDARY
+    ======================================================== */
+
+    updateBedroomBox:
+      function () {
+        const box =
+          roomsMonsterWorldBox(
+            this.bedroom
+          );
+
+
+        if (
+          !box
+        ) {
+          window
+            .roomsMonsterState
+            .bedroomReady =
+            false;
+
+
+          return false;
+        }
+
+
+        this.bedroomBox
+          .copy(
+            box
+          );
+
+
+        window
+          .roomsMonsterState
+          .bedroomReady =
+          true;
+
+
+        console.log(
+          'Bedroom monster trigger ready.',
+
+          {
+            min:
+              this.bedroomBox
+                .min
+                .toArray(),
+
+            max:
+              this.bedroomBox
+                .max
+                .toArray()
+          }
+        );
+
+
+        return true;
+      },
+
+
+    /* ========================================================
+       TEDDY PHYSICALLY GRABBED
+    ======================================================== */
 
     onTeddyStateAdded:
-      function (event) {
+      function (
+        event
+      ) {
+        /*
+          A-Frame stateadded supplies:
+          event.detail.state
+        */
+
         const state =
           event &&
           event.detail
             ? event.detail.state
             : '';
 
+
         if (
-          state !==
+          state ===
           'grabbed'
         ) {
+          this.markTeddyGrabbed();
+        }
+      },
+
+
+    markTeddyGrabbed:
+      function () {
+        /*
+          Remember permanently.
+
+          Teddy does NOT need to still be held
+          when the player leaves.
+        */
+
+        if (
+          window
+            .roomsMonsterState
+            .teddyGrabbed
+        ) {
           return;
         }
 
-        window.roomsMonsterState
+
+        window
+          .roomsMonsterState
           .teddyGrabbed =
-            true;
+          true;
 
-        console.log(
-          'Monster event: Teddy was physically grabbed.'
-        );
 
-        this.scene.emit(
-          'monster-teddy-grabbed',
+        this.el.emit(
+          'rooms-teddy-first-grabbed',
           {},
           false
+        );
+
+
+        console.log(
+          'Monster event armed: Teddy has been physically grabbed.'
         );
       },
 
 
-    /* ======================================================
-       BEDROOM ENTER
-    ====================================================== */
+    /* ========================================================
+       IS PLAYER INSIDE BEDROOM?
+    ======================================================== */
 
-    playerEnteredBedroom:
+    isPlayerInsideBedroom:
       function () {
-        window.roomsMonsterState
-          .playerInsideBedroom =
-            true;
-
-        window.roomsMonsterState
-          .hasEnteredBedroom =
-            true;
-
-        console.log(
-          'Monster event: player entered bedroom.'
-        );
-
-        this.scene.emit(
-          'bedroom-entered',
-          {},
-          false
-        );
-      },
+        if (
+          !window
+            .roomsMonsterState
+            .bedroomReady
+        ) {
+          return false;
+        }
 
 
-    /* ======================================================
-       BEDROOM EXIT
-    ====================================================== */
+        const player =
+          roomsMonsterPlayerPosition(
+            this.playerWorld
+          );
 
-    playerExitedBedroom:
-      function () {
-        window.roomsMonsterState
-          .playerInsideBedroom =
-            false;
 
-        console.log(
-          'Monster event: player left bedroom.'
-        );
+        if (
+          !player
+        ) {
+          return false;
+        }
 
-        this.scene.emit(
-          'bedroom-exited',
-          {},
-          false
-        );
+
+        const box =
+          this.bedroomBox;
+
+
+        const width =
+          box.max.x -
+          box.min.x;
+
+
+        const depth =
+          box.max.z -
+          box.min.z;
+
 
         /*
-          THE SCARE CONDITION
-
-          Must:
-          - have genuinely entered bedroom;
-          - have physically grabbed Teddy;
-          - not have triggered before.
+          Only apply inset when room is large enough.
         */
-        if (
-          window.roomsMonsterState
-            .hasEnteredBedroom &&
-          window.roomsMonsterState
-            .teddyGrabbed &&
-          !window.roomsMonsterState
-            .walkingTriggered
-        ) {
-          this.triggerWalkingMonster();
-        }
-      },
+
+        const insetX =
+          width >
+            ROOMS_MONSTER_CONFIG
+              .bedroomInsetX *
+              2 +
+            0.35
+            ? ROOMS_MONSTER_CONFIG
+                .bedroomInsetX
+            : 0;
 
 
-    /* ======================================================
-       WALKING MODEL LOADED
-    ====================================================== */
+        const insetZ =
+          depth >
+            ROOMS_MONSTER_CONFIG
+              .bedroomInsetZ *
+              2 +
+            0.35
+            ? ROOMS_MONSTER_CONFIG
+                .bedroomInsetZ
+            : 0;
 
-    onWalkingModelLoaded:
-      function () {
-        if (
-          !this.walkingMonster
-        ) {
-          return;
-        }
 
-        this.walkingModelRoot =
-          this.walkingMonster
-            .getObject3D(
-              'mesh'
-            );
+        /*
+          Y is intentionally ignored.
 
-        console.log(
-          'walking.glb loaded.'
+          We only care whether the player's
+          X/Z location is inside the bedroom.
+        */
+
+        return Boolean(
+          player.x >=
+            box.min.x +
+              insetX &&
+
+          player.x <=
+            box.max.x -
+              insetX &&
+
+          player.z >=
+            box.min.z +
+              insetZ &&
+
+          player.z <=
+            box.max.z -
+              insetZ
         );
       },
 
 
-    /* ======================================================
-       STOP WALKING ANIMATION
-    ====================================================== */
-
-    stopWalkingAnimation:
-      function () {
-        if (
-          this.walkingAction
-        ) {
-          try {
-            this.walkingAction
-              .stop();
-          } catch (error) {
-            // Safe cleanup.
-          }
-        }
-
-        if (
-          this.walkingMixer
-        ) {
-          try {
-            this.walkingMixer
-              .stopAllAction();
-          } catch (error) {
-            // Safe cleanup.
-          }
-        }
-
-        this.walkingAction =
-          null;
-
-        this.walkingMixer =
-          null;
-      },
-
-
-    /* ======================================================
-       SHOW WALKING MONSTER
-    ====================================================== */
+    /* ========================================================
+       TRIGGER WALKING.GLB
+    ======================================================== */
 
     triggerWalkingMonster:
       function () {
+        /*
+          ONE TIME ONLY.
+        */
+
         if (
-          this.removed ||
-          !this.walkingMonster ||
-          window.roomsMonsterState
+          window
+            .roomsMonsterState
             .walkingTriggered
         ) {
-          return;
+          return false;
         }
 
-        window.roomsMonsterState
+
+        window
+          .roomsMonsterState
           .walkingTriggered =
-            true;
+          true;
 
-        window.roomsMonsterState
-          .walkingVisible =
-            true;
 
-        console.log(
-          'Monster event: walking.glb triggered.'
-        );
-
-        /*
-          Make sure the GLB remains at its Blender/world origin.
-        */
-        this.walkingMonster
-          .setAttribute(
-            'position',
-            '0 0 0'
+        const monster =
+          this.walkingMonster ||
+          document.querySelector(
+            '#walkingMonster'
           );
 
-        this.walkingMonster
-          .setAttribute(
-            'rotation',
-            '0 0 0'
-          );
-
-        this.walkingMonster
-          .setAttribute(
-            'visible',
-            true
-          );
-
-        this.scene.emit(
-          'walking-monster-started',
-          {},
-          false
-        );
-
-        const root =
-          this.walkingMonster
-            .getObject3D(
-              'mesh'
-            );
-
-        if (!root) {
-          /*
-            If the model somehow has not finished loading yet,
-            still display it and use the fallback timer.
-          */
-          this.startWalkingFallback();
-
-          return;
-        }
-
-        /*
-          A-Frame stores the GLTF animations on the model root.
-        */
-        const animations =
-          root.animations ||
-          [];
 
         if (
-          animations.length === 0
+          !monster
         ) {
           console.warn(
-            'walking.glb contains no animation clips. ' +
-            'Using fallback visibility timer.'
+            'walkingMonster entity was not found.'
           );
 
-          this.startWalkingFallback();
 
-          return;
+          return false;
         }
 
-        /*
-          Play the first animation contained in walking.glb.
 
-          This avoids requiring aframe-extras/animation-mixer.
-        */
-        this.walkingMixer =
-          new THREE.AnimationMixer(
-            root
-          );
-
-        const clip =
-          animations[0];
-
-        this.walkingAction =
-          this.walkingMixer
-            .clipAction(
-              clip
-            );
-
-        this.walkingAction
-          .setLoop(
-            THREE.LoopOnce,
-            1
-          );
-
-        this.walkingAction
-          .clampWhenFinished =
-            true;
-
-        this.walkingAction
-          .reset();
-
-        this.walkingAction
-          .play();
-
-        const onFinished =
-          () => {
-            if (
-              this.walkingMixer
-            ) {
-              this.walkingMixer
-                .removeEventListener(
-                  'finished',
-                  onFinished
-                );
-            }
-
-            this.hideWalkingMonster();
-          };
-
-        this.walkingMixer
-          .addEventListener(
-            'finished',
-            onFinished
-          );
-
-        console.log(
-          `Playing walking.glb animation: ${clip.name || 'Animation 1'}`
-        );
-      },
+        const player =
+          monster.components[
+            'rooms-walking-monster-player'
+          ];
 
 
-    /* ======================================================
-       FALLBACK IF GLB HAS NO ANIMATION
-    ====================================================== */
-
-    startWalkingFallback:
-      function () {
         if (
-          this.walkingFallbackTimer
+          player
         ) {
-          window.clearTimeout(
-            this.walkingFallbackTimer
-          );
-        }
+          player.playOnce();
 
-        this.walkingFallbackTimer =
+        } else {
+          /*
+            Component might be created one frame
+            after the A-Frame entity.
+          */
+
           window.setTimeout(
             () => {
-              this.walkingFallbackTimer =
-                null;
+              const retry =
+                monster.components[
+                  'rooms-walking-monster-player'
+                ];
 
-              this.hideWalkingMonster();
+
+              if (
+                retry
+              ) {
+                retry.playOnce();
+              }
             },
-            ROOMS_MONSTER_CONFIG
-              .fallbackWalkingDuration
+
+            0
           );
-      },
-
-
-    /* ======================================================
-       HIDE WALKING MONSTER
-    ====================================================== */
-
-    hideWalkingMonster:
-      function () {
-        if (
-          !this.walkingMonster
-        ) {
-          return;
         }
 
-        this.stopWalkingAnimation();
 
-        this.walkingMonster
-          .setAttribute(
-            'visible',
-            false
-          );
+        this.el.emit(
+          'rooms-walking-monster-triggered',
 
-        window.roomsMonsterState
-          .walkingVisible =
-            false;
+          {
+            reason:
+              'left-bedroom-after-teddy'
+          },
 
-        console.log(
-          'Monster event: walking.glb disappeared.'
-        );
-
-        this.scene.emit(
-          'walking-monster-finished',
-          {},
           false
         );
+
+
+        console.log(
+          'MONSTER: walking.glb triggered after leaving the bedroom.'
+        );
+
+
+        return true;
       },
 
 
-    /* ======================================================
-       FRAME CHECK
-    ====================================================== */
+    /* ========================================================
+       MAIN CHECK
+    ======================================================== */
 
     tick:
       function (
-        time,
-        delta
+        time
       ) {
-        /*
-          Update the monster's Three.js animation.
-        */
         if (
-          this.walkingMixer &&
-          window.roomsMonsterState
-            .walkingVisible &&
-          delta
-        ) {
-          this.walkingMixer.update(
-            delta / 1000
-          );
-        }
+          roomsMonsterPaused() ||
 
-        /*
-          Do not process room crossing while paused.
-        */
-        if (
-          window.roomsPaused ||
-          window.roomsInputLocked ||
-          window.roomsInspectionOpen
-        ) {
-          return;
-        }
-
-        if (
           time -
-          this.lastCheck <
-          ROOMS_MONSTER_CONFIG
-            .checkInterval
+            this.lastCheck <
+            ROOMS_MONSTER_CONFIG
+              .checkInterval
         ) {
           return;
         }
+
 
         this.lastCheck =
           time;
 
+
+        /*
+          Bedroom model not ready yet?
+          Keep trying.
+        */
+
         if (
-          !this.bedroom ||
-          !this.player
+          !window
+            .roomsMonsterState
+            .bedroomReady
         ) {
-          this.refreshReferences();
+          this.prepare();
+
 
           if (
-            !this.bedroom ||
-            !this.player
+            !window
+              .roomsMonsterState
+              .bedroomReady
           ) {
             return;
           }
         }
 
-        const bedroomBox =
-          roomsMonsterGetBedroomBox(
-            this.bedroom
-          );
 
-        if (!bedroomBox) {
-          return;
+        /*
+          Poll Teddy as a safety fallback.
+        */
+
+        if (
+          !window
+            .roomsMonsterState
+            .teddyGrabbed &&
+
+          roomsMonsterTeddyIsGrabbed()
+        ) {
+          this.markTeddyGrabbed();
         }
 
-        const playerPosition =
-          roomsMonsterGetPlayerPosition(
-            this.player
-          );
-
-        if (!playerPosition) {
-          return;
-        }
 
         const inside =
-          roomsMonsterPointInsideBedroom(
-            playerPosition,
-            bedroomBox
-          );
+          this.isPlayerInsideBedroom();
 
-        /*
-          First successful check:
-          establish current state without firing a fake enter/exit.
-        */
+
+        window
+          .roomsMonsterState
+          .playerInsideBedroom =
+          inside;
+
+
+        /* ----------------------------------------------------
+           FIRST CHECK
+        ---------------------------------------------------- */
+
         if (
-          this.wasInsideBedroom ===
+          this.previousInside ===
           null
         ) {
-          this.wasInsideBedroom =
+          this.previousInside =
             inside;
 
-          window.roomsMonsterState
-            .playerInsideBedroom =
-              inside;
 
-          if (inside) {
-            window.roomsMonsterState
+          /*
+            If player starts inside bedroom,
+            count that as entering.
+          */
+
+          if (
+            inside
+          ) {
+            window
+              .roomsMonsterState
               .hasEnteredBedroom =
-                true;
+              true;
           }
 
+
           return;
         }
 
-        /*
-          OUTSIDE → INSIDE
-        */
+
+        /* ----------------------------------------------------
+           PLAYER ENTERED BEDROOM
+
+           outside -> inside
+        ---------------------------------------------------- */
+
         if (
-          inside &&
-          !this.wasInsideBedroom
+          !this.previousInside &&
+          inside
         ) {
-          this.wasInsideBedroom =
+          window
+            .roomsMonsterState
+            .hasEnteredBedroom =
             true;
 
-          this.playerEnteredBedroom();
 
-          return;
+          this.el.emit(
+            'rooms-player-entered-bedroom',
+            {},
+            false
+          );
         }
 
-        /*
-          INSIDE → OUTSIDE
-        */
+
+        /* ----------------------------------------------------
+           PLAYER LEFT BEDROOM
+
+           inside -> outside
+
+           Only trigger if Teddy has actually
+           been physically grabbed.
+        ---------------------------------------------------- */
+
         if (
-          !inside &&
-          this.wasInsideBedroom
-        ) {
-          this.wasInsideBedroom =
-            false;
+          this.previousInside &&
 
-          this.playerExitedBedroom();
+          !inside &&
+
+          window
+            .roomsMonsterState
+            .hasEnteredBedroom &&
+
+          window
+            .roomsMonsterState
+            .teddyGrabbed &&
+
+          !window
+            .roomsMonsterState
+            .walkingTriggered
+        ) {
+          this.triggerWalkingMonster();
         }
+
+
+        this.previousInside =
+          inside;
       },
 
 
-    /* ======================================================
-       CLEANUP
-    ====================================================== */
+    /* ========================================================
+       REMOVE
+    ======================================================== */
 
     remove:
       function () {
-        this.removed =
-          true;
-
         if (
-          this.teddy &&
-          this.teddyListenerBound
+          this.bedroom
         ) {
-          this.teddy.removeEventListener(
-            'stateadded',
-            this.onTeddyStateAdded
-          );
-        }
-
-        if (
-          this.walkingMonster
-        ) {
-          this.walkingMonster
+          this.bedroom
             .removeEventListener(
               'model-loaded',
-              this.onWalkingModelLoaded
+              this
+                .onBedroomModelLoaded
             );
         }
 
-        if (
-          this.walkingFallbackTimer
-        ) {
-          window.clearTimeout(
-            this.walkingFallbackTimer
-          );
-
-          this.walkingFallbackTimer =
-            null;
-        }
-
-        this.stopWalkingAnimation();
 
         if (
-          window.getRoomsMonsterState
+          this.teddy
         ) {
-          delete window
-            .getRoomsMonsterState;
+          this.teddy
+            .removeEventListener(
+              'stateadded',
+              this
+                .onTeddyStateAdded
+            );
         }
       }
   }
 );
+
+
+/* ============================================================
+   DEBUG
+
+   Browser console:
+
+   getRoomsMonsterState()
+============================================================ */
+
+window.getRoomsMonsterState =
+  function () {
+    const scene =
+      document.querySelector(
+        'a-scene'
+      );
+
+
+    const system =
+      scene &&
+      scene.components
+        ? scene.components[
+            'rooms-monster-events'
+          ]
+        : null;
+
+
+    return {
+      playerInsideBedroom:
+        window
+          .roomsMonsterState
+          .playerInsideBedroom,
+
+
+      hasEnteredBedroom:
+        window
+          .roomsMonsterState
+          .hasEnteredBedroom,
+
+
+      teddyGrabbed:
+        window
+          .roomsMonsterState
+          .teddyGrabbed,
+
+
+      walkingTriggered:
+        window
+          .roomsMonsterState
+          .walkingTriggered,
+
+
+      walkingVisible:
+        window
+          .roomsMonsterState
+          .walkingVisible,
+
+
+      walkingModelReady:
+        window
+          .roomsMonsterState
+          .walkingModelReady,
+
+
+      standingModelReady:
+        window
+          .roomsMonsterState
+          .standingModelReady,
+
+
+      bedroomReady:
+        window
+          .roomsMonsterState
+          .bedroomReady,
+
+
+      walkingEntityFound:
+        Boolean(
+          document.querySelector(
+            '#walkingMonster'
+          )
+        ),
+
+
+      standingEntityFound:
+        Boolean(
+          document.querySelector(
+            '#standingMonster'
+          )
+        ),
+
+
+      systemReady:
+        Boolean(
+          system
+        )
+    };
+  };
+
+
+/* ============================================================
+   MANUAL MONSTER TEST
+
+   Browser console:
+
+   triggerRoomsWalkingMonster()
+
+   This lets you test the walking.glb animation
+   without doing the whole Teddy sequence.
+============================================================ */
+
+window.triggerRoomsWalkingMonster =
+  function () {
+    const scene =
+      document.querySelector(
+        'a-scene'
+      );
+
+
+    const system =
+      scene &&
+      scene.components
+        ? scene.components[
+            'rooms-monster-events'
+          ]
+        : null;
+
+
+    if (
+      !system
+    ) {
+      console.warn(
+        'rooms-monster-events is not ready.'
+      );
+
+
+      return false;
+    }
+
+
+    return system
+      .triggerWalkingMonster();
+  };
 
 
 /* ============================================================
@@ -1121,23 +1779,26 @@ AFRAME.registerComponent(
 
 window.addEventListener(
   'DOMContentLoaded',
+
   () => {
     const scene =
       document.querySelector(
         'a-scene'
       );
 
-    if (!scene) {
+
+    if (
+      !scene
+    ) {
       console.warn(
-        'monster.js: <a-scene> was not found.'
+        'monster.js: no <a-scene> found.'
       );
+
 
       return;
     }
 
-    /*
-      Put the monster controller directly on the scene.
-    */
+
     if (
       !scene.hasAttribute(
         'rooms-monster-events'
