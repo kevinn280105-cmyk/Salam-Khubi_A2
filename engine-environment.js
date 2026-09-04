@@ -12,7 +12,7 @@
    - Desktop head bob, disabled in real immersive VR.
    - Proximity light reactions.
    - VR comfort mode: teleport only, smooth locomotion disabled.
-   - 90 Hz WebXR request when supported.
+   - 72 Hz WebXR request when supported.
 ============================================================ */
 
 
@@ -2670,7 +2670,7 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
-   WEBXR 90 HZ REQUEST
+   WEBXR 72 HZ REQUEST
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -2694,14 +2694,14 @@ AFRAME.registerComponent(
           .setTimeout(
             () => {
               this
-                .requestNinetyHz();
+                .requestSeventyTwoHz();
             },
 
             120
           );
       },
 
-    requestNinetyHz:
+    requestSeventyTwoHz:
       async function () {
         const scene =
           this.el;
@@ -2752,7 +2752,7 @@ AFRAME.registerComponent(
 
             : [];
 
-        const supportsNinety =
+        const supportsSeventyTwo =
           supported
             .some(
               (rate) =>
@@ -2760,24 +2760,24 @@ AFRAME.registerComponent(
                   Number(
                     rate
                   ) -
-                  90
+                  72
                 ) <
                 0.5
             );
 
         if (
-          supportsNinety &&
+          supportsSeventyTwo &&
           session
             .updateTargetFrameRate
         ) {
           try {
             await session
               .updateTargetFrameRate(
-                90
+                72
               );
 
             console.log(
-              'WebXR refresh-rate target set to 90 Hz.'
+              'WebXR refresh-rate target set to 72 Hz.'
             );
 
             scene
@@ -2786,7 +2786,7 @@ AFRAME.registerComponent(
 
                 {
                   target:
-                    90,
+                    72,
 
                   supported
                 },
@@ -2800,7 +2800,7 @@ AFRAME.registerComponent(
             error
           ) {
             console.warn(
-              'WebXR could not switch to 90 Hz:',
+              'WebXR could not switch to 72 Hz:',
               error
             );
           }
@@ -2809,7 +2809,7 @@ AFRAME.registerComponent(
         console.log(
           supported.length
 
-            ? `90 Hz not available. Headset-supported rates: ${supported.join(', ')}`
+            ? `72 Hz not available. Headset-supported rates: ${supported.join(', ')}`
 
             : 'Browser does not expose selectable WebXR refresh rates; keeping headset default.'
         );
@@ -2988,7 +2988,7 @@ function setupRoomsEnvironmentEnhancements() {
     );
 
   console.log(
-    'Environment enhancements ready: wall-safe teleport + collision + comfort mode + light reactions + 90 Hz request.'
+    'Environment enhancements ready: wall-safe teleport + collision + comfort mode + light reactions + 72 Hz request.'
   );
 }
 
