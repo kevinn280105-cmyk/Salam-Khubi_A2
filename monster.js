@@ -3,8 +3,8 @@
 
    Event:
    - Enter bedroom.
-   - Physically grab Teddy at least once.
-   - Leave bedroom.
+   - Physically grab Teddy and KEEP HOLDING it.
+   - Leave bedroom while Teddy is still being held.
    - walking.glb appears at its baked Blender world position.
    - Its walk animation plays once, then it disappears.
    - Happens only once.
@@ -1204,10 +1204,12 @@ AFRAME.registerComponent(
     markTeddyGrabbed:
       function () {
         /*
-          Remember permanently.
+          Remember permanently that Teddy has been
+          physically grabbed at least once.
 
-          Teddy does NOT need to still be held
-          when the player leaves.
+          This is kept for debug/history only.
+          The walking monster now requires Teddy to
+          STILL be held when the player leaves.
         */
 
         if (
@@ -1419,7 +1421,7 @@ AFRAME.registerComponent(
 
           {
             reason:
-              'left-bedroom-after-teddy'
+              'left-bedroom-holding-teddy'
           },
 
           false
@@ -1427,7 +1429,7 @@ AFRAME.registerComponent(
 
 
         console.log(
-          'MONSTER: walking.glb triggered after leaving the bedroom.'
+          'MONSTER: walking.glb triggered after leaving the bedroom while holding Teddy.'
         );
 
 
@@ -1567,8 +1569,8 @@ AFRAME.registerComponent(
 
            inside -> outside
 
-           Only trigger if Teddy has actually
-           been physically grabbed.
+           Only trigger if Teddy is CURRENTLY
+           being physically held while leaving.
         ---------------------------------------------------- */
 
         if (
@@ -1580,9 +1582,7 @@ AFRAME.registerComponent(
             .roomsMonsterState
             .hasEnteredBedroom &&
 
-          window
-            .roomsMonsterState
-            .teddyGrabbed &&
+          roomsMonsterTeddyIsGrabbed() &&
 
           !window
             .roomsMonsterState
