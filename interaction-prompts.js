@@ -1,12 +1,25 @@
 /* interaction-prompts.js — ROOMS WITHIN
    Full replacement.
 
+   UNIVERSAL WORLD INTERACTION PROMPT:
+   - interaction-prompts.js is the ONLY visible world interaction prompt system.
+   - In Quest, point the RIGHT controller laser at an interactable object.
+   - On Mac, point the centre crosshair at an interactable object.
+   - One camera-attached action prompt appears near the reticle.
+   - Point away and the action prompt disappears.
+
+   Current action prompts:
+   - Teddy = INSPECT TEDDY BEAR.
+   - Hair Clipper = INSPECT HAIR CLIPPER.
+   - Picture = INSPECT PICTURE.
+   - TV = TURN ON TV / TURN OFF TV.
+   - Altar = LIGHT THE INCENSE.
+
    Quest-item description behavior:
    - DO NOT click or press Trigger to open a description.
-   - Point the Quest right-controller laser at Teddy / Hair Clipper / Picture.
-   - On Mac, keep the centre crosshair pointed at the item.
-   - After about 1.5 seconds of continuous hover, a small description card
-     appears BESIDE the real object in the room.
+   - Keep pointing at Teddy / Hair Clipper / Picture for about 1.5 seconds.
+   - The central INSPECT prompt then hides and a small description card appears
+     BESIDE the real object in the room.
    - Look / point away and the description disappears.
    - No game pause.
    - No blackout.
@@ -16,10 +29,6 @@
    - Mac click still physically picks up / drops the object.
    - The checklist is NOT completed by hovering. story.js still checks an
      item only after it has been physically grabbed and placed on #truocbantho.
-
-   Other hover / aim prompts:
-   - TV = TURN ON TV / TURN OFF TV.
-   - Altar = LIGHT THE INCENSE.
 */
 
 const ROOMS_QUEST_ITEMS = [
@@ -145,19 +154,28 @@ function roomsSetVisible(el, visible) {
 
 function roomsMatches(el, selector) {
   if (!el || !selector || !el.matches) return false;
+
   try {
     return el.matches(selector);
+
   } catch (error) {
     return false;
   }
 }
 
 function roomsCreateEntity(tag, attrs = {}) {
-  const el = document.createElement(tag);
+  const el =
+    document.createElement(tag);
 
-  Object.entries(attrs).forEach(([name, value]) => {
-    el.setAttribute(name, value);
-  });
+  Object.entries(attrs)
+    .forEach(
+      ([name, value]) => {
+        el.setAttribute(
+          name,
+          value
+        );
+      }
+    );
 
   return el;
 }
@@ -170,17 +188,32 @@ function roomsCreateText(
   color = '#ffffff',
   wrapCount = 32
 ) {
-  return roomsCreateEntity('a-text', {
-    value: value || '',
-    position,
-    width,
-    align,
-    color,
-    'wrap-count': String(wrapCount),
-    side: 'double',
-    material:
-      'shader: flat; depthTest: false; depthWrite: false'
-  });
+  return roomsCreateEntity(
+    'a-text',
+    {
+      value:
+        value || '',
+
+      position,
+
+      width,
+
+      align,
+
+      color,
+
+      'wrap-count':
+        String(
+          wrapCount
+        ),
+
+      side:
+        'double',
+
+      material:
+        'shader: flat; depthTest: false; depthWrite: false'
+    }
+  );
 }
 
 
@@ -188,20 +221,37 @@ function roomsCreateText(
    QUEST ITEM INVISIBLE AIM HITBOXES
 ============================================================ */
 
-function roomsGetEntityLocalModelBox(entity) {
-  if (!entity) return null;
+function roomsGetEntityLocalModelBox(
+  entity
+) {
+  if (!entity) {
+    return null;
+  }
 
   const root =
-    entity.getObject3D('mesh');
+    entity.getObject3D(
+      'mesh'
+    );
 
-  if (!root) return null;
+  if (!root) {
+    return null;
+  }
 
-  entity.object3D.updateMatrixWorld(true);
-  root.updateMatrixWorld(true);
+  entity.object3D
+    .updateMatrixWorld(
+      true
+    );
+
+  root.updateMatrixWorld(
+    true
+  );
 
   const inverseEntityWorld =
     new THREE.Matrix4()
-      .copy(entity.object3D.matrixWorld)
+      .copy(
+        entity.object3D
+          .matrixWorld
+      )
       .invert();
 
   const box =
@@ -209,37 +259,47 @@ function roomsGetEntityLocalModelBox(entity) {
 
   box.makeEmpty();
 
-  root.traverse((node) => {
-    if (
-      !node.isMesh ||
-      !node.geometry
-    ) {
-      return;
+  root.traverse(
+    (node) => {
+      if (
+        !node.isMesh ||
+        !node.geometry
+      ) {
+        return;
+      }
+
+      if (
+        !node.geometry
+          .boundingBox
+      ) {
+        node.geometry
+          .computeBoundingBox();
+      }
+
+      if (
+        !node.geometry
+          .boundingBox
+      ) {
+        return;
+      }
+
+      const toEntityLocal =
+        new THREE.Matrix4()
+          .multiplyMatrices(
+            inverseEntityWorld,
+            node.matrixWorld
+          );
+
+      box.union(
+        node.geometry
+          .boundingBox
+          .clone()
+          .applyMatrix4(
+            toEntityLocal
+          )
+      );
     }
-
-    if (!node.geometry.boundingBox) {
-      node.geometry.computeBoundingBox();
-    }
-
-    if (!node.geometry.boundingBox) {
-      return;
-    }
-
-    const toEntityLocal =
-      new THREE.Matrix4()
-        .multiplyMatrices(
-          inverseEntityWorld,
-          node.matrixWorld
-        );
-
-    box.union(
-      node.geometry.boundingBox
-        .clone()
-        .applyMatrix4(
-          toEntityLocal
-        )
-    );
-  });
+  );
 
   return box.isEmpty()
     ? null
@@ -247,7 +307,9 @@ function roomsGetEntityLocalModelBox(entity) {
 }
 
 
-function roomsQuestHitboxSettings(item) {
+function roomsQuestHitboxSettings(
+  item
+) {
   if (!item) {
     return {
       scale: 1.55,
@@ -257,7 +319,10 @@ function roomsQuestHitboxSettings(item) {
     };
   }
 
-  if (item.key === 'teddy') {
+  if (
+    item.key ===
+    'teddy'
+  ) {
     return {
       scale: 1.70,
       minX: 0.30,
@@ -266,7 +331,10 @@ function roomsQuestHitboxSettings(item) {
     };
   }
 
-  if (item.key === 'hair-clipper') {
+  if (
+    item.key ===
+    'hair-clipper'
+  ) {
     return {
       scale: 1.75,
       minX: 0.24,
@@ -275,7 +343,10 @@ function roomsQuestHitboxSettings(item) {
     };
   }
 
-  if (item.key === 'picture') {
+  if (
+    item.key ===
+    'picture'
+  ) {
     return {
       scale: 1.45,
       minX: 0.28,
@@ -293,9 +364,13 @@ function roomsQuestHitboxSettings(item) {
 }
 
 
-function roomsCreateOrUpdateQuestHitbox(entity) {
+function roomsCreateOrUpdateQuestHitbox(
+  entity
+) {
   const item =
-    roomsGetQuestItemForEntity(entity);
+    roomsGetQuestItemForEntity(
+      entity
+    );
 
   if (
     !entity ||
@@ -304,7 +379,8 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
     return null;
   }
 
-  let hitbox = null;
+  let hitbox =
+    null;
 
   for (
     const child of
@@ -312,11 +388,14 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
   ) {
     if (
       child.classList &&
-      child.classList.contains(
-        'quest-hover-hitbox'
-      )
+      child.classList
+        .contains(
+          'quest-hover-hitbox'
+        )
     ) {
-      hitbox = child;
+      hitbox =
+        child;
+
       break;
     }
   }
@@ -419,12 +498,15 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
 
   hitbox.object3D
     .position
-    .copy(center);
+    .copy(
+      center
+    );
 
   hitbox.setAttribute(
     'width',
     Math.max(
-      size.x * settings.scale,
+      size.x *
+        settings.scale,
       settings.minX
     )
   );
@@ -432,7 +514,8 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
   hitbox.setAttribute(
     'height',
     Math.max(
-      size.y * settings.scale,
+      size.y *
+        settings.scale,
       settings.minY
     )
   );
@@ -440,7 +523,8 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
   hitbox.setAttribute(
     'depth',
     Math.max(
-      size.z * settings.scale,
+      size.z *
+        settings.scale,
       settings.minZ
     )
   );
@@ -453,7 +537,9 @@ function roomsCreateOrUpdateQuestHitbox(entity) {
    QUEST ITEM LOOKUP
 ============================================================ */
 
-function roomsGetQuestItemForEntity(el) {
+function roomsGetQuestItemForEntity(
+  el
+) {
   if (!el) {
     return null;
   }
@@ -463,13 +549,14 @@ function roomsGetQuestItemForEntity(el) {
     ROOMS_QUEST_ITEMS
   ) {
     if (
-      item.selectors.some(
-        (selector) =>
-          roomsMatches(
-            el,
-            selector
-          )
-      )
+      item.selectors
+        .some(
+          (selector) =>
+            roomsMatches(
+              el,
+              selector
+            )
+        )
     ) {
       return item;
     }
@@ -479,7 +566,9 @@ function roomsGetQuestItemForEntity(el) {
 }
 
 
-function roomsFindQuestAncestor(el) {
+function roomsFindQuestAncestor(
+  el
+) {
   let current =
     el;
 
@@ -519,7 +608,8 @@ function roomsIntersectionQuestTarget(
 
   if (
     intersection.el &&
-    intersection.el.nodeType === 1
+    intersection.el.nodeType ===
+      1
   ) {
     const quest =
       roomsFindQuestAncestor(
@@ -537,7 +627,8 @@ function roomsIntersectionQuestTarget(
   while (object) {
     if (
       object.el &&
-      object.el.nodeType === 1
+      object.el.nodeType ===
+        1
     ) {
       const quest =
         roomsFindQuestAncestor(
@@ -557,11 +648,14 @@ function roomsIntersectionQuestTarget(
 }
 
 
-function roomsGetRayTarget(rayEntity) {
+function roomsGetRayTarget(
+  rayEntity
+) {
   if (
     !rayEntity ||
     !rayEntity.components ||
-    !rayEntity.components.raycaster
+    !rayEntity.components
+      .raycaster
   ) {
     return null;
   }
@@ -573,7 +667,8 @@ function roomsGetRayTarget(rayEntity) {
   if (
     raycaster.refreshObjects
   ) {
-    raycaster.refreshObjects();
+    raycaster
+      .refreshObjects();
   }
 
   for (
@@ -628,12 +723,16 @@ function roomsAppendRaySelector(
     String(
       data.objects || ''
     )
-      .split(',')
+      .split(
+        ','
+      )
       .map(
         (value) =>
           value.trim()
       )
-      .filter(Boolean);
+      .filter(
+        Boolean
+      );
 
   if (
     !selectors.includes(
@@ -648,27 +747,33 @@ function roomsAppendRaySelector(
   rayEntity.setAttribute(
     'raycaster',
     'objects',
-    selectors.join(', ')
+    selectors.join(
+      ', '
+    )
   );
 
   const component =
     rayEntity.components &&
-    rayEntity.components.raycaster;
+    rayEntity.components
+      .raycaster;
 
   if (
     component &&
     component.refreshObjects
   ) {
-    component.refreshObjects();
+    component
+      .refreshObjects();
   }
 }
 
 
 /* ============================================================
-   TV / INCENSE PROMPTS
+   UNIVERSAL ACTION-PROMPT TARGETS
 ============================================================ */
 
-function roomsActionTypeForElement(el) {
+function roomsActionTypeForElement(
+  el
+) {
   let current =
     el;
 
@@ -680,12 +785,14 @@ function roomsActionTypeForElement(el) {
       'a-scene'
   ) {
     if (
-      current.id === 'tv' ||
+      current.id ===
+        'tv' ||
       (
         current.classList &&
-        current.classList.contains(
-          'tv-interactable'
-        )
+        current.classList
+          .contains(
+            'tv-interactable'
+          )
       )
     ) {
       return 'tv';
@@ -699,12 +806,14 @@ function roomsActionTypeForElement(el) {
       (
         current.classList &&
         (
-          current.classList.contains(
-            'offering-smoke-hitbox'
-          ) ||
-          current.classList.contains(
-            'offering-smoke-interactable'
-          )
+          current.classList
+            .contains(
+              'offering-smoke-hitbox'
+            ) ||
+          current.classList
+            .contains(
+              'offering-smoke-interactable'
+            )
         )
       )
     ) {
@@ -728,7 +837,8 @@ function roomsActionTypeFromIntersection(
 
   if (
     intersection.el &&
-    intersection.el.nodeType === 1
+    intersection.el.nodeType ===
+      1
   ) {
     const type =
       roomsActionTypeForElement(
@@ -746,7 +856,8 @@ function roomsActionTypeFromIntersection(
   while (object) {
     if (
       object.el &&
-      object.el.nodeType === 1
+      object.el.nodeType ===
+        1
     ) {
       const type =
         roomsActionTypeForElement(
@@ -772,7 +883,8 @@ function roomsGetActionTarget(
   if (
     !rayEntity ||
     !rayEntity.components ||
-    !rayEntity.components.raycaster
+    !rayEntity.components
+      .raycaster
   ) {
     return null;
   }
@@ -784,11 +896,13 @@ function roomsGetActionTarget(
   if (
     raycaster.refreshObjects
   ) {
-    raycaster.refreshObjects();
+    raycaster
+      .refreshObjects();
   }
 
   const intersections =
-    raycaster.intersections || [];
+    raycaster.intersections ||
+    [];
 
   if (
     !intersections.length
@@ -914,14 +1028,43 @@ function roomsGetActionPromptText(
   }
 
   /*
-    Quest-item text is handled by the delayed world-space hover card.
+    Quest items use the SAME central interaction prompt as TV / incense.
+
+    While first aiming:
+      INSPECT TEDDY BEAR
+      INSPECT HAIR CLIPPER
+      INSPECT PICTURE
+
+    After the 1.5 second dwell description opens for this SAME item,
+    hide the central INSPECT prompt so the player sees one clean
+    description card instead of two overlapping pieces of interaction text.
   */
   if (
     target.type ===
       'quest-item' &&
     target.item
   ) {
-    return '';
+    const descriptionOpenForThisItem =
+      Boolean(
+        roomsPromptState
+          .hoverVisible &&
+        roomsPromptState
+          .hoverItem &&
+        roomsPromptState
+          .hoverItem
+          .key ===
+          target.item.key
+      );
+
+    if (
+      descriptionOpenForThisItem
+    ) {
+      return '';
+    }
+
+    return (
+      `INSPECT ${target.item.title}`
+    );
   }
 
   if (
@@ -986,181 +1129,193 @@ function roomsHideLegacyIncenseTooltip() {
 AFRAME.registerComponent(
   'rooms-object-info-ui',
   {
-    init: function () {
-      this.scene =
-        this.el.sceneEl;
+    init:
+      function () {
+        this.scene =
+          this.el.sceneEl;
 
-      this.camera =
-        null;
+        this.camera =
+          null;
 
-      this.desktopCursor =
-        null;
+        this.desktopCursor =
+          null;
 
-      this.rightHand =
-        null;
+        this.rightHand =
+          null;
 
-      this.questRoot =
-        null;
+        this.questRoot =
+          null;
 
-      this.questRows =
-        new Map();
+        this.questRows =
+          new Map();
 
-      this.actionRoot =
-        null;
+        this.actionRoot =
+          null;
 
-      this.actionText =
-        null;
+        this.actionText =
+          null;
 
-      this.actionPromptLabel =
-        '';
+        this.actionPromptLabel =
+          '';
 
-      this.actionScanElapsed =
-        0;
+        this.actionScanElapsed =
+          0;
 
-      this.hoverRoot =
-        null;
+        this.hoverRoot =
+          null;
 
-      this.hoverTitle =
-        null;
+        this.hoverTitle =
+          null;
 
-      this.hoverDescription =
-        null;
+        this.hoverDescription =
+          null;
 
-      this.hoverBox =
-        new THREE.Box3();
+        this.hoverBox =
+          new THREE.Box3();
 
-      this.hoverCenter =
-        new THREE.Vector3();
+        this.hoverCenter =
+          new THREE.Vector3();
 
-      this.hoverCameraWorld =
-        new THREE.Vector3();
+        this.hoverCameraWorld =
+          new THREE.Vector3();
 
-      this.hoverCameraRight =
-        new THREE.Vector3();
+        this.hoverCameraRight =
+          new THREE.Vector3();
 
-      this.hoverCameraQuaternion =
-        new THREE.Quaternion();
+        this.hoverCameraQuaternion =
+          new THREE.Quaternion();
 
-      this.hoverToObject =
-        new THREE.Vector3();
+        this.hoverToObject =
+          new THREE.Vector3();
 
-      this.hoverWorldPosition =
-        new THREE.Vector3();
+        this.hoverWorldPosition =
+          new THREE.Vector3();
 
-      this.boundQuestEntities =
-        new Set();
+        this.boundQuestEntities =
+          new Set();
 
-      this.onPauseChanged =
-        this.onPauseChanged.bind(
-          this
-        );
-
-      this.onEnterVR =
-        this.onEnterVR.bind(
-          this
-        );
-
-      this.onExitVR =
-        this.onExitVR.bind(
-          this
-        );
-
-      this.prepare =
-        this.prepare.bind(
-          this
-        );
-
-      roomsPromptState.system =
-        this;
-
-      if (
-        this.scene.hasLoaded
-      ) {
-        this.prepare();
-
-      } else {
-        this.scene.addEventListener(
-          'loaded',
-          this.prepare,
-          {
-            once:
-              true
-          }
-        );
-      }
-    },
-        prepare: function () {
-      this.camera =
-        document.querySelector(
-          '#cam'
-        ) ||
-        document.querySelector(
-          '[camera]'
-        );
-
-      this.desktopCursor =
-        this.camera
-          ? this.camera.querySelector(
-              'a-cursor'
-            )
-          : document.querySelector(
-              'a-cursor'
+        this.onPauseChanged =
+          this.onPauseChanged
+            .bind(
+              this
             );
 
-      this.rightHand =
-        document.querySelector(
-          '#rightHand'
-        );
+        this.onEnterVR =
+          this.onEnterVR
+            .bind(
+              this
+            );
 
-      if (!this.camera) {
-        console.warn(
-          'Rooms Within interaction UI: #cam was not found.'
-        );
+        this.onExitVR =
+          this.onExitVR
+            .bind(
+              this
+            );
 
-        return;
-      }
+        this.prepare =
+          this.prepare
+            .bind(
+              this
+            );
 
-      this.buildQuestUI();
+        roomsPromptState
+          .system =
+          this;
 
-      this.buildActionPrompt();
+        if (
+          this.scene.hasLoaded
+        ) {
+          this.prepare();
 
-      this.buildHoverDescriptionUI();
-
-      this.expandRaycasters();
-
-      this.bindQuestItemClicks();
-
-      this.attachListeners();
-
-      this.updateQuestUI();
-
-      this.syncQuestVisibility();
-
-      [
-        50,
-        250,
-        600,
-        1200
-      ].forEach(
-        (delay) => {
-          window.setTimeout(
-            () => {
-              this.expandRaycasters();
-
-              this.bindQuestItemClicks();
-
-              this.syncQuestVisibility();
-            },
-
-            delay
-          );
+        } else {
+          this.scene
+            .addEventListener(
+              'loaded',
+              this.prepare,
+              {
+                once:
+                  true
+              }
+            );
         }
-      );
+      },
 
-      console.log(
-        'Rooms Within hover descriptions ready.'
-      );
-    },
+
+    prepare:
+      function () {
+        this.camera =
+          document.querySelector(
+            '#cam'
+          ) ||
+          document.querySelector(
+            '[camera]'
+          );
+
+        this.desktopCursor =
+          this.camera
+            ? this.camera
+                .querySelector(
+                  'a-cursor'
+                )
+            : document
+                .querySelector(
+                  'a-cursor'
+                );
+
+        this.rightHand =
+          document.querySelector(
+            '#rightHand'
+          );
+
+        if (!this.camera) {
+          console.warn(
+            'Rooms Within interaction UI: #cam was not found.'
+          );
+
+          return;
+        }
+
+        this.buildQuestUI();
+
+        this.buildActionPrompt();
+
+        this.buildHoverDescriptionUI();
+
+        this.expandRaycasters();
+
+        this.bindQuestItemClicks();
+
+        this.attachListeners();
+
+        this.updateQuestUI();
+
+        this.syncQuestVisibility();
+
+        [
+          50,
+          250,
+          600,
+          1200
+        ].forEach(
+          (delay) => {
+            window.setTimeout(
+              () => {
+                this.expandRaycasters();
+
+                this.bindQuestItemClicks();
+
+                this.syncQuestVisibility();
+              },
+
+              delay
+            );
+          }
+        );
+
+        console.log(
+          'Rooms Within universal interaction prompts and hover descriptions ready.'
+        );
+      },
 
 
     /* ========================================================
@@ -1218,7 +1373,9 @@ AFRAME.registerComponent(
           '#picture-frame',
           '.quest-item',
           '[data-quest-item]'
-        ].join(', ');
+        ].join(
+          ', '
+        );
 
         document
           .querySelectorAll(
@@ -1228,7 +1385,9 @@ AFRAME.registerComponent(
             (entity) => {
               if (
                 this.boundQuestEntities
-                  .has(entity) ||
+                  .has(
+                    entity
+                  ) ||
                 !roomsGetQuestItemForEntity(
                   entity
                 )
@@ -1262,7 +1421,9 @@ AFRAME.registerComponent(
               }
 
               this.boundQuestEntities
-                .add(entity);
+                .add(
+                  entity
+                );
             }
           );
       },
@@ -1270,20 +1431,23 @@ AFRAME.registerComponent(
 
     attachListeners:
       function () {
-        this.scene.addEventListener(
-          'rooms-pause-changed',
-          this.onPauseChanged
-        );
+        this.scene
+          .addEventListener(
+            'rooms-pause-changed',
+            this.onPauseChanged
+          );
 
-        this.scene.addEventListener(
-          'enter-vr',
-          this.onEnterVR
-        );
+        this.scene
+          .addEventListener(
+            'enter-vr',
+            this.onEnterVR
+          );
 
-        this.scene.addEventListener(
-          'exit-vr',
-          this.onExitVR
-        );
+        this.scene
+          .addEventListener(
+            'exit-vr',
+            this.onExitVR
+          );
       },
 
 
@@ -1302,7 +1466,8 @@ AFRAME.registerComponent(
           old.remove();
         }
 
-        this.questRows.clear();
+        this.questRows
+          .clear();
 
         const root =
           roomsCreateEntity(
@@ -1501,19 +1666,21 @@ AFRAME.registerComponent(
                 row
               );
 
-              this.questRows.set(
-                item.key,
-                {
-                  emptyCircle,
-                  check
-                }
-              );
+              this.questRows
+                .set(
+                  item.key,
+                  {
+                    emptyCircle,
+                    check
+                  }
+                );
             }
           );
 
-        this.camera.appendChild(
-          root
-        );
+        this.camera
+          .appendChild(
+            root
+          );
 
         this.questRoot =
           root;
@@ -1521,7 +1688,11 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
-       TV / INCENSE ACTION PROMPT
+       UNIVERSAL WORLD ACTION PROMPT
+
+       Quest right-controller laser / Mac centre crosshair.
+       One prompt surface is reused for every supported manual
+       world interaction.
     ======================================================== */
 
     buildActionPrompt:
@@ -1586,9 +1757,10 @@ AFRAME.registerComponent(
           this.actionText
         );
 
-        this.camera.appendChild(
-          root
-        );
+        this.camera
+          .appendChild(
+            root
+          );
 
         this.actionRoot =
           root;
@@ -1596,7 +1768,9 @@ AFRAME.registerComponent(
 
 
     setActionPrompt:
-      function (label) {
+      function (
+        label
+      ) {
         const nextLabel =
           String(
             label || ''
@@ -1643,6 +1817,10 @@ AFRAME.registerComponent(
 
     updateActionPrompt:
       function () {
+        /*
+          Defensive cleanup for old incense.js versions.
+          The universal prompt below is the one we keep.
+        */
         roomsHideLegacyIncenseTooltip();
 
         if (
@@ -1829,22 +2007,22 @@ AFRAME.registerComponent(
 
         roomsPromptState
           .hoverVisible =
-            false;
+          false;
 
         if (
           resetTarget
         ) {
           roomsPromptState
             .hoverEntity =
-              null;
+            null;
 
           roomsPromptState
             .hoverItem =
-              null;
+            null;
 
           roomsPromptState
             .hoverStartedAt =
-              0;
+            0;
         }
       },
 
@@ -1876,15 +2054,15 @@ AFRAME.registerComponent(
 
         roomsPromptState
           .hoverEntity =
-            entity;
+          entity;
 
         roomsPromptState
           .hoverItem =
-            item;
+          item;
 
         roomsPromptState
           .hoverVisible =
-            true;
+          true;
 
         /*
           This records that the player has SEEN the description.
@@ -1901,6 +2079,15 @@ AFRAME.registerComponent(
         roomsSetVisible(
           this.hoverRoot,
           true
+        );
+
+        /*
+          Immediately hide the central INSPECT prompt.
+          The description itself now becomes the only visible
+          text associated with this item.
+        */
+        this.setActionPrompt(
+          ''
         );
 
         return true;
@@ -1990,9 +2177,11 @@ AFRAME.registerComponent(
           closer to the centre of the player's view.
         */
         const side =
-          this.hoverToObject.dot(
-            this.hoverCameraRight
-          ) > 0
+          this.hoverToObject
+            .dot(
+              this.hoverCameraRight
+            ) >
+          0
             ? -1
             : 1;
 
@@ -2033,11 +2222,12 @@ AFRAME.registerComponent(
             );
 
         const scale =
-          THREE.MathUtils.clamp(
-            distance / 1.65,
-            0.72,
-            1.25
-          );
+          THREE.MathUtils
+            .clamp(
+              distance / 1.65,
+              0.72,
+              1.25
+            );
 
         this.hoverRoot.object3D
           .scale
@@ -2113,19 +2303,20 @@ AFRAME.registerComponent(
 
           roomsPromptState
             .hoverEntity =
-              target;
+            target;
 
           roomsPromptState
             .hoverItem =
-              item;
+            item;
 
           roomsPromptState
             .hoverStartedAt =
-              time;
+            time;
 
           return;
         }
-                /*
+
+        /*
           Same item:
           wait until 1.5 seconds of continuous pointing has passed.
         */
@@ -2162,7 +2353,9 @@ AFRAME.registerComponent(
     ======================================================== */
 
     onPauseChanged:
-      function (event) {
+      function (
+        event
+      ) {
         const paused =
           Boolean(
             event &&
@@ -2244,15 +2437,15 @@ AFRAME.registerComponent(
 
         roomsPromptState
           .hoverEntity =
-            entity;
+          entity;
 
         roomsPromptState
           .hoverItem =
-            item;
+          item;
 
         roomsPromptState
           .hoverStartedAt =
-            performance.now();
+          performance.now();
 
         return this
           .showHoverDescription(
@@ -2270,15 +2463,15 @@ AFRAME.registerComponent(
 
         roomsPromptState
           .inspectionOpen =
-            false;
+          false;
 
         roomsPromptState
           .inspectedEntity =
-            null;
+          null;
 
         roomsPromptState
           .inspectedItem =
-            null;
+          null;
 
         window.roomsInspectionOpen =
           false;
@@ -2330,7 +2523,8 @@ AFRAME.registerComponent(
         }
 
         const shouldCheck =
-          checked !== false;
+          checked !==
+          false;
 
         const wasChecked =
           roomsPromptState
@@ -2441,7 +2635,9 @@ AFRAME.registerComponent(
 
 
     markQuestItemFound:
-      function (item) {
+      function (
+        item
+      ) {
         return this
           .setQuestItemChecked(
             item,
@@ -2526,6 +2722,10 @@ AFRAME.registerComponent(
         time,
         delta
       ) {
+        /*
+          Always suppress the old incense tooltip if an old
+          incense.js happens to create it.
+        */
         roomsHideLegacyIncenseTooltip();
 
         if (!delta) {
@@ -2559,11 +2759,16 @@ AFRAME.registerComponent(
         this.actionScanElapsed =
           0;
 
-        this.updateActionPrompt();
-
+        /*
+          First update the hover state so that if the
+          description just opened, the central INSPECT
+          prompt can be hidden immediately afterward.
+        */
         this.updateHoverDescription(
           time
         );
+
+        this.updateActionPrompt();
       },
 
 
@@ -2580,11 +2785,12 @@ AFRAME.registerComponent(
                 entity
                   .__roomsQuestHitboxRefresh
               ) {
-                entity.removeEventListener(
-                  'model-loaded',
-                  entity
-                    .__roomsQuestHitboxRefresh
-                );
+                entity
+                  .removeEventListener(
+                    'model-loaded',
+                    entity
+                      .__roomsQuestHitboxRefresh
+                  );
 
                 delete entity
                   .__roomsQuestHitboxRefresh;
@@ -2623,7 +2829,8 @@ AFRAME.registerComponent(
 
         if (
           this.hoverRoot &&
-          this.hoverRoot.parentNode
+          this.hoverRoot
+            .parentNode
         ) {
           this.hoverRoot
             .parentNode
@@ -2636,10 +2843,45 @@ AFRAME.registerComponent(
           null;
 
         if (
-          roomsPromptState.system ===
+          this.actionRoot &&
+          this.actionRoot
+            .parentNode
+        ) {
+          this.actionRoot
+            .parentNode
+            .removeChild(
+              this.actionRoot
+            );
+        }
+
+        this.actionRoot =
+          null;
+
+        this.actionText =
+          null;
+
+        if (
+          this.questRoot &&
+          this.questRoot
+            .parentNode
+        ) {
+          this.questRoot
+            .parentNode
+            .removeChild(
+              this.questRoot
+            );
+        }
+
+        this.questRoot =
+          null;
+
+        if (
+          roomsPromptState
+            .system ===
           this
         ) {
-          roomsPromptState.system =
+          roomsPromptState
+            .system =
             null;
         }
       }
