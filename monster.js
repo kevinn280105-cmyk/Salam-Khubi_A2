@@ -4,16 +4,24 @@
    Event:
    - Enter bedroom.
    - Physically grab Teddy and KEEP HOLDING it.
-   - Leave bedroom while Teddy is still being held.
+   - The bedroom door is #door / cua.glb.
+   - Door opens normally through the existing door system.
+   - Walk THROUGH the open doorway while still holding Teddy.
    - walking.glb appears at its baked Blender world position.
    - Its walk animation plays once, then it disappears.
    - Happens only once.
+
+   IMPORTANT:
+   - Bedroom bounds are kept only for debug / story awareness.
+   - The monster scare is triggered by crossing the actual door plane,
+     not by leaving the bedroom GLB bounding box.
 
    standing.glb is loaded hidden for a later event.
 ============================================================ */
 
 const ROOMS_MONSTER_CONFIG = {
   bedroomSelector: '#bedroom',
+  doorSelector: '#door',
   playerSelector: '#cam',
   teddySelector: '#teddy',
 
@@ -28,6 +36,24 @@ const ROOMS_MONSTER_CONFIG = {
   */
   bedroomInsetX: 0.18,
   bedroomInsetZ: 0.18,
+
+  /*
+    Door-crossing detection.
+
+    doorCrossPadding:
+    Adds a little forgiveness to the width of the doorway.
+
+    doorSideEpsilon:
+    Small dead-zone around the exact door plane so tiny headset
+    movements do not count as crossing.
+
+    maxDoorCrossDistance:
+    Stops a very large teleport/jump from being mistaken for
+    physically walking through the doorway.
+  */
+  doorCrossPadding: 0.35,
+  doorSideEpsilon: 0.05,
+  maxDoorCrossDistance: 1.5,
 
   /*
     Check player position every 100ms.
@@ -69,7 +95,19 @@ window.roomsMonsterState = {
 
   standingModelReady: false,
 
-  bedroomReady: false
+  bedroomReady: false,
+
+  doorReady: false,
+
+  doorOpen: false,
+
+  doorSide: 0,
+
+  teddyCurrentlyHeld: false,
+
+  teddyOriginDoorSide: 0,
+
+  doorCrossArmed: false
 };
 
 
@@ -715,6 +753,9 @@ AFRAME.registerComponent(
       this.bedroom =
         null;
 
+      this.door =
+        null;
+
       this.teddy =
         null;
 
@@ -725,21 +766,74 @@ AFRAME.registerComponent(
         null;
 
 
+      /*
+        Bedroom box is kept for debug / story awareness only.
+
+        It is NOT what activates walking.glb anymore.
+      */
+
       this.bedroomBox =
         new THREE.Box3();
+
+
+      /*
+        Fixed CLOSED-door box.
+
+        We prefer the cached box created by auto-door-proximity,
+        because that box stays in the doorway even while cua.glb
+        swings open.
+      */
+
+      this.doorBox =
+        new THREE.Box3();
+
+      this.doorCenter =
+        new THREE.Vector3();
+
+      this.doorSize =
+        new THREE.Vector3();
+
+      this.doorNormalAxis =
+        null;
+
+      this.doorLateralAxis =
+        null;
 
 
       this.playerWorld =
         new THREE.Vector3();
 
+      this.previousPlayerWorld =
+        new THREE.Vector3();
+
+      this.hasPreviousPlayerWorld =
+        false;
+
 
       this.lastCheck =
         0;
 
+      this.lastPrepareAttempt =
+        0;
+
 
       /*
-        null =
-        we have not sampled the player's room position yet.
+        First stable side of the doorway where Teddy was picked up.
+
+        Example:
+          bedroom side = +1
+          hallway side = -1
+
+        The exact sign does not matter. We only care that the player
+        later crosses to the opposite side while still holding Teddy.
+      */
+
+      this.teddyOriginDoorSide =
+        0;
+
+
+      /*
+        Bedroom state remains for debug / compatibility.
       */
 
       this.previousInside =
@@ -749,6 +843,22 @@ AFRAME.registerComponent(
       this.onBedroomModelLoaded =
         this
           .onBedroomModelLoaded
+          .bind(
+            this
+          );
+
+
+      this.onDoorModelLoaded =
+        this
+          .onDoorModelLoaded
+          .bind(
+            this
+          );
+
+
+      this.onDoorReady =
+        this
+          .onDoorReady
           .bind(
             this
           );
@@ -776,7 +886,7 @@ AFRAME.registerComponent(
 
 
       /*
-        Find bedroom / Teddy.
+        Find bedroom / door / Teddy.
       */
 
       this.prepare();
@@ -853,11 +963,8 @@ AFRAME.registerComponent(
 
             Do NOT manually move it.
 
-            You told me walking.glb already has
-            the intended scene position baked into Blender,
-            beside / left of bantho.
-
-            So it stays:
+            walking.glb already has the intended scene position
+            baked into Blender.
           */
 
           walking.setAttribute(
@@ -992,7 +1099,7 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
-       FIND BEDROOM + TEDDY
+       FIND BEDROOM + DOOR + TEDDY
     ======================================================== */
 
     prepare:
@@ -1047,6 +1154,61 @@ AFRAME.registerComponent(
         ) {
           this.updateBedroomBox();
         }
+
+
+
+        const door =
+          document.querySelector(
+            ROOMS_MONSTER_CONFIG
+              .doorSelector
+          );
+
+
+        if (
+          door &&
+          door !==
+            this.door
+        ) {
+          if (
+            this.door
+          ) {
+            this.door
+              .removeEventListener(
+                'model-loaded',
+                this
+                  .onDoorModelLoaded
+              );
+
+            this.door
+              .removeEventListener(
+                'rooms-door-ready',
+                this
+                  .onDoorReady
+              );
+          }
+
+
+          this.door =
+            door;
+
+
+          this.door
+            .addEventListener(
+              'model-loaded',
+              this
+                .onDoorModelLoaded
+            );
+
+          this.door
+            .addEventListener(
+              'rooms-door-ready',
+              this
+                .onDoorReady
+            );
+        }
+
+
+        this.prepareDoorTrigger();
 
 
 
@@ -1115,7 +1277,26 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
+       DOOR MODEL / HINGE READY
+    ======================================================== */
+
+    onDoorModelLoaded:
+      function () {
+        this.prepareDoorTrigger();
+      },
+
+
+    onDoorReady:
+      function () {
+        this.prepareDoorTrigger();
+      },
+
+
+    /* ========================================================
        BEDROOM BOUNDARY
+
+       Kept only for debug / compatibility.
+       It does NOT trigger the monster anymore.
     ======================================================== */
 
     updateBedroomBox:
@@ -1151,17 +1332,155 @@ AFRAME.registerComponent(
           true;
 
 
+        return true;
+      },
+
+
+    /* ========================================================
+       PREPARE FIXED CUA.GLB DOORWAY
+    ======================================================== */
+
+    prepareDoorTrigger:
+      function () {
+        if (
+          !this.door
+        ) {
+          window
+            .roomsMonsterState
+            .doorReady =
+            false;
+
+          return false;
+        }
+
+
+        let sourceBox =
+          null;
+
+
+        /*
+          BEST SOURCE:
+
+          auto-door-proximity already caches the CLOSED door box
+          before the door leaf moves.
+        */
+
+        const autoDoor =
+          this.door.components &&
+          this.door.components[
+            'auto-door-proximity'
+          ];
+
+
+        if (
+          autoDoor &&
+          autoDoor.closedDoorBox &&
+          !autoDoor.closedDoorBox
+            .isEmpty()
+        ) {
+          sourceBox =
+            autoDoor.closedDoorBox;
+        }
+
+
+        /*
+          FALLBACK:
+
+          If auto-door-proximity has not cached its box yet,
+          use the GLB's current box only while the door is closed.
+        */
+
+        if (
+          !sourceBox &&
+          !this.isDoorOpen()
+        ) {
+          sourceBox =
+            roomsMonsterWorldBox(
+              this.door
+            );
+        }
+
+
+        if (
+          !sourceBox ||
+          sourceBox.isEmpty()
+        ) {
+          window
+            .roomsMonsterState
+            .doorReady =
+            false;
+
+          return false;
+        }
+
+
+        this.doorBox
+          .copy(
+            sourceBox
+          );
+
+
+        this.doorBox
+          .getCenter(
+            this.doorCenter
+          );
+
+        this.doorBox
+          .getSize(
+            this.doorSize
+          );
+
+
+        /*
+          A closed door is wide along one horizontal axis
+          and thin along the other.
+
+          The THIN axis is the doorway normal — the direction
+          the player crosses when walking through it.
+        */
+
+        if (
+          this.doorSize.x <=
+          this.doorSize.z
+        ) {
+          this.doorNormalAxis =
+            'x';
+
+          this.doorLateralAxis =
+            'z';
+
+        } else {
+          this.doorNormalAxis =
+            'z';
+
+          this.doorLateralAxis =
+            'x';
+        }
+
+
+        window
+          .roomsMonsterState
+          .doorReady =
+          true;
+
+
         console.log(
-          'Bedroom monster trigger ready.',
+          'Monster doorway trigger ready.',
 
           {
-            min:
-              this.bedroomBox
+            normalAxis:
+              this.doorNormalAxis,
+
+            lateralAxis:
+              this.doorLateralAxis,
+
+            boxMin:
+              this.doorBox
                 .min
                 .toArray(),
 
-            max:
-              this.bedroomBox
+            boxMax:
+              this.doorBox
                 .max
                 .toArray()
           }
@@ -1169,6 +1488,271 @@ AFRAME.registerComponent(
 
 
         return true;
+      },
+
+
+    /* ========================================================
+       DOOR OPEN CHECK
+    ======================================================== */
+
+    isDoorOpen:
+      function () {
+        if (
+          !this.door ||
+          !this.door.components
+        ) {
+          return false;
+        }
+
+
+        const hinge =
+          this.door.components[
+            'door-hinge'
+          ];
+
+
+        if (
+          !hinge ||
+          !hinge.parts ||
+          !hinge.parts.length
+        ) {
+          return false;
+        }
+
+
+        return hinge.parts
+          .some(
+            (part) => {
+              const state =
+                hinge.createState
+                  ? hinge.createState(
+                      part
+                    )
+                  : (
+                      part.userData
+                        ? part.userData
+                            .roomsDoorState
+                        : null
+                    );
+
+
+              return Boolean(
+                state &&
+                state.isOpen
+              );
+            }
+          );
+      },
+
+
+    /* ========================================================
+       PLAYER SIDE OF DOOR
+
+       Returns:
+       +1 = one side
+       -1 = opposite side
+        0 = inside tiny dead-zone on the plane
+    ======================================================== */
+
+    getDoorSide:
+      function (
+        player
+      ) {
+        if (
+          !player ||
+          !window
+            .roomsMonsterState
+            .doorReady ||
+          !this.doorNormalAxis
+        ) {
+          return 0;
+        }
+
+
+        const normalValue =
+          player[
+            this.doorNormalAxis
+          ] -
+          this.doorCenter[
+            this.doorNormalAxis
+          ];
+
+
+        if (
+          normalValue >
+          ROOMS_MONSTER_CONFIG
+            .doorSideEpsilon
+        ) {
+          return 1;
+        }
+
+
+        if (
+          normalValue <
+          -ROOMS_MONSTER_CONFIG
+            .doorSideEpsilon
+        ) {
+          return -1;
+        }
+
+
+        return 0;
+      },
+
+
+    /* ========================================================
+       DID PLAYER'S MOVEMENT SEGMENT PASS THROUGH THE DOORWAY?
+    ======================================================== */
+
+    didCrossDoorway:
+      function (
+        previous,
+        current
+      ) {
+        if (
+          !previous ||
+          !current ||
+          !window
+            .roomsMonsterState
+            .doorReady ||
+          !this.doorNormalAxis ||
+          !this.doorLateralAxis
+        ) {
+          return false;
+        }
+
+
+        const normalAxis =
+          this.doorNormalAxis;
+
+        const lateralAxis =
+          this.doorLateralAxis;
+
+
+        const previousNormal =
+          previous[
+            normalAxis
+          ] -
+          this.doorCenter[
+            normalAxis
+          ];
+
+        const currentNormal =
+          current[
+            normalAxis
+          ] -
+          this.doorCenter[
+            normalAxis
+          ];
+
+
+        /*
+          The movement segment must actually touch/cross
+          the door plane between the two samples.
+        */
+
+        if (
+          previousNormal *
+          currentNormal >
+          0
+        ) {
+          return false;
+        }
+
+
+        const normalDelta =
+          currentNormal -
+          previousNormal;
+
+
+        if (
+          Math.abs(
+            normalDelta
+          ) <
+          0.00001
+        ) {
+          return false;
+        }
+
+
+        /*
+          Ignore very large jumps / long teleports.
+        */
+
+        const horizontalDistance =
+          Math.hypot(
+            current.x -
+              previous.x,
+
+            current.z -
+              previous.z
+          );
+
+
+        if (
+          horizontalDistance >
+          ROOMS_MONSTER_CONFIG
+            .maxDoorCrossDistance
+        ) {
+          return false;
+        }
+
+
+        /*
+          Interpolate where the movement line intersects
+          the exact doorway plane.
+        */
+
+        const t =
+          -previousNormal /
+          normalDelta;
+
+
+        if (
+          t < 0 ||
+          t > 1
+        ) {
+          return false;
+        }
+
+
+        const crossingLateral =
+          THREE.MathUtils
+            .lerp(
+              previous[
+                lateralAxis
+              ],
+
+              current[
+                lateralAxis
+              ],
+
+              t
+            );
+
+
+        const minimum =
+          this.doorBox.min[
+            lateralAxis
+          ] -
+          ROOMS_MONSTER_CONFIG
+            .doorCrossPadding;
+
+        const maximum =
+          this.doorBox.max[
+            lateralAxis
+          ] +
+          ROOMS_MONSTER_CONFIG
+            .doorCrossPadding;
+
+
+        return Boolean(
+          crossingLateral >=
+            minimum &&
+
+          crossingLateral <=
+            maximum
+        );
       },
 
 
@@ -1204,12 +1788,11 @@ AFRAME.registerComponent(
     markTeddyGrabbed:
       function () {
         /*
-          Remember permanently that Teddy has been
-          physically grabbed at least once.
+          Remember that Teddy has been physically grabbed
+          at least once for debug/history.
 
-          This is kept for debug/history only.
-          The walking monster now requires Teddy to
-          STILL be held when the player leaves.
+          This alone does NOT trigger walking.glb.
+          Teddy must still be held while crossing the open door.
         */
 
         if (
@@ -1242,10 +1825,14 @@ AFRAME.registerComponent(
 
     /* ========================================================
        IS PLAYER INSIDE BEDROOM?
+
+       Debug / compatibility only.
     ======================================================== */
 
     isPlayerInsideBedroom:
-      function () {
+      function (
+        suppliedPlayer
+      ) {
         if (
           !window
             .roomsMonsterState
@@ -1256,6 +1843,7 @@ AFRAME.registerComponent(
 
 
         const player =
+          suppliedPlayer ||
           roomsMonsterPlayerPosition(
             this.playerWorld
           );
@@ -1282,10 +1870,6 @@ AFRAME.registerComponent(
           box.min.z;
 
 
-        /*
-          Only apply inset when room is large enough.
-        */
-
         const insetX =
           width >
             ROOMS_MONSTER_CONFIG
@@ -1307,13 +1891,6 @@ AFRAME.registerComponent(
                 .bedroomInsetZ
             : 0;
 
-
-        /*
-          Y is intentionally ignored.
-
-          We only care whether the player's
-          X/Z location is inside the bedroom.
-        */
 
         return Boolean(
           player.x >=
@@ -1421,7 +1998,7 @@ AFRAME.registerComponent(
 
           {
             reason:
-              'left-bedroom-holding-teddy'
+              'crossed-open-door-holding-teddy'
           },
 
           false
@@ -1429,7 +2006,7 @@ AFRAME.registerComponent(
 
 
         console.log(
-          'MONSTER: walking.glb triggered after leaving the bedroom while holding Teddy.'
+          'MONSTER: walking.glb triggered after crossing the open cua.glb doorway while holding Teddy.'
         );
 
 
@@ -1462,138 +2039,266 @@ AFRAME.registerComponent(
 
 
         /*
-          Bedroom model not ready yet?
-          Keep trying.
+          Retry preparation occasionally if the door/model
+          initialized later than expected.
         */
 
         if (
           !window
             .roomsMonsterState
+            .doorReady &&
+
+          time -
+            this.lastPrepareAttempt >=
+            500
+        ) {
+          this.lastPrepareAttempt =
+            time;
+
+          this.prepare();
+        }
+
+
+        const player =
+          roomsMonsterPlayerPosition(
+            this.playerWorld
+          );
+
+
+        if (
+          !player
+        ) {
+          return;
+        }
+
+
+        /* ----------------------------------------------------
+           KEEP OLD BEDROOM STATE FOR DEBUG / COMPATIBILITY
+        ---------------------------------------------------- */
+
+        if (
+          window
+            .roomsMonsterState
             .bedroomReady
         ) {
-          this.prepare();
+          const inside =
+            this.isPlayerInsideBedroom(
+              player
+            );
+
+
+          window
+            .roomsMonsterState
+            .playerInsideBedroom =
+            inside;
 
 
           if (
-            !window
-              .roomsMonsterState
-              .bedroomReady
+            this.previousInside ===
+            null
           ) {
-            return;
+            this.previousInside =
+              inside;
+
+            if (
+              inside
+            ) {
+              window
+                .roomsMonsterState
+                .hasEnteredBedroom =
+                true;
+            }
+
+          } else {
+            if (
+              !this.previousInside &&
+              inside
+            ) {
+              window
+                .roomsMonsterState
+                .hasEnteredBedroom =
+                true;
+
+
+              this.el.emit(
+                'rooms-player-entered-bedroom',
+                {},
+                false
+              );
+            }
+
+
+            this.previousInside =
+              inside;
           }
         }
 
 
-        /*
-          Poll Teddy as a safety fallback.
-        */
+        /* ----------------------------------------------------
+           CURRENT TEDDY HOLD STATE
+        ---------------------------------------------------- */
+
+        const teddyHeld =
+          roomsMonsterTeddyIsGrabbed();
+
+
+        window
+          .roomsMonsterState
+          .teddyCurrentlyHeld =
+          teddyHeld;
+
 
         if (
+          teddyHeld &&
           !window
             .roomsMonsterState
-            .teddyGrabbed &&
-
-          roomsMonsterTeddyIsGrabbed()
+            .teddyGrabbed
         ) {
           this.markTeddyGrabbed();
         }
 
 
-        const inside =
-          this.isPlayerInsideBedroom();
+        /* ----------------------------------------------------
+           CURRENT DOOR STATE
+        ---------------------------------------------------- */
+
+        const doorOpen =
+          this.isDoorOpen();
 
 
         window
           .roomsMonsterState
-          .playerInsideBedroom =
-          inside;
+          .doorOpen =
+          doorOpen;
+
+
+        const currentDoorSide =
+          window
+            .roomsMonsterState
+            .doorReady
+
+            ? this.getDoorSide(
+                player
+              )
+
+            : 0;
+
+
+        window
+          .roomsMonsterState
+          .doorSide =
+          currentDoorSide;
 
 
         /* ----------------------------------------------------
-           FIRST CHECK
+           ARM THE DIRECTION OF THE SCARE
+
+           The first stable door side where Teddy is held becomes
+           Teddy's original / bedroom side.
+
+           This means dropping Teddy outside and picking it up again
+           cannot accidentally reverse the scare direction.
         ---------------------------------------------------- */
 
         if (
-          this.previousInside ===
-          null
+          teddyHeld &&
+          window
+            .roomsMonsterState
+            .doorReady &&
+          this.teddyOriginDoorSide ===
+            0 &&
+          currentDoorSide !==
+            0
         ) {
-          this.previousInside =
-            inside;
+          this.teddyOriginDoorSide =
+            currentDoorSide;
 
 
-          /*
-            If player starts inside bedroom,
-            count that as entering.
-          */
+          window
+            .roomsMonsterState
+            .teddyOriginDoorSide =
+            this.teddyOriginDoorSide;
 
-          if (
-            inside
-          ) {
+
+          console.log(
+            'Monster doorway armed from side:',
+            this.teddyOriginDoorSide
+          );
+        }
+
+
+        window
+          .roomsMonsterState
+          .doorCrossArmed =
+          Boolean(
+            teddyHeld &&
+            this.teddyOriginDoorSide !==
+              0 &&
             window
               .roomsMonsterState
-              .hasEnteredBedroom =
-              true;
-          }
+              .doorReady
+          );
 
+
+        /* ----------------------------------------------------
+           FIRST PLAYER SAMPLE
+        ---------------------------------------------------- */
+
+        if (
+          !this.hasPreviousPlayerWorld
+        ) {
+          this.previousPlayerWorld
+            .copy(
+              player
+            );
+
+          this.hasPreviousPlayerWorld =
+            true;
 
           return;
         }
 
 
         /* ----------------------------------------------------
-           PLAYER ENTERED BEDROOM
+           ACTUAL MONSTER TRIGGER
 
-           outside -> inside
+           ALL must be true:
+           1. Teddy is STILL in the player's hand.
+           2. cua.glb / #door is open.
+           3. We know which side Teddy came from.
+           4. Player has reached the opposite side.
+           5. The movement segment physically crossed the doorway.
+           6. Scare has never played before.
         ---------------------------------------------------- */
 
         if (
-          !this.previousInside &&
-          inside
-        ) {
-          window
-            .roomsMonsterState
-            .hasEnteredBedroom =
-            true;
+          teddyHeld &&
 
+          doorOpen &&
 
-          this.el.emit(
-            'rooms-player-entered-bedroom',
-            {},
-            false
-          );
-        }
+          this.teddyOriginDoorSide !==
+            0 &&
 
-
-        /* ----------------------------------------------------
-           PLAYER LEFT BEDROOM
-
-           inside -> outside
-
-           Only trigger if Teddy is CURRENTLY
-           being physically held while leaving.
-        ---------------------------------------------------- */
-
-        if (
-          this.previousInside &&
-
-          !inside &&
-
-          window
-            .roomsMonsterState
-            .hasEnteredBedroom &&
-
-          roomsMonsterTeddyIsGrabbed() &&
+          currentDoorSide ===
+            -this.teddyOriginDoorSide &&
 
           !window
             .roomsMonsterState
-            .walkingTriggered
+            .walkingTriggered &&
+
+          this.didCrossDoorway(
+            this.previousPlayerWorld,
+            player
+          )
         ) {
           this.triggerWalkingMonster();
         }
 
 
-        this.previousInside =
-          inside;
+        this.previousPlayerWorld
+          .copy(
+            player
+          );
       },
 
 
@@ -1611,6 +2316,25 @@ AFRAME.registerComponent(
               'model-loaded',
               this
                 .onBedroomModelLoaded
+            );
+        }
+
+
+        if (
+          this.door
+        ) {
+          this.door
+            .removeEventListener(
+              'model-loaded',
+              this
+                .onDoorModelLoaded
+            );
+
+          this.door
+            .removeEventListener(
+              'rooms-door-ready',
+              this
+                .onDoorReady
             );
         }
 
@@ -1702,6 +2426,68 @@ window.getRoomsMonsterState =
         window
           .roomsMonsterState
           .bedroomReady,
+
+
+      doorReady:
+        window
+          .roomsMonsterState
+          .doorReady,
+
+
+      doorOpen:
+        window
+          .roomsMonsterState
+          .doorOpen,
+
+
+      teddyCurrentlyHeld:
+        window
+          .roomsMonsterState
+          .teddyCurrentlyHeld,
+
+
+      doorSide:
+        window
+          .roomsMonsterState
+          .doorSide,
+
+
+      teddyOriginDoorSide:
+        window
+          .roomsMonsterState
+          .teddyOriginDoorSide,
+
+
+      doorCrossArmed:
+        window
+          .roomsMonsterState
+          .doorCrossArmed,
+
+
+      doorNormalAxis:
+        system
+          ? system.doorNormalAxis
+          : null,
+
+
+      doorBoxMin:
+        system &&
+        window
+          .roomsMonsterState
+          .doorReady
+
+          ? system.doorBox.min.toArray()
+          : null,
+
+
+      doorBoxMax:
+        system &&
+        window
+          .roomsMonsterState
+          .doorReady
+
+          ? system.doorBox.max.toArray()
+          : null,
 
 
       walkingEntityFound:

@@ -1,32 +1,24 @@
 /* ============================================================
    story.js — ROOMS WITHIN
-   FULL REPLACEMENT — 3 ITEM QUEST STORY
+   FULL REPLACEMENT
 
-   The story now follows the new FIND 3 ITEMS objective:
+   Flow:
+   1. Inspect Teddy Bear.
+   2. Inspect Hair Clipper.
+   3. Inspect Picture.
+   4. Final placement objective unlocks.
+   5. Release each physical item over #truocbantho.
+   6. Each item immediately snaps into its own altar spot,
+      stops moving, and becomes permanently locked in place.
+   7. After all 3 are locked on the altar, lights stop flickering.
+   8. Existing all-clues-collected ending/jumpscare runs.
+   9. GAME COMPLETE appears and gameplay locks.
 
-   1. Inspect the Teddy Bear.
-   2. Inspect the Hair Clipper.
-   3. Inspect the Picture.
-
-   interaction-prompts.js emits:
-   - quest-item-found
-   - quest-items-complete
-
-   This story manager converts those events into the existing
-   story events already used elsewhere in the project:
-
-   - clue-collected
-   - all-clues-collected
-   - story-progress
-   - story-completed
-
-   That means ui-scare.js / jumpscare-controller can continue
-   listening for all-clues-collected without needing another rewrite.
-============================================================ */
-
-
-/* ============================================================
-   STORY MILESTONES
+   IMPORTANT:
+   - Normal grabbing / throwing still works everywhere else.
+   - Only Teddy, Hair Clipper and Picture can snap.
+   - They only snap after the final placement objective is ready.
+   - Snapping also updates the existing quest checklist.
 ============================================================ */
 
 const ROOMS_STORY_MILESTONES = [
@@ -35,12 +27,665 @@ const ROOMS_STORY_MILESTONES = [
   'picture'
 ];
 
-
 const ROOMS_STORY_LABELS = {
   'teddy': 'Teddy Bear inspected',
   'hair-clipper': 'Hair Clipper inspected',
   'picture': 'Picture inspected'
 };
+
+const ROOMS_FINAL_ITEMS = [
+  {
+    key: 'teddy',
+
+    /*
+      Left-side snap slot.
+    */
+    snapFraction: 0.22,
+
+    selectors: [
+      '#teddy',
+      '[data-quest-item="teddy"]'
+    ]
+  },
+
+  {
+    key: 'hair-clipper',
+
+    /*
+      Right-side snap slot.
+    */
+    snapFraction: 0.78,
+
+    selectors: [
+      '#hairClipper',
+      '#hair-clipper',
+      '#clipper',
+      '#hairpin',
+      '[data-quest-item="hair-clipper"]'
+    ]
+  },
+
+  {
+    key: 'picture',
+
+    /*
+      Middle snap slot.
+    */
+    snapFraction: 0.50,
+
+    selectors: [
+      '#picture',
+      '#photo',
+      '#pictureFrame',
+      '#picture-frame',
+      '[data-quest-item="picture"]'
+    ]
+  }
+];
+
+const ROOMS_FINAL_PLACEMENT = {
+  targetSelector: '#truocbantho',
+
+  checkInterval: 150,
+
+  /*
+    Existing placement detection padding.
+  */
+  horizontalPadding: 0.10,
+
+  belowPadding: 0.12,
+
+  abovePadding: 1.20,
+
+  /*
+    Snap capture area.
+
+    The player does NOT need pixel-perfect placement.
+    Releasing the item a little over the edge of the table
+    still counts as an intentional altar placement.
+  */
+  snapHorizontalPadding: 0.18,
+
+  snapBelowPadding: 0.15,
+
+  snapAbovePadding: 1.25,
+
+  /*
+    Small visible gap so the snapped model does not z-fight
+    with the table surface.
+  */
+  snapSurfaceGap: 0.012,
+
+  /*
+    Raycast height used to find the actual top surface
+    of #truocbantho at each snap slot.
+  */
+  surfaceRayExtraHeight: 1.50,
+
+  surfaceRayExtraDepth: 3.00,
+
+  /*
+    Keep the original short completion settle delay.
+
+    The objects themselves lock immediately.
+    This delay is only for the ending trigger.
+  */
+  settleTime: 700,
+
+  endScreenDelay: 2600
+};
+
+
+/* ============================================================
+   HELPERS
+============================================================ */
+
+function roomsStoryFindFirst(selectors) {
+  for (
+    const selector
+    of selectors || []
+  ) {
+    const entity =
+      document.querySelector(
+        selector
+      );
+
+    if (entity) {
+      return entity;
+    }
+  }
+
+  return null;
+}
+
+
+function roomsStoryGetModelBox(entity) {
+  if (!entity) {
+    return null;
+  }
+
+  const root =
+    entity.getObject3D(
+      'mesh'
+    );
+
+  if (!root) {
+    return null;
+  }
+
+  entity.object3D
+    .updateMatrixWorld(
+      true
+    );
+
+  root.updateMatrixWorld(
+    true
+  );
+
+  const box =
+    new THREE.Box3()
+      .setFromObject(
+        root
+      );
+
+  return box.isEmpty()
+    ? null
+    : box;
+}
+
+
+function roomsStoryEntityIsGrabbed(
+  entity
+) {
+  if (!entity) {
+    return false;
+  }
+
+  if (
+    entity.is &&
+    entity.is(
+      'grabbed'
+    )
+  ) {
+    return true;
+  }
+
+  const grabbable =
+    entity.components &&
+    entity.components[
+      'natural-grabbable'
+    ];
+
+  return Boolean(
+    grabbable &&
+    grabbable.heldBy
+  );
+}
+
+
+/* ============================================================
+   CURRENT HOVER / INSPECTION STATE
+
+   interaction-prompts.js exposes:
+   getRoomsQuestState()
+
+   inspected =
+   descriptions the player has actually hovered long enough to see.
+
+   found / checked =
+   physical altar-placement checklist.
+============================================================ */
+
+function roomsStoryGetInspectedKeys() {
+  if (
+    typeof window
+      .getRoomsQuestState !==
+    'function'
+  ) {
+    return [];
+  }
+
+  try {
+    const state =
+      window
+        .getRoomsQuestState();
+
+    return Array.isArray(
+      state &&
+      state.inspected
+    )
+      ? state.inspected
+      : [];
+
+  } catch (
+    error
+  ) {
+    console.warn(
+      'Story manager could not read quest inspection state:',
+      error
+    );
+
+    return [];
+  }
+}
+
+
+/* ============================================================
+   SNAP-ZONE CHECK
+============================================================ */
+
+function roomsStoryItemCanSnap(
+  itemEntity,
+  targetBox
+) {
+  if (
+    !itemEntity ||
+    !targetBox ||
+    roomsStoryEntityIsGrabbed(
+      itemEntity
+    )
+  ) {
+    return false;
+  }
+
+  const itemBox =
+    roomsStoryGetModelBox(
+      itemEntity
+    );
+
+  if (!itemBox) {
+    return false;
+  }
+
+  const center =
+    itemBox.getCenter(
+      new THREE.Vector3()
+    );
+
+  const xInside =
+    center.x >=
+      targetBox.min.x -
+        ROOMS_FINAL_PLACEMENT
+          .snapHorizontalPadding &&
+    center.x <=
+      targetBox.max.x +
+        ROOMS_FINAL_PLACEMENT
+          .snapHorizontalPadding;
+
+  const zInside =
+    center.z >=
+      targetBox.min.z -
+        ROOMS_FINAL_PLACEMENT
+          .snapHorizontalPadding &&
+    center.z <=
+      targetBox.max.z +
+        ROOMS_FINAL_PLACEMENT
+          .snapHorizontalPadding;
+
+  const verticalNear =
+    itemBox.max.y >=
+      targetBox.min.y -
+        ROOMS_FINAL_PLACEMENT
+          .snapBelowPadding &&
+    itemBox.min.y <=
+      targetBox.max.y +
+        ROOMS_FINAL_PLACEMENT
+          .snapAbovePadding;
+
+  return Boolean(
+    xInside &&
+    zInside &&
+    verticalNear
+  );
+}
+
+
+/* ============================================================
+   MOVE ENTITY BY A WORLD-SPACE DELTA
+
+   natural-grabbable reparents released objects back to the scene,
+   but this helper also works if the parent ever changes later.
+============================================================ */
+
+function roomsStoryTranslateEntityWorld(
+  entity,
+  delta
+) {
+  if (
+    !entity ||
+    !entity.object3D ||
+    !delta
+  ) {
+    return false;
+  }
+
+  const object =
+    entity.object3D;
+
+  const parent =
+    object.parent;
+
+  const currentWorld =
+    new THREE.Vector3();
+
+  object.getWorldPosition(
+    currentWorld
+  );
+
+  const desiredWorld =
+    currentWorld
+      .clone()
+      .add(
+        delta
+      );
+
+  if (
+    parent
+  ) {
+    parent.updateMatrixWorld(
+      true
+    );
+
+    parent.worldToLocal(
+      desiredWorld
+    );
+  }
+
+  object.position.copy(
+    desiredWorld
+  );
+
+  object.updateMatrixWorld(
+    true
+  );
+
+  return true;
+}
+
+
+/* ============================================================
+   FIND REAL ALTAR SURFACE HEIGHT
+
+   The snap slots use the actual #truocbantho mesh whenever
+   possible instead of blindly using targetBox.max.y.
+============================================================ */
+
+function roomsStoryGetTargetSurfaceY(
+  targetEntity,
+  targetBox,
+  x,
+  z
+) {
+  if (
+    !targetEntity ||
+    !targetBox
+  ) {
+    return null;
+  }
+
+  const root =
+    targetEntity.getObject3D(
+      'mesh'
+    );
+
+  if (!root) {
+    return targetBox.max.y;
+  }
+
+  targetEntity.object3D
+    .updateMatrixWorld(
+      true
+    );
+
+  root.updateMatrixWorld(
+    true
+  );
+
+  const ray =
+    new THREE.Raycaster();
+
+  const origin =
+    new THREE.Vector3(
+      x,
+      targetBox.max.y +
+        ROOMS_FINAL_PLACEMENT
+          .surfaceRayExtraHeight,
+      z
+    );
+
+  ray.set(
+    origin,
+    new THREE.Vector3(
+      0,
+      -1,
+      0
+    )
+  );
+
+  ray.far =
+    (
+      targetBox.max.y -
+      targetBox.min.y
+    ) +
+    ROOMS_FINAL_PLACEMENT
+      .surfaceRayExtraHeight +
+    ROOMS_FINAL_PLACEMENT
+      .surfaceRayExtraDepth;
+
+  const hits =
+    ray.intersectObject(
+      root,
+      true
+    );
+
+  if (
+    hits &&
+    hits.length
+  ) {
+    return hits[0]
+      .point
+      .y;
+  }
+
+  /*
+    Safe fallback if the chosen X/Z slot falls over
+    a gap in the actual table mesh.
+  */
+
+  return targetBox.max.y;
+}
+
+
+/* ============================================================
+   STOP QUEST-ITEM PHYSICS
+============================================================ */
+
+function roomsStoryStopItemPhysics(
+  entity
+) {
+  if (!entity) {
+    return;
+  }
+
+  const grabbable =
+    entity.components &&
+    entity.components[
+      'natural-grabbable'
+    ];
+
+  if (
+    grabbable
+  ) {
+    grabbable.heldBy =
+      null;
+
+    if (
+      grabbable.velocity
+    ) {
+      grabbable.velocity.set(
+        0,
+        0,
+        0
+      );
+    }
+
+    grabbable.isMoving =
+      false;
+  }
+
+  if (
+    entity.is &&
+    entity.is(
+      'grabbed'
+    )
+  ) {
+    entity.removeState(
+      'grabbed'
+    );
+  }
+}
+
+
+function roomsStoryItemIsOnTarget(
+  itemEntity,
+  targetBox
+) {
+  if (
+    !itemEntity ||
+    !targetBox ||
+    roomsStoryEntityIsGrabbed(
+      itemEntity
+    )
+  ) {
+    return false;
+  }
+
+  const itemBox =
+    roomsStoryGetModelBox(
+      itemEntity
+    );
+
+  if (!itemBox) {
+    return false;
+  }
+
+  const center =
+    itemBox.getCenter(
+      new THREE.Vector3()
+    );
+
+  const xInside =
+    center.x >=
+      targetBox.min.x -
+        ROOMS_FINAL_PLACEMENT
+          .horizontalPadding &&
+    center.x <=
+      targetBox.max.x +
+        ROOMS_FINAL_PLACEMENT
+          .horizontalPadding;
+
+  const zInside =
+    center.z >=
+      targetBox.min.z -
+        ROOMS_FINAL_PLACEMENT
+          .horizontalPadding &&
+    center.z <=
+      targetBox.max.z +
+        ROOMS_FINAL_PLACEMENT
+          .horizontalPadding;
+
+  const verticalNear =
+    itemBox.max.y >=
+      targetBox.min.y -
+        ROOMS_FINAL_PLACEMENT
+          .belowPadding &&
+    itemBox.min.y <=
+      targetBox.max.y +
+        ROOMS_FINAL_PLACEMENT
+          .abovePadding;
+
+  return Boolean(
+    xInside &&
+    zInside &&
+    verticalNear
+  );
+}
+
+
+function roomsStorySetVisible(
+  entity,
+  visible
+) {
+  if (entity) {
+    entity.setAttribute(
+      'visible',
+      Boolean(
+        visible
+      )
+    );
+  }
+}
+
+
+function roomsStoryCreateText(
+  value,
+  position,
+  width,
+  align = 'center',
+  color = '#ffffff',
+  wrapCount = 28
+) {
+  const text =
+    document.createElement(
+      'a-text'
+    );
+
+  text.setAttribute(
+    'value',
+    value || ''
+  );
+
+  text.setAttribute(
+    'position',
+    position || '0 0 0'
+  );
+
+  text.setAttribute(
+    'width',
+    width || '1'
+  );
+
+  text.setAttribute(
+    'align',
+    align
+  );
+
+  text.setAttribute(
+    'color',
+    color
+  );
+
+  text.setAttribute(
+    'wrap-count',
+    String(
+      wrapCount
+    )
+  );
+
+  text.setAttribute(
+    'side',
+    'double'
+  );
+
+  text.setAttribute(
+    'material',
+    'shader: flat; ' +
+    'depthTest: false; ' +
+    'depthWrite: false'
+  );
+
+  return text;
+}
 
 
 /* ============================================================
@@ -54,61 +699,142 @@ AFRAME.registerComponent(
       this.collected =
         new Set();
 
+      this.inspectedComplete =
+        false;
+
       this.completed =
         false;
 
       this.listeners =
         [];
 
+      this.itemEntities =
+        new Map();
+
+      this.targetEntity =
+        null;
+
+      this.lastPlacementCheck =
+        0;
+
+      this.allPlacedSince =
+        null;
+
+      this.endTimer =
+        null;
+
+      this.placementPrompt =
+        null;
+
+      this.endRoot =
+        null;
+
+
+      /*
+        Items that have permanently snapped to #truocbantho.
+      */
+
+      this.lockedItems =
+        new Set();
+
+
+      /*
+        Release-state tracking.
+
+        stateremoved gives us a fast release signal.
+        itemHeldState is the polling fallback.
+      */
+
+      this.itemHeldState =
+        new Map();
+
+      this.itemReleaseListeners =
+        new Map();
+
+      this.pendingSnapFrames =
+        new Map();
+
 
       this.onQuestItemFound =
         this.onQuestItemFound
-          .bind(this);
-
+          .bind(
+            this
+          );
 
       this.onQuestItemsComplete =
         this.onQuestItemsComplete
-          .bind(this);
-
+          .bind(
+            this
+          );
 
       this.bindCurrentStory();
 
+      this.buildFinalUI();
 
-      /* ======================================================
-         DEBUG
+      this.refreshFinalEntities();
 
-         Browser console:
+      /*
+        If the player already hovered an item before story-manager
+        finished initializing, recover that inspection progress now.
+      */
 
-         getRoomsStoryState()
-      ====================================================== */
+      this.syncInspectionProgress();
+
+      [
+        100,
+        500,
+        1200,
+        2500
+      ].forEach(
+        (delay) => {
+          window.setTimeout(
+            () => {
+              this.refreshFinalEntities();
+            },
+            delay
+          );
+        }
+      );
 
       window.getRoomsStoryState =
         () => ({
-          collected:
+          inspected:
             Array.from(
               this.collected
             ),
 
-          count:
+          inspectedCount:
             this.collected.size,
 
-          total:
-            ROOMS_STORY_MILESTONES.length,
+          inspectedTotal:
+            ROOMS_STORY_MILESTONES
+              .length,
+
+          inspectedComplete:
+            this.inspectedComplete,
+
+          finalPlacement:
+            this.getPlacementState(),
+
+          snapped:
+            Array.from(
+              this.lockedItems
+            ),
 
           completed:
             this.completed
         });
 
-
       console.log(
-        'Story manager ready.',
-        'Waiting for 3 inspected quest items.'
+        'Story manager ready. ' +
+        'Inspect all 3 items, then ' +
+        'place all 3 on #truocbantho.'
       );
     },
 
 
     /* ========================================================
-       SAFE LISTENER REGISTRATION
+       LISTENERS
     ======================================================== */
 
     listen: function (
@@ -124,12 +850,10 @@ AFRAME.registerComponent(
         return;
       }
 
-
       target.addEventListener(
         eventName,
         handler
       );
-
 
       this.listeners.push({
         target,
@@ -139,90 +863,286 @@ AFRAME.registerComponent(
     },
 
 
-    /* ========================================================
-       BIND NEW QUEST SYSTEM
-    ======================================================== */
+    bindCurrentStory:
+      function () {
+        const scene =
+          this.el.sceneEl;
 
-    bindCurrentStory: function () {
-      const scene =
-        this.el.sceneEl;
+        if (!scene) {
+          console.warn(
+            'Story manager: ' +
+            'scene was not found.'
+          );
 
+          return;
+        }
 
-      if (!scene) {
-        console.warn(
-          'Story manager: scene was not found.'
+        this.listen(
+          scene,
+          'quest-item-found',
+          this.onQuestItemFound
         );
 
-        return;
-      }
-
-
-      /*
-        interaction-prompts.js emits these on the scene.
-      */
-      this.listen(
-        scene,
-        'quest-item-found',
-        this.onQuestItemFound
-      );
-
-
-      this.listen(
-        scene,
-        'quest-items-complete',
-        this.onQuestItemsComplete
-      );
-    },
+        this.listen(
+          scene,
+          'quest-items-complete',
+          this.onQuestItemsComplete
+        );
+      },
 
 
     /* ========================================================
-       QUEST ITEM FOUND
+       FINAL ENTITIES
     ======================================================== */
 
-    onQuestItemFound: function (
-      event
-    ) {
-      const detail =
-        event &&
-        event.detail
-          ? event.detail
-          : {};
+    refreshFinalEntities:
+      function () {
+        this.targetEntity =
+          document.querySelector(
+            ROOMS_FINAL_PLACEMENT
+              .targetSelector
+          );
+
+        ROOMS_FINAL_ITEMS
+          .forEach(
+            (item) => {
+              const entity =
+                roomsStoryFindFirst(
+                  item.selectors
+                );
+
+              if (!entity) {
+                return;
+              }
+
+              this.itemEntities
+                .set(
+                  item.key,
+                  entity
+                );
+
+              this.watchFinalItem(
+                item.key,
+                entity
+              );
+            }
+          );
+      },
 
 
-      const key =
-        String(
-          detail.key || ''
-        );
+    /* ========================================================
+       WATCH FINAL ITEM RELEASES
+    ======================================================== */
 
-
-      if (
-        !ROOMS_STORY_MILESTONES
-          .includes(key)
-      ) {
-        console.warn(
-          `Story manager ignored unknown quest item: ${key}`
-        );
-
-        return;
-      }
-
-
-      this.collectMilestone(
+    watchFinalItem:
+      function (
         key,
-        ROOMS_STORY_LABELS[key] ||
-        detail.title ||
-        key
-      );
-    },
+        entity
+      ) {
+        if (
+          !key ||
+          !entity
+        ) {
+          return;
+        }
+
+        this.itemHeldState
+          .set(
+            key,
+            roomsStoryEntityIsGrabbed(
+              entity
+            )
+          );
+
+        if (
+          this.itemReleaseListeners
+            .has(
+              entity
+            )
+        ) {
+          return;
+        }
+
+        const handler =
+          (event) => {
+            const state =
+              event &&
+              event.detail
+                ? event.detail.state
+                : '';
+
+            if (
+              state !==
+              'grabbed'
+            ) {
+              return;
+            }
+
+            this.itemHeldState
+              .set(
+                key,
+                false
+              );
+
+            /*
+              natural-grabbable writes the release velocity
+              immediately AFTER it removes the "grabbed" state.
+
+              Waiting one animation frame guarantees our snap runs
+              after that release code finishes, so the new velocity
+              cannot make the item flop away from the altar.
+            */
+
+            this.scheduleSnapAttempt(
+              key,
+              entity
+            );
+          };
+
+        entity.addEventListener(
+          'stateremoved',
+          handler
+        );
+
+        this.itemReleaseListeners
+          .set(
+            entity,
+            handler
+          );
+      },
+
+
+    scheduleSnapAttempt:
+      function (
+        key,
+        entity
+      ) {
+        if (
+          !key ||
+          !entity ||
+          this.lockedItems
+            .has(
+              key
+            )
+        ) {
+          return;
+        }
+
+        const previousFrame =
+          this.pendingSnapFrames
+            .get(
+              key
+            );
+
+        if (
+          previousFrame !==
+          undefined
+        ) {
+          window
+            .cancelAnimationFrame(
+              previousFrame
+            );
+        }
+
+        const frame =
+          window
+            .requestAnimationFrame(
+              () => {
+                this.pendingSnapFrames
+                  .delete(
+                    key
+                  );
+
+                this.trySnapItem(
+                  key,
+                  entity
+                );
+              }
+            );
+
+        this.pendingSnapFrames
+          .set(
+            key,
+            frame
+          );
+      },
 
 
     /* ========================================================
-       QUEST COMPLETE FALLBACK
-
-       Normally the third quest-item-found already completes the
-       story. This listener is an extra safety net in case the UI
-       emits quest-items-complete directly.
+       INSPECTION PROGRESS
     ======================================================== */
+
+    syncInspectionProgress:
+      function () {
+        if (
+          this.completed
+        ) {
+          return;
+        }
+
+        const inspected =
+          roomsStoryGetInspectedKeys();
+
+        inspected
+          .forEach(
+            (key) => {
+              if (
+                ROOMS_STORY_MILESTONES
+                  .includes(
+                    key
+                  ) &&
+                !this.collected
+                  .has(
+                    key
+                  )
+              ) {
+                this.collectMilestone(
+                  key,
+                  ROOMS_STORY_LABELS[
+                    key
+                  ] ||
+                  key
+                );
+              }
+            }
+          );
+      },
+
+
+    onQuestItemFound:
+      function (
+        event
+      ) {
+        const detail =
+          event &&
+          event.detail
+            ? event.detail
+            : {};
+
+        const key =
+          String(
+            detail.key || ''
+          );
+
+        if (
+          !ROOMS_STORY_MILESTONES
+            .includes(
+              key
+            )
+        ) {
+          return;
+        }
+
+        this.collectMilestone(
+          key,
+          ROOMS_STORY_LABELS[
+            key
+          ] ||
+          detail.title ||
+          key
+        );
+      },
+
 
     onQuestItemsComplete:
       function () {
@@ -232,37 +1152,646 @@ AFRAME.registerComponent(
           return;
         }
 
-
-        /*
-          If all 3 item-found events were received,
-          complete normally.
-        */
-        if (
-          this.collected.size >=
-          ROOMS_STORY_MILESTONES.length
-        ) {
-          this.completeStory();
-
-          return;
-        }
-
-
-        /*
-          If quest-items-complete arrives before one of the
-          individual events for any reason, synchronize the story
-          to the completed quest state instead of getting stuck.
-        */
         ROOMS_STORY_MILESTONES
           .forEach(
             (id) => {
               if (
                 !this.collected
-                  .has(id)
+                  .has(
+                    id
+                  )
               ) {
                 this.collectMilestone(
                   id,
-                  ROOMS_STORY_LABELS[id]
+                  ROOMS_STORY_LABELS[
+                    id
+                  ]
                 );
+              }
+            }
+          );
+
+        this.armFinalPlacement();
+      },
+
+
+    collectMilestone:
+      function (
+        id,
+        label
+      ) {
+        if (
+          this.completed ||
+          !id ||
+          this.collected
+            .has(
+              id
+            ) ||
+          !ROOMS_STORY_MILESTONES
+            .includes(
+              id
+            )
+        ) {
+          return false;
+        }
+
+        this.collected
+          .add(
+            id
+          );
+
+        const detail = {
+          id,
+
+          label:
+            label || id,
+
+          count:
+            this.collected
+              .size,
+
+          total:
+            ROOMS_STORY_MILESTONES
+              .length,
+
+          collected:
+            Array.from(
+              this.collected
+            )
+        };
+
+        console.log(
+          `Story progress: ${detail.label} ` +
+          `(${detail.count}/${detail.total})`
+        );
+
+        this.el.emit(
+          'clue-collected',
+          detail,
+          false
+        );
+
+        this.el.sceneEl.emit(
+          'story-progress',
+          detail,
+          false
+        );
+
+        /*
+          IMPORTANT:
+          inspecting all 3 items no longer
+          ends the game.
+
+          It unlocks the physical placement
+          objective instead.
+        */
+        if (
+          this.collected
+            .size >=
+          ROOMS_STORY_MILESTONES
+            .length
+        ) {
+          this.armFinalPlacement();
+        }
+
+        return true;
+      },
+
+
+    /* ========================================================
+       FINAL PLACEMENT OBJECTIVE
+    ======================================================== */
+
+    armFinalPlacement:
+      function () {
+        if (
+          this.inspectedComplete ||
+          this.completed ||
+          this.collected.size <
+            ROOMS_STORY_MILESTONES
+              .length
+        ) {
+          return;
+        }
+
+        this.inspectedComplete =
+          true;
+
+        this.refreshFinalEntities();
+
+        roomsStorySetVisible(
+          this.placementPrompt,
+          true
+        );
+
+        this.el.sceneEl.emit(
+          'final-placement-ready',
+          {
+            target:
+              ROOMS_FINAL_PLACEMENT
+                .targetSelector,
+
+            required:
+              ROOMS_FINAL_ITEMS
+                .map(
+                  (item) =>
+                    item.key
+                )
+          },
+          false
+        );
+
+        console.log(
+          'Final objective: ' +
+          'place Teddy Bear, ' +
+          'Hair Clipper and Picture ' +
+          'on #truocbantho.'
+        );
+      },
+
+
+    /* ========================================================
+       ALTAR SNAP + PERMANENT LOCK
+    ======================================================== */
+
+    getFinalItemConfig:
+      function (
+        key
+      ) {
+        return (
+          ROOMS_FINAL_ITEMS
+            .find(
+              (item) =>
+                item.key ===
+                key
+            ) ||
+          null
+        );
+      },
+
+
+    getSnapPoint:
+      function (
+        item,
+        targetBox
+      ) {
+        if (
+          !item ||
+          !targetBox
+        ) {
+          return null;
+        }
+
+        const size =
+          targetBox.getSize(
+            new THREE.Vector3()
+          );
+
+        const center =
+          targetBox.getCenter(
+            new THREE.Vector3()
+          );
+
+        const fraction =
+          THREE.MathUtils.clamp(
+            Number(
+              item.snapFraction
+            ) || 0.5,
+            0.08,
+            0.92
+          );
+
+        /*
+          Spread the 3 objects along whichever horizontal
+          dimension of #truocbantho is longer.
+
+          This keeps them separated even if the Blender model
+          is rotated differently from what the script expects.
+        */
+
+        let x =
+          center.x;
+
+        let z =
+          center.z;
+
+        if (
+          size.x >=
+          size.z
+        ) {
+          x =
+            THREE.MathUtils
+              .lerp(
+                targetBox.min.x,
+                targetBox.max.x,
+                fraction
+              );
+
+        } else {
+          z =
+            THREE.MathUtils
+              .lerp(
+                targetBox.min.z,
+                targetBox.max.z,
+                fraction
+              );
+        }
+
+        const surfaceY =
+          roomsStoryGetTargetSurfaceY(
+            this.targetEntity,
+            targetBox,
+            x,
+            z
+          );
+
+        return {
+          x,
+          z,
+
+          surfaceY:
+            typeof surfaceY ===
+            'number'
+              ? surfaceY
+              : targetBox.max.y
+        };
+      },
+
+
+    lockSnappedItem:
+      function (
+        key,
+        entity
+      ) {
+        if (
+          !key ||
+          !entity
+        ) {
+          return false;
+        }
+
+        roomsStoryStopItemPhysics(
+          entity
+        );
+
+        /*
+          Mark first so any event emitted by the checklist cannot
+          accidentally make this item go through the snap logic again.
+        */
+
+        this.lockedItems
+          .add(
+            key
+          );
+
+        entity.setAttribute(
+          'data-altar-locked',
+          'true'
+        );
+
+        entity.classList
+          .add(
+            'altar-locked'
+          );
+
+        /*
+          Remove natural-grabbable AFTER the release has completed.
+
+          This does not affect any other object in the room.
+          It only makes this successfully placed quest item
+          impossible to accidentally pick up or knock away again.
+        */
+
+        if (
+          entity.hasAttribute(
+            'natural-grabbable'
+          )
+        ) {
+          entity.removeAttribute(
+            'natural-grabbable'
+          );
+        }
+
+        this.itemHeldState
+          .set(
+            key,
+            false
+          );
+
+        /*
+          interaction-prompts.js explicitly provides this helper
+          so story.js can confirm a real physical altar placement
+          and update the existing checklist.
+        */
+
+        if (
+          typeof window
+            .setRoomsQuestItemChecked ===
+          'function'
+        ) {
+          window
+            .setRoomsQuestItemChecked(
+              key,
+              true
+            );
+        }
+
+        return true;
+      },
+
+
+    trySnapItem:
+      function (
+        key,
+        entity
+      ) {
+        if (
+          !this.inspectedComplete ||
+          this.completed ||
+          !key ||
+          !entity ||
+          this.lockedItems
+            .has(
+              key
+            ) ||
+          roomsStoryEntityIsGrabbed(
+            entity
+          )
+        ) {
+          return false;
+        }
+
+        if (
+          !this.targetEntity
+        ) {
+          this.refreshFinalEntities();
+        }
+
+        const targetBox =
+          roomsStoryGetModelBox(
+            this.targetEntity
+          );
+
+        if (
+          !targetBox ||
+          !roomsStoryItemCanSnap(
+            entity,
+            targetBox
+          )
+        ) {
+          return false;
+        }
+
+        const item =
+          this.getFinalItemConfig(
+            key
+          );
+
+        if (!item) {
+          return false;
+        }
+
+        const snapPoint =
+          this.getSnapPoint(
+            item,
+            targetBox
+          );
+
+        if (!snapPoint) {
+          return false;
+        }
+
+        const itemBox =
+          roomsStoryGetModelBox(
+            entity
+          );
+
+        if (!itemBox) {
+          return false;
+        }
+
+        const itemCenter =
+          itemBox.getCenter(
+            new THREE.Vector3()
+          );
+
+        /*
+          Keep the item's current rotation.
+
+          Only translate it into the clean snap slot and lift/lower
+          it so the bottom of the model sits just above the real
+          #truocbantho surface.
+        */
+
+        const delta =
+          new THREE.Vector3(
+            snapPoint.x -
+              itemCenter.x,
+
+            (
+              snapPoint.surfaceY +
+              ROOMS_FINAL_PLACEMENT
+                .snapSurfaceGap
+            ) -
+              itemBox.min.y,
+
+            snapPoint.z -
+              itemCenter.z
+          );
+
+        /*
+          Stop release physics BEFORE and AFTER moving.
+
+          The second stop is intentional protection against
+          any delayed movement state left by natural-grabbable.
+        */
+
+        roomsStoryStopItemPhysics(
+          entity
+        );
+
+        roomsStoryTranslateEntityWorld(
+          entity,
+          delta
+        );
+
+        roomsStoryStopItemPhysics(
+          entity
+        );
+
+        this.lockSnappedItem(
+          key,
+          entity
+        );
+
+        const detail = {
+          key,
+
+          target:
+            ROOMS_FINAL_PLACEMENT
+              .targetSelector,
+
+          position: {
+            x:
+              snapPoint.x,
+
+            y:
+              snapPoint.surfaceY,
+
+            z:
+              snapPoint.z
+          }
+        };
+
+        this.el.emit(
+          'story-item-snapped',
+          detail,
+          false
+        );
+
+        this.el.sceneEl.emit(
+          'story-item-snapped',
+          detail,
+          false
+        );
+
+        console.log(
+          `Story placement: ${key} snapped and locked on #truocbantho.`
+        );
+
+        return true;
+      },
+
+
+    checkReleasedFinalItems:
+      function () {
+        if (
+          !this.inspectedComplete ||
+          this.completed
+        ) {
+          return;
+        }
+
+        if (
+          !this.targetEntity
+        ) {
+          this.refreshFinalEntities();
+        }
+
+        const targetBox =
+          roomsStoryGetModelBox(
+            this.targetEntity
+          );
+
+        ROOMS_FINAL_ITEMS
+          .forEach(
+            (item) => {
+              if (
+                this.lockedItems
+                  .has(
+                    item.key
+                  )
+              ) {
+                return;
+              }
+
+              let entity =
+                this.itemEntities
+                  .get(
+                    item.key
+                  );
+
+              if (!entity) {
+                entity =
+                  roomsStoryFindFirst(
+                    item.selectors
+                  );
+
+                if (
+                  entity
+                ) {
+                  this.itemEntities
+                    .set(
+                      item.key,
+                      entity
+                    );
+
+                  this.watchFinalItem(
+                    item.key,
+                    entity
+                  );
+                }
+              }
+
+              if (!entity) {
+                return;
+              }
+
+              const held =
+                roomsStoryEntityIsGrabbed(
+                  entity
+                );
+
+              const wasHeld =
+                this.itemHeldState
+                  .get(
+                    item.key
+                  ) ===
+                true;
+
+              this.itemHeldState
+                .set(
+                  item.key,
+                  held
+                );
+
+              /*
+                Polling fallback:
+                if a browser/controller misses stateremoved,
+                the held -> released transition still snaps.
+              */
+
+              if (
+                wasHeld &&
+                !held
+              ) {
+                this.trySnapItem(
+                  item.key,
+                  entity
+                );
+
+                return;
+              }
+
+              /*
+                Recovery:
+                if the item is already sitting in the valid altar
+                area when the objective becomes ready, snap it cleanly
+                instead of requiring the player to pick it up again.
+              */
+
+              if (
+                !held &&
+                targetBox &&
+                roomsStoryItemCanSnap(
+                  entity,
+                  targetBox
+                )
+              ) {
+                const alreadyOnTarget =
+                  roomsStoryItemIsOnTarget(
+                    entity,
+                    targetBox
+                  );
+
+                if (
+                  alreadyOnTarget
+                ) {
+                  this.trySnapItem(
+                    item.key,
+                    entity
+                  );
+                }
               }
             }
           );
@@ -270,182 +1799,756 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
-       REGISTER STORY PROGRESS
+       PLACEMENT DETECTION
     ======================================================== */
 
-    collectMilestone: function (
-      id,
-      label
-    ) {
-      if (
-        this.completed ||
-        !id ||
-        this.collected.has(id)
+    getPlacementState:
+      function () {
+        if (
+          !this.targetEntity
+        ) {
+          this.refreshFinalEntities();
+        }
+
+        const targetBox =
+          roomsStoryGetModelBox(
+            this.targetEntity
+          );
+
+        const placed = {};
+
+        ROOMS_FINAL_ITEMS
+          .forEach(
+            (item) => {
+              let entity =
+                this.itemEntities
+                  .get(
+                    item.key
+                  );
+
+              if (!entity) {
+                entity =
+                  roomsStoryFindFirst(
+                    item.selectors
+                  );
+
+                if (entity) {
+                  this.itemEntities
+                    .set(
+                      item.key,
+                      entity
+                    );
+                }
+              }
+
+              placed[
+                item.key
+              ] =
+                Boolean(
+                  this.lockedItems
+                    .has(
+                      item.key
+                    ) ||
+                  (
+                    targetBox &&
+                    entity &&
+                    roomsStoryItemIsOnTarget(
+                      entity,
+                      targetBox
+                    ) &&
+                    entity.getAttribute(
+                      'data-altar-locked'
+                    ) ===
+                      'true'
+                  )
+                );
+            }
+          );
+
+        return {
+          targetFound:
+            Boolean(
+              this.targetEntity &&
+              targetBox
+            ),
+
+          placed,
+
+          allPlaced:
+            ROOMS_FINAL_ITEMS
+              .every(
+                (item) =>
+                  placed[
+                    item.key
+                  ] ===
+                  true
+              )
+        };
+      },
+
+
+    checkFinalPlacement:
+      function (
+        time
       ) {
-        return false;
-      }
+        if (
+          !this.inspectedComplete ||
+          this.completed ||
+          window.roomsPaused ||
+          window.roomsInputLocked ||
+          window.roomsInspectionOpen
+        ) {
+          this.allPlacedSince =
+            null;
 
+          return;
+        }
 
-      if (
-        !ROOMS_STORY_MILESTONES
-          .includes(id)
-      ) {
-        console.warn(
-          `Story manager ignored unknown milestone: ${id}`
-        );
+        const state =
+          this.getPlacementState();
 
-        return false;
-      }
+        if (
+          !state.targetFound ||
+          !state.allPlaced
+        ) {
+          this.allPlacedSince =
+            null;
 
+          return;
+        }
 
-      this.collected.add(id);
+        if (
+          this.allPlacedSince ===
+          null
+        ) {
+          this.allPlacedSince =
+            time;
 
+          return;
+        }
 
-      const count =
-        this.collected.size;
-
-
-      const total =
-        ROOMS_STORY_MILESTONES.length;
-
-
-      const detail = {
-        id,
-
-        label:
-          label || id,
-
-        count,
-
-        total,
-
-        collected:
-          Array.from(
-            this.collected
-          )
-      };
-
-
-      console.log(
-        `Story progress: ${detail.label} (${count}/${total})`
-      );
-
-
-      /*
-        Keep compatibility with tutorial/UI systems
-        that already listen for clue-collected.
-      */
-      this.el.emit(
-        'clue-collected',
-        detail,
-        false
-      );
-
-
-      /*
-        Scene-level progress event for other systems.
-      */
-      this.el.sceneEl.emit(
-        'story-progress',
-        detail,
-        false
-      );
-
-
-      if (
-        count >= total &&
-        !this.completed
-      ) {
-        this.completeStory();
-      }
-
-
-      return true;
-    },
+        if (
+          time -
+          this.allPlacedSince >=
+          ROOMS_FINAL_PLACEMENT
+            .settleTime
+        ) {
+          this.completeStory(
+            state
+          );
+        }
+      },
 
 
     /* ========================================================
-       STORY COMPLETE
+       STOP LIGHT FLICKERING
     ======================================================== */
 
-    completeStory: function () {
-      if (
-        this.completed
-      ) {
-        return;
-      }
-
-
-      this.completed =
-        true;
-
-
-      const detail = {
-        total:
-          ROOMS_STORY_MILESTONES.length,
-
-        collected:
-          Array.from(
-            this.collected
+    stopRoomFlicker:
+      function () {
+        document
+          .querySelectorAll(
+            '[flicker]'
           )
-      };
+          .forEach(
+            (entity) => {
+              const flicker =
+                entity.components &&
+                entity.components
+                  .flicker;
+
+              /*
+                Return light to its normal
+                steady intensity first.
+              */
+              if (
+                flicker &&
+                typeof flicker
+                  .stableIntensity ===
+                  'number'
+              ) {
+                entity.setAttribute(
+                  'light',
+                  'intensity',
+                  flicker
+                    .stableIntensity
+                );
+              }
+
+              /*
+                Permanently stop random
+                flickering.
+              */
+              entity.removeAttribute(
+                'flicker'
+              );
+
+              /*
+                Also prevent the automatic
+                proximity light reaction
+                from making it flicker again.
+              */
+              if (
+                entity.hasAttribute(
+                  'proximity-light-reaction'
+                )
+              ) {
+                entity.removeAttribute(
+                  'proximity-light-reaction'
+                );
+              }
+            }
+          );
+
+        this.el.sceneEl.emit(
+          'room-flicker-stopped',
+          {},
+          false
+        );
+      },
 
 
-      console.log(
-        'All 3 quest items inspected. Story objective complete.'
-      );
+    /* ========================================================
+       FINAL COMPLETION
+    ======================================================== */
+
+    completeStory:
+      function (
+        placementState
+      ) {
+        if (
+          this.completed
+        ) {
+          return;
+        }
+
+        this.completed =
+          true;
+
+        this.allPlacedSince =
+          null;
+
+        roomsStorySetVisible(
+          this.placementPrompt,
+          false
+        );
+
+        this.stopRoomFlicker();
+
+        const detail = {
+          total:
+            ROOMS_STORY_MILESTONES
+              .length,
+
+          inspected:
+            Array.from(
+              this.collected
+            ),
+
+          placed:
+            placementState &&
+            placementState
+              .placed
+              ? placementState
+                  .placed
+              : {},
+
+          target:
+            ROOMS_FINAL_PLACEMENT
+              .targetSelector
+        };
+
+        console.log(
+          'All 3 quest items are on ' +
+          '#truocbantho. ' +
+          'Story complete.'
+        );
+
+        /*
+          ui-scare.js already listens
+          for this event.
+
+          This means the existing final
+          jumpscare now happens AFTER
+          the three objects are placed.
+        */
+        this.el.emit(
+          'all-clues-collected',
+          detail,
+          false
+        );
+
+        this.el.sceneEl.emit(
+          'story-completed',
+          detail,
+          false
+        );
+
+        window.roomsGameEnded =
+          true;
+
+        /*
+          Existing scare is about
+          2.3 seconds.
+
+          Give it time before the
+          GAME COMPLETE screen appears.
+        */
+        this.endTimer =
+          window.setTimeout(
+            () => {
+              this.showEndScreen();
+
+              this.lockFinishedGame();
+            },
+            ROOMS_FINAL_PLACEMENT
+              .endScreenDelay
+          );
+      },
 
 
-      /*
-        IMPORTANT:
-        ui-scare.js jumpscare-controller already listens for this
-        exact event on #story-manager.
-      */
-      this.el.emit(
-        'all-clues-collected',
-        detail,
-        false
-      );
+    /* ========================================================
+       FINAL UI
+    ======================================================== */
+
+    buildFinalUI:
+      function () {
+        const camera =
+          document.querySelector(
+            '#cam'
+          ) ||
+          document.querySelector(
+            '[camera]'
+          );
+
+        if (!camera) {
+          return;
+        }
+
+        const oldPrompt =
+          document.querySelector(
+            '#roomsFinalPlacementPrompt'
+          );
+
+        if (oldPrompt) {
+          oldPrompt.remove();
+        }
+
+        const prompt =
+          document.createElement(
+            'a-entity'
+          );
+
+        prompt.setAttribute(
+          'id',
+          'roomsFinalPlacementPrompt'
+        );
+
+        prompt.setAttribute(
+          'position',
+          '0 0.26 -0.86'
+        );
+
+        prompt.setAttribute(
+          'visible',
+          false
+        );
+
+        const promptBack =
+          document.createElement(
+            'a-plane'
+          );
+
+        promptBack.setAttribute(
+          'width',
+          '0.58'
+        );
+
+        promptBack.setAttribute(
+          'height',
+          '0.085'
+        );
+
+        promptBack.setAttribute(
+          'material',
+          'color: #0d0f12; ' +
+          'opacity: 0.78; ' +
+          'transparent: true; ' +
+          'shader: flat; ' +
+          'depthTest: false; ' +
+          'depthWrite: false'
+        );
+
+        const promptText =
+          roomsStoryCreateText(
+            'PLACE ALL 3 ITEMS ON THE ALTAR',
+            '0 0 0.008',
+            '0.56',
+            'center',
+            '#ffffff',
+            34
+          );
+
+        prompt.append(
+          promptBack,
+          promptText
+        );
+
+        camera.appendChild(
+          prompt
+        );
+
+        this.placementPrompt =
+          prompt;
 
 
-      this.el.sceneEl.emit(
-        'story-completed',
-        detail,
-        false
-      );
-    },
+        /* =========================
+           GAME COMPLETE SCREEN
+        ========================= */
+
+        const oldEnd =
+          document.querySelector(
+            '#roomsGameCompleteUI'
+          );
+
+        if (oldEnd) {
+          oldEnd.remove();
+        }
+
+        const endRoot =
+          document.createElement(
+            'a-entity'
+          );
+
+        endRoot.setAttribute(
+          'id',
+          'roomsGameCompleteUI'
+        );
+
+        endRoot.setAttribute(
+          'position',
+          '0 0 -0.82'
+        );
+
+        endRoot.setAttribute(
+          'visible',
+          false
+        );
+
+        const blackout =
+          document.createElement(
+            'a-plane'
+          );
+
+        blackout.setAttribute(
+          'width',
+          '2.4'
+        );
+
+        blackout.setAttribute(
+          'height',
+          '1.5'
+        );
+
+        blackout.setAttribute(
+          'position',
+          '0 0 -0.02'
+        );
+
+        blackout.setAttribute(
+          'material',
+          'color: #000000; ' +
+          'opacity: 0.88; ' +
+          'transparent: true; ' +
+          'shader: flat; ' +
+          'depthTest: false; ' +
+          'depthWrite: false'
+        );
+
+        const panel =
+          document.createElement(
+            'a-plane'
+          );
+
+        panel.setAttribute(
+          'width',
+          '0.78'
+        );
+
+        panel.setAttribute(
+          'height',
+          '0.32'
+        );
+
+        panel.setAttribute(
+          'material',
+          'color: #101216; ' +
+          'opacity: 0.96; ' +
+          'transparent: true; ' +
+          'shader: flat; ' +
+          'depthTest: false; ' +
+          'depthWrite: false'
+        );
+
+        const title =
+          roomsStoryCreateText(
+            'ROOMS WITHIN',
+            '0 0.055 0.015',
+            '0.66',
+            'center',
+            '#ffffff',
+            20
+          );
+
+        const complete =
+          roomsStoryCreateText(
+            'GAME COMPLETE',
+            '0 -0.055 0.015',
+            '0.56',
+            'center',
+            '#d8d8d8',
+            22
+          );
+
+        endRoot.append(
+          blackout,
+          panel,
+          title,
+          complete
+        );
+
+        camera.appendChild(
+          endRoot
+        );
+
+        this.endRoot =
+          endRoot;
+      },
+
+
+    showEndScreen:
+      function () {
+        roomsStorySetVisible(
+          this.endRoot,
+          true
+        );
+
+        roomsStorySetVisible(
+          document.querySelector(
+            '#roomsQuestTracker'
+          ),
+          false
+        );
+
+        roomsStorySetVisible(
+          document.querySelector(
+            '#roomsActionPrompt'
+          ),
+          false
+        );
+      },
+
+
+    /* ========================================================
+       END GAME LOCK
+    ======================================================== */
+
+    lockFinishedGame:
+      function () {
+        window.roomsGameEnded =
+          true;
+
+        /*
+          Do not call setRoomsPaused(true)
+          here.
+
+          That would make the Settings
+          pause menu appear over the
+          GAME COMPLETE screen.
+        */
+        window.roomsPaused =
+          true;
+
+        window.roomsInputLocked =
+          true;
+
+        const rig =
+          document.querySelector(
+            '#rig'
+          );
+
+        const leftHand =
+          document.querySelector(
+            '#leftHand'
+          );
+
+        if (rig) {
+          rig.setAttribute(
+            'movement-controls',
+            'enabled',
+            false
+          );
+        }
+
+        if (leftHand) {
+          leftHand.setAttribute(
+            'blink-controls',
+            'enabled',
+            false
+          );
+        }
+
+        this.el.sceneEl.emit(
+          'rooms-game-ended',
+          {},
+          false
+        );
+      },
+
+
+    /* ========================================================
+       FRAME UPDATE
+    ======================================================== */
+
+    tick:
+      function (
+        time
+      ) {
+        if (
+          this.completed
+        ) {
+          return;
+        }
+
+        if (
+          time -
+          this.lastPlacementCheck <
+          ROOMS_FINAL_PLACEMENT
+            .checkInterval
+        ) {
+          return;
+        }
+
+        this.lastPlacementCheck =
+          time;
+
+        /*
+          Hover descriptions are the real inspection state.
+
+          Synchronizing here fixes the old mismatch where
+          story.js waited for quest-item-found even though
+          interaction-prompts.js intentionally reserves that
+          event/checklist for physical altar placement.
+        */
+
+        this.syncInspectionProgress();
+
+        if (
+          !this.inspectedComplete
+        ) {
+          return;
+        }
+
+        this.checkReleasedFinalItems();
+
+        this.checkFinalPlacement(
+          time
+        );
+      },
 
 
     /* ========================================================
        CLEANUP
     ======================================================== */
 
-    remove: function () {
-      this.listeners
-        .forEach(
-          ({
-            target,
-            eventName,
-            handler
-          }) => {
-            target.removeEventListener(
-              eventName,
-              handler
-            );
-          }
-        );
+    remove:
+      function () {
+        this.listeners
+          .forEach(
+            (entry) => {
+              entry.target
+                .removeEventListener(
+                  entry.eventName,
+                  entry.handler
+                );
+            }
+          );
+
+        this.listeners =
+          [];
 
 
-      this.listeners =
-        [];
+        this.itemReleaseListeners
+          .forEach(
+            (
+              handler,
+              entity
+            ) => {
+              if (
+                entity &&
+                entity.removeEventListener
+              ) {
+                entity.removeEventListener(
+                  'stateremoved',
+                  handler
+                );
+              }
+            }
+          );
+
+        this.itemReleaseListeners
+          .clear();
 
 
-      if (
-        window.getRoomsStoryState
-      ) {
-        delete window
-          .getRoomsStoryState;
+        this.pendingSnapFrames
+          .forEach(
+            (frame) => {
+              window
+                .cancelAnimationFrame(
+                  frame
+                );
+            }
+          );
+
+        this.pendingSnapFrames
+          .clear();
+
+
+        if (
+          this.endTimer
+        ) {
+          window.clearTimeout(
+            this.endTimer
+          );
+
+          this.endTimer =
+            null;
+        }
+
+        if (
+          this.placementPrompt &&
+          this.placementPrompt
+            .parentNode
+        ) {
+          this.placementPrompt
+            .remove();
+        }
+
+        if (
+          this.endRoot &&
+          this.endRoot
+            .parentNode
+        ) {
+          this.endRoot
+            .remove();
+        }
+
+        if (
+          window.getRoomsStoryState
+        ) {
+          delete window
+            .getRoomsStoryState;
+        }
       }
-    }
   }
 );
