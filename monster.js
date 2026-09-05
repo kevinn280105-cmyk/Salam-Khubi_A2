@@ -1,78 +1,201 @@
 /* ============================================================
    monster.js — ROOMS WITHIN
+   FULL REPLACEMENT
 
-   Event:
+   WALKING MONSTER EVENT:
    - Enter bedroom.
    - Physically grab Teddy and KEEP HOLDING it.
-   - The bedroom door is #door / cua.glb.
-   - Door opens normally through the existing door system.
+   - Bedroom door is #door / cua.glb.
+   - Door opens through the existing door system.
    - Walk THROUGH the open doorway while still holding Teddy.
    - walking.glb appears at its baked Blender world position.
-   - Its walk animation plays once, then it disappears.
+   - Walking animation plays once.
+   - walking.glb disappears.
+   - Happens only once.
+
+   STANDING MONSTER EVENT:
+   - story.js emits "story-item-snapped" whenever one of the
+     three quest items successfully locks onto #truocbantho.
+   - After TWO unique items have been placed:
+       standing.glb becomes visible.
+   - standing.glb stays completely still.
+   - The player must actually LOOK toward her.
+   - Once seen:
+       1. screen quickly fades to black
+       2. black stays for a moment
+       3. standing.glb is hidden WHILE the screen is black
+       4. black stays briefly again
+       5. screen fades back in
+       6. she is gone
    - Happens only once.
 
    IMPORTANT:
-   - Bedroom bounds are kept only for debug / story awareness.
-   - The monster scare is triggered by crossing the actual door plane,
-     not by leaving the bedroom GLB bounding box.
+   - walking.glb position remains 0 0 0.
+   - standing.glb position remains 0 0 0.
+   - Their intended world placement is baked into Blender.
+============================================================ */
 
-   standing.glb is loaded hidden for a later event.
+
+/* ============================================================
+   CONFIG
 ============================================================ */
 
 const ROOMS_MONSTER_CONFIG = {
   bedroomSelector: '#bedroom',
+
   doorSelector: '#door',
+
   playerSelector: '#cam',
+
   teddySelector: '#teddy',
 
   walkingModel: 'walking.glb',
+
   standingModel: 'standing.glb',
 
-  /*
-    Slightly shrink the bedroom bounds.
 
-    This stops the doorway/wall edge from counting
-    as fully inside the bedroom.
-  */
+  /* ----------------------------------------------------------
+     BEDROOM DEBUG BOUNDS
+  ---------------------------------------------------------- */
+
   bedroomInsetX: 0.18,
+
   bedroomInsetZ: 0.18,
 
+
+  /* ----------------------------------------------------------
+     DOOR CROSSING
+  ---------------------------------------------------------- */
+
   /*
-    Door-crossing detection.
+    Small forgiveness around the doorway width.
+  */
 
-    doorCrossPadding:
-    Adds a little forgiveness to the width of the doorway.
+  doorCrossPadding: 0.35,
 
-    doorSideEpsilon:
-    Small dead-zone around the exact door plane so tiny headset
-    movements do not count as crossing.
 
-    maxDoorCrossDistance:
-    Stops a very large teleport/jump from being mistaken for
+  /*
+    Tiny dead-zone directly on the doorway plane.
+
+    Helps prevent very small Quest headset movement from
+    being interpreted as crossing through the door.
+  */
+
+  doorSideEpsilon: 0.05,
+
+
+  /*
+    Prevent a huge teleport from being interpreted as
     physically walking through the doorway.
   */
-  doorCrossPadding: 0.35,
-  doorSideEpsilon: 0.05,
+
   maxDoorCrossDistance: 1.5,
 
-  /*
-    Check player position every 100ms.
-  */
+
+  /* ----------------------------------------------------------
+     CHECK FREQUENCY
+  ---------------------------------------------------------- */
+
   checkInterval: 100,
 
+
+  /* ----------------------------------------------------------
+     WALKING MONSTER
+  ---------------------------------------------------------- */
+
   /*
-    If walking.glb does not contain an animation,
-    show it for this long before hiding it.
+    If walking.glb has no animation,
+    keep it visible for this long.
   */
+
   fallbackWalkingDuration: 3500,
 
-  /*
-    Safety timeout.
 
-    Even if the exported animation accidentally loops
-    forever, the monster cannot remain visible forever.
+  /*
+    Safety maximum even if its animation
+    accidentally loops forever.
   */
-  maxWalkingVisibleDuration: 6000
+
+  maxWalkingVisibleDuration: 6000,
+
+
+  /* ----------------------------------------------------------
+     STANDING MONSTER
+  ---------------------------------------------------------- */
+
+  /*
+    Number of altar objects required before she appears.
+  */
+
+  standingRequiredItems: 2,
+
+
+  /*
+    Player must look fairly directly toward her.
+
+    18 degrees gives the player a chance to notice her
+    instead of triggering from the extreme edge of vision.
+  */
+
+  standingLookAngle: 18,
+
+
+  /*
+    Maximum distance at which looking toward her counts.
+
+    Large enough for the room, while helping avoid very
+    distant false positives.
+  */
+
+  standingLookMaxDistance: 18,
+
+
+  /*
+    Let her exist for at least this long before
+    "player saw her" can activate.
+
+    If she spawns directly in front of the player,
+    this gives them a visible glimpse first.
+  */
+
+  standingMinimumVisibleTime: 450,
+
+
+  /* ----------------------------------------------------------
+     STANDING MONSTER BLACKOUT
+  ---------------------------------------------------------- */
+
+  /*
+    Fast supernatural blink into darkness.
+  */
+
+  standingBlackFadeIn: 130,
+
+
+  /*
+    IMPORTANT:
+
+    Screen is ALREADY fully black before she disappears.
+
+    This is the time we stay black BEFORE hiding her.
+  */
+
+  standingBlackBeforeHide: 350,
+
+
+  /*
+    She is now hidden, but screen stays black a little
+    longer so the player never catches the model despawning.
+  */
+
+  standingBlackAfterHide: 400,
+
+
+  /*
+    Restore the player's vision more slowly.
+  */
+
+  standingBlackFadeOut: 380
 };
 
 
@@ -87,13 +210,42 @@ window.roomsMonsterState = {
 
   teddyGrabbed: false,
 
+  teddyCurrentlyHeld: false,
+
+
+  /* ----------------------------------------------------------
+     WALKING
+  ---------------------------------------------------------- */
+
   walkingTriggered: false,
 
   walkingVisible: false,
 
   walkingModelReady: false,
 
+
+  /* ----------------------------------------------------------
+     STANDING
+  ---------------------------------------------------------- */
+
   standingModelReady: false,
+
+  standingTriggered: false,
+
+  standingVisible: false,
+
+  standingSeen: false,
+
+  standingBlackoutRunning: false,
+
+  standingFinished: false,
+
+  standingPlacedCount: 0,
+
+
+  /* ----------------------------------------------------------
+     BEDROOM / DOOR
+  ---------------------------------------------------------- */
 
   bedroomReady: false,
 
@@ -102,8 +254,6 @@ window.roomsMonsterState = {
   doorOpen: false,
 
   doorSide: 0,
-
-  teddyCurrentlyHeld: false,
 
   teddyOriginDoorSide: 0,
 
@@ -120,6 +270,42 @@ function roomsMonsterPaused() {
     window.roomsPaused ||
     window.roomsInputLocked ||
     window.roomsGameEnded
+  );
+}
+
+
+/* ============================================================
+   PAUSE-AWARE WAIT
+
+   ui-scare.js already exports waitRoomsMilliseconds().
+
+   Use it when available so the scare timer does not burn
+   through while the game is paused.
+
+   Fallback exists in case ui-scare.js has not initialized yet.
+============================================================ */
+
+function roomsMonsterWait(
+  milliseconds
+) {
+  if (
+    typeof window
+      .waitRoomsMilliseconds ===
+    'function'
+  ) {
+    return window
+      .waitRoomsMilliseconds(
+        milliseconds
+      );
+  }
+
+  return new Promise(
+    (resolve) => {
+      window.setTimeout(
+        resolve,
+        milliseconds
+      );
+    }
   );
 }
 
@@ -222,6 +408,7 @@ function roomsMonsterTeddyIsGrabbed() {
     return false;
   }
 
+
   /*
     natural-grabbable adds the A-Frame state:
     "grabbed"
@@ -236,9 +423,10 @@ function roomsMonsterTeddyIsGrabbed() {
     return true;
   }
 
+
   /*
     Extra fallback:
-    also check whether natural-grabbable has a hand holder.
+    also check whether natural-grabbable has a holder.
   */
 
   const grabbable =
@@ -257,10 +445,7 @@ function roomsMonsterTeddyIsGrabbed() {
 /* ============================================================
    WALKING MONSTER ANIMATION
 
-   We use THREE.AnimationMixer directly.
-
-   This means you do NOT need another
-   animation-mixer library/component.
+   Uses THREE.AnimationMixer directly.
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -309,7 +494,7 @@ AFRAME.registerComponent(
 
 
       /*
-        In case the model finished loading before
+        Model may already have loaded before
         this component initialized.
       */
 
@@ -367,10 +552,9 @@ AFRAME.registerComponent(
 
 
         /*
-          Prefer an animation with "walk" in its name.
+          Prefer an animation containing "walk".
 
-          If Blender exported it under another name,
-          simply use the first animation instead.
+          Otherwise use the first exported animation.
         */
 
         this.clip =
@@ -414,10 +598,6 @@ AFRAME.registerComponent(
               );
 
 
-          /*
-            ONE PLAY ONLY.
-          */
-
           this.action
             .setLoop(
               THREE.LoopOnce,
@@ -451,11 +631,6 @@ AFRAME.registerComponent(
           }
         );
 
-
-        /*
-          If the player triggered the event before
-          walking.glb finished loading, play it now.
-        */
 
         if (
           this.pendingPlay
@@ -498,12 +673,6 @@ AFRAME.registerComponent(
           0;
 
 
-        /*
-          walking.glb was loaded hidden.
-
-          NOW reveal it.
-        */
-
         this.el.setAttribute(
           'visible',
           true
@@ -515,10 +684,6 @@ AFRAME.registerComponent(
           .walkingVisible =
           true;
 
-
-        /*
-          Play exported Blender animation.
-        */
 
         if (
           this.action &&
@@ -667,8 +832,8 @@ AFRAME.registerComponent(
 
 
         /*
-          If walking.glb contains NO animation,
-          still show the monster briefly.
+          No animation?
+          Keep the monster visible briefly anyway.
         */
 
         if (
@@ -684,8 +849,7 @@ AFRAME.registerComponent(
 
 
         /*
-          Safety:
-          never stay visible forever.
+          Safety maximum.
         */
 
         if (
@@ -765,24 +929,21 @@ AFRAME.registerComponent(
       this.standingMonster =
         null;
 
+      this.blackout =
+        null;
 
-      /*
-        Bedroom box is kept for debug / story awareness only.
 
-        It is NOT what activates walking.glb anymore.
-      */
+      /* --------------------------------------------------------
+         BEDROOM DEBUG
+      -------------------------------------------------------- */
 
       this.bedroomBox =
         new THREE.Box3();
 
 
-      /*
-        Fixed CLOSED-door box.
-
-        We prefer the cached box created by auto-door-proximity,
-        because that box stays in the doorway even while cua.glb
-        swings open.
-      */
+      /* --------------------------------------------------------
+         DOOR CROSSING
+      -------------------------------------------------------- */
 
       this.doorBox =
         new THREE.Box3();
@@ -799,6 +960,10 @@ AFRAME.registerComponent(
       this.doorLateralAxis =
         null;
 
+
+      /* --------------------------------------------------------
+         PLAYER MOVEMENT
+      -------------------------------------------------------- */
 
       this.playerWorld =
         new THREE.Vector3();
@@ -817,28 +982,70 @@ AFRAME.registerComponent(
         0;
 
 
+      this.previousInside =
+        null;
+
+
       /*
-        First stable side of the doorway where Teddy was picked up.
-
-        Example:
-          bedroom side = +1
-          hallway side = -1
-
-        The exact sign does not matter. We only care that the player
-        later crosses to the opposite side while still holding Teddy.
+        First stable side of the doorway where
+        Teddy is physically held.
       */
 
       this.teddyOriginDoorSide =
         0;
 
 
+      /* --------------------------------------------------------
+         STANDING MONSTER EVENT
+      -------------------------------------------------------- */
+
       /*
-        Bedroom state remains for debug / compatibility.
+        Unique altar item keys received from story.js.
       */
 
-      this.previousInside =
+      this.standingPlacedItems =
+        new Set();
+
+
+      /*
+        Time she first became visible.
+      */
+
+      this.standingShownAt =
+        0;
+
+
+      /*
+        Gaze math.
+      */
+
+      this.standingCenter =
+        new THREE.Vector3();
+
+      this.standingCameraPosition =
+        new THREE.Vector3();
+
+      this.standingLookDirection =
+        new THREE.Vector3();
+
+      this.standingDirectionToMonster =
+        new THREE.Vector3();
+
+
+      /*
+        Black overlay state.
+      */
+
+      this.blackoutOpacity =
+        0;
+
+      this.blackoutAnimationFrame =
         null;
 
+
+      /* --------------------------------------------------------
+         BOUND FUNCTIONS
+      -------------------------------------------------------- */
 
       this.onBedroomModelLoaded =
         this
@@ -872,29 +1079,58 @@ AFRAME.registerComponent(
           );
 
 
+      this.onStoryItemSnapped =
+        this
+          .onStoryItemSnapped
+          .bind(
+            this
+          );
+
+
       this.prepare =
         this.prepare.bind(
           this
         );
 
 
-      /*
-        Make the hidden monster entities.
-      */
+      /* --------------------------------------------------------
+         CREATE HIDDEN MONSTER ENTITIES
+      -------------------------------------------------------- */
 
       this.createMonsterEntities();
 
 
-      /*
-        Find bedroom / door / Teddy.
-      */
+      /* --------------------------------------------------------
+         CREATE CAMERA BLACKOUT
+      -------------------------------------------------------- */
+
+      this.createStandingBlackout();
+
+
+      /* --------------------------------------------------------
+         LISTEN FOR ALTAR PLACEMENT
+      -------------------------------------------------------- */
+
+      if (
+        this.el.sceneEl
+      ) {
+        this.el.sceneEl
+          .addEventListener(
+            'story-item-snapped',
+            this.onStoryItemSnapped
+          );
+      }
+
+
+      /* --------------------------------------------------------
+         FIND BEDROOM / DOOR / TEDDY
+      -------------------------------------------------------- */
 
       this.prepare();
 
 
       /*
-        Models/components may initialize slightly later,
-        so retry several times.
+        Components/models can initialize slightly later.
       */
 
       [
@@ -906,6 +1142,28 @@ AFRAME.registerComponent(
         (delay) => {
           window.setTimeout(
             this.prepare,
+            delay
+          );
+        }
+      );
+
+
+      /*
+        Recover altar state if story.js finished snapping
+        something before monster.js was fully ready.
+      */
+
+      [
+        250,
+        1000,
+        2500
+      ].forEach(
+        (delay) => {
+          window.setTimeout(
+            () => {
+              this.syncStandingPlacementState();
+            },
+
             delay
           );
         }
@@ -961,10 +1219,9 @@ AFRAME.registerComponent(
           /*
             IMPORTANT:
 
-            Do NOT manually move it.
+            Do NOT move this.
 
-            walking.glb already has the intended scene position
-            baked into Blender.
+            Position is baked into walking.glb.
           */
 
           walking.setAttribute(
@@ -1004,8 +1261,6 @@ AFRAME.registerComponent(
 
         /* ----------------------------------------------------
            STANDING MONSTER
-
-           Loaded now but NOT USED YET.
         ---------------------------------------------------- */
 
         let standing =
@@ -1044,7 +1299,12 @@ AFRAME.registerComponent(
 
 
           /*
-            Also uses its baked Blender position.
+            IMPORTANT:
+
+            Do NOT manually move her.
+
+            standing.glb has its intended world position
+            baked into Blender.
           */
 
           standing.setAttribute(
@@ -1076,8 +1336,15 @@ AFRAME.registerComponent(
 
 
               console.log(
-                'standing.glb ready and hidden for later.'
+                'standing.glb ready and hidden.'
               );
+
+
+              /*
+                If two items were already placed before
+                the GLB finished loading, its visible state
+                is already true and it will appear now.
+              */
             },
 
             {
@@ -1090,6 +1357,22 @@ AFRAME.registerComponent(
           this.el.appendChild(
             standing
           );
+
+        } else {
+          /*
+            Existing entity may already be loaded.
+          */
+
+          if (
+            standing.getObject3D(
+              'mesh'
+            )
+          ) {
+            window
+              .roomsMonsterState
+              .standingModelReady =
+              true;
+          }
         }
 
 
@@ -1099,11 +1382,322 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
+       CREATE STANDING-SCARE BLACKOUT
+
+       Camera-attached black plane.
+
+       This does NOT use the pause/settings UI and
+       does NOT end the game.
+    ======================================================== */
+
+    createStandingBlackout:
+      function () {
+        const camera =
+          document.querySelector(
+            '#cam'
+          ) ||
+          document.querySelector(
+            '[camera]'
+          );
+
+
+        if (
+          !camera
+        ) {
+          return false;
+        }
+
+
+        let blackout =
+          document.querySelector(
+            '#roomsStandingMonsterBlackout'
+          );
+
+
+        if (
+          !blackout
+        ) {
+          blackout =
+            document
+              .createElement(
+                'a-plane'
+              );
+
+
+          blackout.setAttribute(
+            'id',
+            'roomsStandingMonsterBlackout'
+          );
+
+
+          /*
+            Very close to camera and deliberately huge.
+
+            This covers the view in desktop and immersive VR.
+          */
+
+          blackout.setAttribute(
+            'position',
+            '0 0 -0.12'
+          );
+
+
+          blackout.setAttribute(
+            'width',
+            '4'
+          );
+
+
+          blackout.setAttribute(
+            'height',
+            '4'
+          );
+
+
+          blackout.setAttribute(
+            'visible',
+            'false'
+          );
+
+
+          blackout.setAttribute(
+            'material',
+
+            'color: #000000; ' +
+            'opacity: 0; ' +
+            'transparent: true; ' +
+            'shader: flat; ' +
+            'depthTest: false; ' +
+            'depthWrite: false; ' +
+            'side: double'
+          );
+
+
+          camera.appendChild(
+            blackout
+          );
+        }
+
+
+        this.blackout =
+          blackout;
+
+        this.blackoutOpacity =
+          0;
+
+
+        return true;
+      },
+
+
+    /* ========================================================
+       BLACKOUT OPACITY
+    ======================================================== */
+
+    setStandingBlackoutOpacity:
+      function (
+        opacity
+      ) {
+        if (
+          !this.blackout
+        ) {
+          this.createStandingBlackout();
+        }
+
+
+        if (
+          !this.blackout
+        ) {
+          return;
+        }
+
+
+        const value =
+          THREE.MathUtils.clamp(
+            Number(
+              opacity
+            ) || 0,
+            0,
+            1
+          );
+
+
+        this.blackoutOpacity =
+          value;
+
+
+        this.blackout.setAttribute(
+          'visible',
+          value >
+            0.001
+        );
+
+
+        this.blackout.setAttribute(
+          'material',
+          'opacity',
+          value
+        );
+      },
+
+
+    /* ========================================================
+       BLACKOUT FADE
+    ======================================================== */
+
+    fadeStandingBlackout:
+      function (
+        targetOpacity,
+        duration
+      ) {
+        return new Promise(
+          (resolve) => {
+            if (
+              !this.blackout
+            ) {
+              this.createStandingBlackout();
+            }
+
+
+            if (
+              !this.blackout
+            ) {
+              resolve();
+
+              return;
+            }
+
+
+            if (
+              this.blackoutAnimationFrame !==
+              null
+            ) {
+              window
+                .cancelAnimationFrame(
+                  this
+                    .blackoutAnimationFrame
+                );
+
+              this.blackoutAnimationFrame =
+                null;
+            }
+
+
+            const from =
+              this.blackoutOpacity;
+
+            const to =
+              THREE.MathUtils.clamp(
+                Number(
+                  targetOpacity
+                ) || 0,
+                0,
+                1
+              );
+
+            const length =
+              Math.max(
+                1,
+                Number(
+                  duration
+                ) || 1
+              );
+
+            const started =
+              performance.now();
+
+
+            const step =
+              (now) => {
+                const progress =
+                  THREE.MathUtils.clamp(
+                    (
+                      now -
+                      started
+                    ) /
+                    length,
+                    0,
+                    1
+                  );
+
+
+                /*
+                  Smoothstep.
+                */
+
+                const eased =
+                  progress *
+                  progress *
+                  (
+                    3 -
+                    2 *
+                    progress
+                  );
+
+
+                const value =
+                  THREE.MathUtils
+                    .lerp(
+                      from,
+                      to,
+                      eased
+                    );
+
+
+                this
+                  .setStandingBlackoutOpacity(
+                    value
+                  );
+
+
+                if (
+                  progress <
+                  1
+                ) {
+                  this.blackoutAnimationFrame =
+                    window
+                      .requestAnimationFrame(
+                        step
+                      );
+
+                  return;
+                }
+
+
+                this.blackoutAnimationFrame =
+                  null;
+
+
+                this
+                  .setStandingBlackoutOpacity(
+                    to
+                  );
+
+
+                resolve();
+              };
+
+
+            this.blackoutAnimationFrame =
+              window
+                .requestAnimationFrame(
+                  step
+                );
+          }
+        );
+      },
+
+
+    /* ========================================================
        FIND BEDROOM + DOOR + TEDDY
     ======================================================== */
 
     prepare:
       function () {
+        /* ----------------------------------------------------
+           BEDROOM
+        ---------------------------------------------------- */
+
         const bedroom =
           document.querySelector(
             ROOMS_MONSTER_CONFIG
@@ -1141,10 +1735,6 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          Bedroom might already be loaded.
-        */
-
         if (
           this.bedroom &&
           this.bedroom
@@ -1156,6 +1746,10 @@ AFRAME.registerComponent(
         }
 
 
+
+        /* ----------------------------------------------------
+           DOOR / CUA.GLB
+        ---------------------------------------------------- */
 
         const door =
           document.querySelector(
@@ -1199,6 +1793,7 @@ AFRAME.registerComponent(
                 .onDoorModelLoaded
             );
 
+
           this.door
             .addEventListener(
               'rooms-door-ready',
@@ -1211,6 +1806,10 @@ AFRAME.registerComponent(
         this.prepareDoorTrigger();
 
 
+
+        /* ----------------------------------------------------
+           TEDDY
+        ---------------------------------------------------- */
 
         const teddy =
           document.querySelector(
@@ -1240,11 +1839,6 @@ AFRAME.registerComponent(
             teddy;
 
 
-          /*
-            We specifically listen for physical
-            A-Frame "grabbed" state.
-          */
-
           this.teddy
             .addEventListener(
               'stateadded',
@@ -1255,7 +1849,7 @@ AFRAME.registerComponent(
 
 
         /*
-          Fallback if Teddy was already being held.
+          Teddy could already be held.
         */
 
         if (
@@ -1263,6 +1857,20 @@ AFRAME.registerComponent(
         ) {
           this.markTeddyGrabbed();
         }
+
+
+        /*
+          Camera might not have existed during init.
+        */
+
+        if (
+          !this.blackout
+        ) {
+          this.createStandingBlackout();
+        }
+
+
+        this.syncStandingPlacementState();
       },
 
 
@@ -1277,7 +1885,7 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
-       DOOR MODEL / HINGE READY
+       DOOR MODEL READY
     ======================================================== */
 
     onDoorModelLoaded:
@@ -1295,8 +1903,9 @@ AFRAME.registerComponent(
     /* ========================================================
        BEDROOM BOUNDARY
 
-       Kept only for debug / compatibility.
-       It does NOT trigger the monster anymore.
+       Kept for debug / compatibility only.
+
+       walking.glb now uses the actual cua.glb doorway.
     ======================================================== */
 
     updateBedroomBox:
@@ -1350,6 +1959,7 @@ AFRAME.registerComponent(
             .doorReady =
             false;
 
+
           return false;
         }
 
@@ -1361,8 +1971,8 @@ AFRAME.registerComponent(
         /*
           BEST SOURCE:
 
-          auto-door-proximity already caches the CLOSED door box
-          before the door leaf moves.
+          auto-door-proximity already stores the CLOSED
+          door box before the door swings open.
         */
 
         const autoDoor =
@@ -1386,8 +1996,7 @@ AFRAME.registerComponent(
         /*
           FALLBACK:
 
-          If auto-door-proximity has not cached its box yet,
-          use the GLB's current box only while the door is closed.
+          Only use the live door model if it is currently closed.
         */
 
         if (
@@ -1410,6 +2019,7 @@ AFRAME.registerComponent(
             .doorReady =
             false;
 
+
           return false;
         }
 
@@ -1425,6 +2035,7 @@ AFRAME.registerComponent(
             this.doorCenter
           );
 
+
         this.doorBox
           .getSize(
             this.doorSize
@@ -1432,11 +2043,11 @@ AFRAME.registerComponent(
 
 
         /*
-          A closed door is wide along one horizontal axis
-          and thin along the other.
+          Closed door:
+          one horizontal dimension is wide,
+          the other is thin.
 
-          The THIN axis is the doorway normal — the direction
-          the player crosses when walking through it.
+          Thin dimension = crossing direction.
         */
 
         if (
@@ -1548,10 +2159,9 @@ AFRAME.registerComponent(
     /* ========================================================
        PLAYER SIDE OF DOOR
 
-       Returns:
        +1 = one side
        -1 = opposite side
-        0 = inside tiny dead-zone on the plane
+        0 = tiny dead-zone directly on doorway plane
     ======================================================== */
 
     getDoorSide:
@@ -1569,7 +2179,7 @@ AFRAME.registerComponent(
         }
 
 
-        const normalValue =
+        const value =
           player[
             this.doorNormalAxis
           ] -
@@ -1579,7 +2189,7 @@ AFRAME.registerComponent(
 
 
         if (
-          normalValue >
+          value >
           ROOMS_MONSTER_CONFIG
             .doorSideEpsilon
         ) {
@@ -1588,7 +2198,7 @@ AFRAME.registerComponent(
 
 
         if (
-          normalValue <
+          value <
           -ROOMS_MONSTER_CONFIG
             .doorSideEpsilon
         ) {
@@ -1601,7 +2211,7 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
-       DID PLAYER'S MOVEMENT SEGMENT PASS THROUGH THE DOORWAY?
+       DID MOVEMENT PASS THROUGH DOORWAY?
     ======================================================== */
 
     didCrossDoorway:
@@ -1637,6 +2247,7 @@ AFRAME.registerComponent(
             normalAxis
           ];
 
+
         const currentNormal =
           current[
             normalAxis
@@ -1647,8 +2258,7 @@ AFRAME.registerComponent(
 
 
         /*
-          The movement segment must actually touch/cross
-          the door plane between the two samples.
+          Movement must actually pass across the door plane.
         */
 
         if (
@@ -1675,10 +2285,6 @@ AFRAME.registerComponent(
         }
 
 
-        /*
-          Ignore very large jumps / long teleports.
-        */
-
         const horizontalDistance =
           Math.hypot(
             current.x -
@@ -1688,6 +2294,10 @@ AFRAME.registerComponent(
               previous.z
           );
 
+
+        /*
+          Ignore very large teleport jumps.
+        */
 
         if (
           horizontalDistance >
@@ -1699,8 +2309,8 @@ AFRAME.registerComponent(
 
 
         /*
-          Interpolate where the movement line intersects
-          the exact doorway plane.
+          Find where the player's movement line intersects
+          the exact door plane.
         */
 
         const t =
@@ -1738,6 +2348,7 @@ AFRAME.registerComponent(
           ROOMS_MONSTER_CONFIG
             .doorCrossPadding;
 
+
         const maximum =
           this.doorBox.max[
             lateralAxis
@@ -1764,11 +2375,6 @@ AFRAME.registerComponent(
       function (
         event
       ) {
-        /*
-          A-Frame stateadded supplies:
-          event.detail.state
-        */
-
         const state =
           event &&
           event.detail
@@ -1788,11 +2394,10 @@ AFRAME.registerComponent(
     markTeddyGrabbed:
       function () {
         /*
-          Remember that Teddy has been physically grabbed
-          at least once for debug/history.
+          Historical/debug state only.
 
-          This alone does NOT trigger walking.glb.
-          Teddy must still be held while crossing the open door.
+          Walking scare now requires Teddy to STILL
+          be physically held while crossing the door.
         */
 
         if (
@@ -1969,8 +2574,7 @@ AFRAME.registerComponent(
 
         } else {
           /*
-            Component might be created one frame
-            after the A-Frame entity.
+            Component may initialize one frame after entity.
           */
 
           window.setTimeout(
@@ -2015,6 +2619,696 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
+       STORY ITEM SNAPPED
+
+       story.js emits this when Teddy / Picture / Hair Clipper
+       permanently locks onto #truocbantho.
+    ======================================================== */
+
+    onStoryItemSnapped:
+      function (
+        event
+      ) {
+        if (
+          window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          return;
+        }
+
+
+        const detail =
+          event &&
+          event.detail
+            ? event.detail
+            : {};
+
+
+        const key =
+          String(
+            detail.key ||
+            ''
+          );
+
+
+        if (
+          !key
+        ) {
+          return;
+        }
+
+
+        /*
+          Set prevents duplicate event calls from counting twice.
+        */
+
+        this.standingPlacedItems
+          .add(
+            key
+          );
+
+
+        window
+          .roomsMonsterState
+          .standingPlacedCount =
+          this.standingPlacedItems
+            .size;
+
+
+        console.log(
+          `Standing scare altar count: ${this.standingPlacedItems.size}/3`
+        );
+
+
+        if (
+          this.standingPlacedItems
+            .size >=
+            ROOMS_MONSTER_CONFIG
+              .standingRequiredItems
+        ) {
+          this.showStandingMonster();
+        }
+      },
+
+
+    /* ========================================================
+       RECOVER PLACEMENT STATE FROM STORY.JS
+    ======================================================== */
+
+    syncStandingPlacementState:
+      function () {
+        if (
+          window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          return;
+        }
+
+
+        if (
+          typeof window
+            .getRoomsStoryState !==
+          'function'
+        ) {
+          return;
+        }
+
+
+        let state =
+          null;
+
+
+        try {
+          state =
+            window
+              .getRoomsStoryState();
+
+        } catch (
+          error
+        ) {
+          return;
+        }
+
+
+        if (
+          !state ||
+          !Array.isArray(
+            state.snapped
+          )
+        ) {
+          return;
+        }
+
+
+        state.snapped
+          .forEach(
+            (key) => {
+              if (
+                key
+              ) {
+                this.standingPlacedItems
+                  .add(
+                    String(
+                      key
+                    )
+                  );
+              }
+            }
+          );
+
+
+        window
+          .roomsMonsterState
+          .standingPlacedCount =
+          this.standingPlacedItems
+            .size;
+
+
+        if (
+          this.standingPlacedItems
+            .size >=
+            ROOMS_MONSTER_CONFIG
+              .standingRequiredItems
+        ) {
+          this.showStandingMonster();
+        }
+      },
+
+
+    /* ========================================================
+       SHOW STANDING.GLB
+
+       Appears immediately after the SECOND unique altar item.
+    ======================================================== */
+
+    showStandingMonster:
+      function () {
+        if (
+          window
+            .roomsMonsterState
+            .standingTriggered ||
+          window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          return false;
+        }
+
+
+        const standing =
+          this.standingMonster ||
+          document.querySelector(
+            '#standingMonster'
+          );
+
+
+        if (
+          !standing
+        ) {
+          console.warn(
+            'standingMonster entity was not found.'
+          );
+
+
+          return false;
+        }
+
+
+        window
+          .roomsMonsterState
+          .standingTriggered =
+          true;
+
+
+        window
+          .roomsMonsterState
+          .standingVisible =
+          true;
+
+
+        window
+          .roomsMonsterState
+          .standingSeen =
+          false;
+
+
+        standing.setAttribute(
+          'visible',
+          true
+        );
+
+
+        this.standingShownAt =
+          performance.now();
+
+
+        const detail = {
+          placedCount:
+            this.standingPlacedItems
+              .size,
+
+          placed:
+            Array.from(
+              this.standingPlacedItems
+            )
+        };
+
+
+        this.el.emit(
+          'rooms-standing-monster-visible',
+          detail,
+          false
+        );
+
+
+        if (
+          this.el.sceneEl
+        ) {
+          this.el.sceneEl.emit(
+            'rooms-standing-monster-visible',
+            detail,
+            false
+          );
+        }
+
+
+        console.log(
+          'MONSTER: standing.glb appeared after 2 altar items.'
+        );
+
+
+        return true;
+      },
+
+
+    /* ========================================================
+       IS PLAYER ACTUALLY LOOKING AT STANDING.GLB?
+    ======================================================== */
+
+    isPlayerLookingAtStanding:
+      function () {
+        if (
+          !window
+            .roomsMonsterState
+            .standingVisible ||
+          window
+            .roomsMonsterState
+            .standingSeen ||
+          window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          return false;
+        }
+
+
+        /*
+          Do not let her disappear the exact frame she appears.
+        */
+
+        if (
+          performance.now() -
+            this.standingShownAt <
+          ROOMS_MONSTER_CONFIG
+            .standingMinimumVisibleTime
+        ) {
+          return false;
+        }
+
+
+        const standing =
+          this.standingMonster ||
+          document.querySelector(
+            '#standingMonster'
+          );
+
+
+        const cameraEntity =
+          document.querySelector(
+            '#cam'
+          ) ||
+          document.querySelector(
+            '[camera]'
+          );
+
+
+        if (
+          !standing ||
+          !cameraEntity
+        ) {
+          return false;
+        }
+
+
+        const standingBox =
+          roomsMonsterWorldBox(
+            standing
+          );
+
+
+        if (
+          !standingBox
+        ) {
+          return false;
+        }
+
+
+        standingBox.getCenter(
+          this.standingCenter
+        );
+
+
+        /*
+          Use the actual THREE camera object when possible.
+
+          THREE.Camera.getWorldDirection correctly gives
+          the visual forward direction (-Z).
+        */
+
+        const cameraObject =
+          cameraEntity.getObject3D(
+            'camera'
+          ) ||
+          cameraEntity.object3D;
+
+
+        if (
+          !cameraObject
+        ) {
+          return false;
+        }
+
+
+        cameraObject
+          .getWorldPosition(
+            this
+              .standingCameraPosition
+          );
+
+
+        this.standingDirectionToMonster
+          .subVectors(
+            this.standingCenter,
+            this.standingCameraPosition
+          );
+
+
+        const distance =
+          this.standingDirectionToMonster
+            .length();
+
+
+        if (
+          distance <=
+            0.001 ||
+          distance >
+            ROOMS_MONSTER_CONFIG
+              .standingLookMaxDistance
+        ) {
+          return false;
+        }
+
+
+        this.standingDirectionToMonster
+          .normalize();
+
+
+        cameraObject
+          .getWorldDirection(
+            this.standingLookDirection
+          );
+
+
+        this.standingLookDirection
+          .normalize();
+
+
+        const dot =
+          this.standingLookDirection
+            .dot(
+              this
+                .standingDirectionToMonster
+            );
+
+
+        const minimumDot =
+          Math.cos(
+            THREE.MathUtils
+              .degToRad(
+                ROOMS_MONSTER_CONFIG
+                  .standingLookAngle
+              )
+          );
+
+
+        return Boolean(
+          dot >=
+          minimumDot
+        );
+      },
+
+
+    /* ========================================================
+       PLAYER SAW STANDING.GLB
+    ======================================================== */
+
+    triggerStandingSeen:
+      function () {
+        if (
+          !window
+            .roomsMonsterState
+            .standingVisible ||
+          window
+            .roomsMonsterState
+            .standingSeen ||
+          window
+            .roomsMonsterState
+            .standingBlackoutRunning ||
+          window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          return false;
+        }
+
+
+        window
+          .roomsMonsterState
+          .standingSeen =
+          true;
+
+
+        const detail = {
+          placedCount:
+            this.standingPlacedItems
+              .size,
+
+          placed:
+            Array.from(
+              this.standingPlacedItems
+            )
+        };
+
+
+        this.el.emit(
+          'rooms-standing-monster-seen',
+          detail,
+          false
+        );
+
+
+        if (
+          this.el.sceneEl
+        ) {
+          this.el.sceneEl.emit(
+            'rooms-standing-monster-seen',
+            detail,
+            false
+          );
+        }
+
+
+        console.log(
+          'MONSTER: player looked at standing.glb.'
+        );
+
+
+        this.runStandingDisappearSequence();
+
+
+        return true;
+      },
+
+
+    /* ========================================================
+       BLACKOUT -> HIDE HER -> RETURN
+
+       IMPORTANT ORDER:
+
+       1. Fade to black.
+       2. Stay fully black.
+       3. Hide standing.glb.
+       4. Stay black.
+       5. Fade back in.
+
+       The player never sees the model pop out of existence.
+    ======================================================== */
+
+    runStandingDisappearSequence:
+      async function () {
+        if (
+          window
+            .roomsMonsterState
+            .standingBlackoutRunning ||
+          window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          return false;
+        }
+
+
+        window
+          .roomsMonsterState
+          .standingBlackoutRunning =
+          true;
+
+
+        /*
+          STEP 1:
+          Quickly fade to full black.
+        */
+
+        await this
+          .fadeStandingBlackout(
+            1,
+            ROOMS_MONSTER_CONFIG
+              .standingBlackFadeIn
+          );
+
+
+        /*
+          STEP 2:
+          Screen is fully black.
+
+          Keep her PRESENT for a short moment before hiding.
+        */
+
+        await roomsMonsterWait(
+          ROOMS_MONSTER_CONFIG
+            .standingBlackBeforeHide
+        );
+
+
+        /*
+          STEP 3:
+          NOW remove her.
+
+          This happens while opacity is still exactly 1.
+        */
+
+        const standing =
+          this.standingMonster ||
+          document.querySelector(
+            '#standingMonster'
+          );
+
+
+        if (
+          standing
+        ) {
+          standing.setAttribute(
+            'visible',
+            false
+          );
+        }
+
+
+        window
+          .roomsMonsterState
+          .standingVisible =
+          false;
+
+
+        this.el.emit(
+          'rooms-standing-monster-hidden',
+          {
+            reason:
+              'player-looked-at-standing'
+          },
+          false
+        );
+
+
+        if (
+          this.el.sceneEl
+        ) {
+          this.el.sceneEl.emit(
+            'rooms-standing-monster-hidden',
+            {
+              reason:
+                'player-looked-at-standing'
+            },
+            false
+          );
+        }
+
+
+        /*
+          STEP 4:
+          Keep screen fully black AFTER she is gone.
+        */
+
+        await roomsMonsterWait(
+          ROOMS_MONSTER_CONFIG
+            .standingBlackAfterHide
+        );
+
+
+        /*
+          STEP 5:
+          Fade vision back in.
+
+          The location is now empty.
+        */
+
+        await this
+          .fadeStandingBlackout(
+            0,
+            ROOMS_MONSTER_CONFIG
+              .standingBlackFadeOut
+          );
+
+
+        window
+          .roomsMonsterState
+          .standingBlackoutRunning =
+          false;
+
+
+        window
+          .roomsMonsterState
+          .standingFinished =
+          true;
+
+
+        const detail = {
+          placedCount:
+            this.standingPlacedItems
+              .size
+        };
+
+
+        this.el.emit(
+          'rooms-standing-monster-finished',
+          detail,
+          false
+        );
+
+
+        if (
+          this.el.sceneEl
+        ) {
+          this.el.sceneEl.emit(
+            'rooms-standing-monster-finished',
+            detail,
+            false
+          );
+        }
+
+
+        console.log(
+          'MONSTER: blackout ended. standing.glb is gone.'
+        );
+
+
+        return true;
+      },
+
+
+    /* ========================================================
        MAIN CHECK
     ======================================================== */
 
@@ -2039,15 +3333,16 @@ AFRAME.registerComponent(
 
 
         /*
-          Retry preparation occasionally if the door/model
-          initialized later than expected.
+          Retry initialization occasionally.
         */
 
         if (
-          !window
-            .roomsMonsterState
-            .doorReady &&
-
+          (
+            !window
+              .roomsMonsterState
+              .doorReady ||
+            !this.blackout
+          ) &&
           time -
             this.lastPrepareAttempt >=
             500
@@ -2055,9 +3350,39 @@ AFRAME.registerComponent(
           this.lastPrepareAttempt =
             time;
 
+
           this.prepare();
         }
 
+
+        /* ----------------------------------------------------
+           STANDING MONSTER LOOK CHECK
+        ---------------------------------------------------- */
+
+        if (
+          window
+            .roomsMonsterState
+            .standingVisible &&
+          !window
+            .roomsMonsterState
+            .standingSeen &&
+          !window
+            .roomsMonsterState
+            .standingBlackoutRunning
+        ) {
+          if (
+            this
+              .isPlayerLookingAtStanding()
+          ) {
+            this
+              .triggerStandingSeen();
+          }
+        }
+
+
+        /* ----------------------------------------------------
+           PLAYER WORLD POSITION
+        ---------------------------------------------------- */
 
         const player =
           roomsMonsterPlayerPosition(
@@ -2073,7 +3398,7 @@ AFRAME.registerComponent(
 
 
         /* ----------------------------------------------------
-           KEEP OLD BEDROOM STATE FOR DEBUG / COMPATIBILITY
+           BEDROOM DEBUG / COMPATIBILITY
         ---------------------------------------------------- */
 
         if (
@@ -2082,9 +3407,10 @@ AFRAME.registerComponent(
             .bedroomReady
         ) {
           const inside =
-            this.isPlayerInsideBedroom(
-              player
-            );
+            this
+              .isPlayerInsideBedroom(
+                player
+              );
 
 
           window
@@ -2099,6 +3425,7 @@ AFRAME.registerComponent(
           ) {
             this.previousInside =
               inside;
+
 
             if (
               inside
@@ -2135,7 +3462,7 @@ AFRAME.registerComponent(
 
 
         /* ----------------------------------------------------
-           CURRENT TEDDY HOLD STATE
+           TEDDY CURRENT HOLD STATE
         ---------------------------------------------------- */
 
         const teddyHeld =
@@ -2159,7 +3486,7 @@ AFRAME.registerComponent(
 
 
         /* ----------------------------------------------------
-           CURRENT DOOR STATE
+           DOOR CURRENT STATE
         ---------------------------------------------------- */
 
         const doorOpen =
@@ -2176,11 +3503,10 @@ AFRAME.registerComponent(
           window
             .roomsMonsterState
             .doorReady
-
-            ? this.getDoorSide(
-                player
-              )
-
+            ? this
+                .getDoorSide(
+                  player
+                )
             : 0;
 
 
@@ -2191,13 +3517,7 @@ AFRAME.registerComponent(
 
 
         /* ----------------------------------------------------
-           ARM THE DIRECTION OF THE SCARE
-
-           The first stable door side where Teddy is held becomes
-           Teddy's original / bedroom side.
-
-           This means dropping Teddy outside and picking it up again
-           cannot accidentally reverse the scare direction.
+           ARM TEDDY DOOR DIRECTION
         ---------------------------------------------------- */
 
         if (
@@ -2252,23 +3572,25 @@ AFRAME.registerComponent(
               player
             );
 
+
           this.hasPreviousPlayerWorld =
             true;
+
 
           return;
         }
 
 
         /* ----------------------------------------------------
-           ACTUAL MONSTER TRIGGER
+           WALKING MONSTER TRIGGER
 
-           ALL must be true:
-           1. Teddy is STILL in the player's hand.
-           2. cua.glb / #door is open.
-           3. We know which side Teddy came from.
-           4. Player has reached the opposite side.
-           5. The movement segment physically crossed the doorway.
-           6. Scare has never played before.
+           Required:
+           - Teddy STILL held
+           - cua.glb currently open
+           - player crossed from Teddy's original side
+             to the opposite side
+           - actual movement path crossed doorway
+           - event has never happened before
         ---------------------------------------------------- */
 
         if (
@@ -2291,7 +3613,8 @@ AFRAME.registerComponent(
             player
           )
         ) {
-          this.triggerWalkingMonster();
+          this
+            .triggerWalkingMonster();
         }
 
 
@@ -2330,6 +3653,7 @@ AFRAME.registerComponent(
                 .onDoorModelLoaded
             );
 
+
           this.door
             .removeEventListener(
               'rooms-door-ready',
@@ -2349,6 +3673,46 @@ AFRAME.registerComponent(
                 .onTeddyStateAdded
             );
         }
+
+
+        if (
+          this.el.sceneEl
+        ) {
+          this.el.sceneEl
+            .removeEventListener(
+              'story-item-snapped',
+              this
+                .onStoryItemSnapped
+            );
+        }
+
+
+        if (
+          this.blackoutAnimationFrame !==
+          null
+        ) {
+          window
+            .cancelAnimationFrame(
+              this
+                .blackoutAnimationFrame
+            );
+
+
+          this.blackoutAnimationFrame =
+            null;
+        }
+
+
+        if (
+          this.blackout &&
+          this.blackout.parentNode
+        ) {
+          this.blackout.remove();
+        }
+
+
+        this.blackout =
+          null;
       }
   }
 );
@@ -2380,6 +3744,10 @@ window.getRoomsMonsterState =
 
 
     return {
+      /* ------------------------------------------------------
+         BEDROOM / TEDDY / DOOR
+      ------------------------------------------------------ */
+
       playerInsideBedroom:
         window
           .roomsMonsterState
@@ -2398,28 +3766,10 @@ window.getRoomsMonsterState =
           .teddyGrabbed,
 
 
-      walkingTriggered:
+      teddyCurrentlyHeld:
         window
           .roomsMonsterState
-          .walkingTriggered,
-
-
-      walkingVisible:
-        window
-          .roomsMonsterState
-          .walkingVisible,
-
-
-      walkingModelReady:
-        window
-          .roomsMonsterState
-          .walkingModelReady,
-
-
-      standingModelReady:
-        window
-          .roomsMonsterState
-          .standingModelReady,
+          .teddyCurrentlyHeld,
 
 
       bedroomReady:
@@ -2438,12 +3788,6 @@ window.getRoomsMonsterState =
         window
           .roomsMonsterState
           .doorOpen,
-
-
-      teddyCurrentlyHeld:
-        window
-          .roomsMonsterState
-          .teddyCurrentlyHeld,
 
 
       doorSide:
@@ -2475,8 +3819,10 @@ window.getRoomsMonsterState =
         window
           .roomsMonsterState
           .doorReady
-
-          ? system.doorBox.min.toArray()
+          ? system
+              .doorBox
+              .min
+              .toArray()
           : null,
 
 
@@ -2485,9 +3831,33 @@ window.getRoomsMonsterState =
         window
           .roomsMonsterState
           .doorReady
-
-          ? system.doorBox.max.toArray()
+          ? system
+              .doorBox
+              .max
+              .toArray()
           : null,
+
+
+      /* ------------------------------------------------------
+         WALKING MONSTER
+      ------------------------------------------------------ */
+
+      walkingTriggered:
+        window
+          .roomsMonsterState
+          .walkingTriggered,
+
+
+      walkingVisible:
+        window
+          .roomsMonsterState
+          .walkingVisible,
+
+
+      walkingModelReady:
+        window
+          .roomsMonsterState
+          .walkingModelReady,
 
 
       walkingEntityFound:
@@ -2498,6 +3868,61 @@ window.getRoomsMonsterState =
         ),
 
 
+      /* ------------------------------------------------------
+         STANDING MONSTER
+      ------------------------------------------------------ */
+
+      standingModelReady:
+        window
+          .roomsMonsterState
+          .standingModelReady,
+
+
+      standingPlacedCount:
+        window
+          .roomsMonsterState
+          .standingPlacedCount,
+
+
+      standingPlacedItems:
+        system
+          ? Array.from(
+              system
+                .standingPlacedItems
+            )
+          : [],
+
+
+      standingTriggered:
+        window
+          .roomsMonsterState
+          .standingTriggered,
+
+
+      standingVisible:
+        window
+          .roomsMonsterState
+          .standingVisible,
+
+
+      standingSeen:
+        window
+          .roomsMonsterState
+          .standingSeen,
+
+
+      standingBlackoutRunning:
+        window
+          .roomsMonsterState
+          .standingBlackoutRunning,
+
+
+      standingFinished:
+        window
+          .roomsMonsterState
+          .standingFinished,
+
+
       standingEntityFound:
         Boolean(
           document.querySelector(
@@ -2505,6 +3930,18 @@ window.getRoomsMonsterState =
           )
         ),
 
+
+      standingBlackoutFound:
+        Boolean(
+          document.querySelector(
+            '#roomsStandingMonsterBlackout'
+          )
+        ),
+
+
+      /* ------------------------------------------------------
+         SYSTEM
+      ------------------------------------------------------ */
 
       systemReady:
         Boolean(
@@ -2515,14 +3952,11 @@ window.getRoomsMonsterState =
 
 
 /* ============================================================
-   MANUAL MONSTER TEST
+   MANUAL WALKING MONSTER TEST
 
    Browser console:
 
    triggerRoomsWalkingMonster()
-
-   This lets you test the walking.glb animation
-   without doing the whole Teddy sequence.
 ============================================================ */
 
 window.triggerRoomsWalkingMonster =
@@ -2556,6 +3990,52 @@ window.triggerRoomsWalkingMonster =
 
     return system
       .triggerWalkingMonster();
+  };
+
+
+/* ============================================================
+   MANUAL STANDING MONSTER TEST
+
+   Browser console:
+
+   triggerRoomsStandingMonster()
+
+   Shows standing.glb without requiring two altar items.
+
+   Looking at her will still activate the blackout normally.
+============================================================ */
+
+window.triggerRoomsStandingMonster =
+  function () {
+    const scene =
+      document.querySelector(
+        'a-scene'
+      );
+
+
+    const system =
+      scene &&
+      scene.components
+        ? scene.components[
+            'rooms-monster-events'
+          ]
+        : null;
+
+
+    if (
+      !system
+    ) {
+      console.warn(
+        'rooms-monster-events is not ready.'
+      );
+
+
+      return false;
+    }
+
+
+    return system
+      .showStandingMonster();
   };
 
 
