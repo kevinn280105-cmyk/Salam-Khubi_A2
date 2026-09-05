@@ -3512,6 +3512,145 @@ AFRAME.registerComponent(
   }
 );
 
+/* ============================================================
+   CONTROLLER HAND VISUAL OFFSET
+
+   hand-controls tracks the real controller pose exactly --
+   that pose also drives the raycaster's aim and natural-grab-hand's
+   grab proximity, so it must stay untouched.
+
+   The rendered hand MODEL, though, doesn't necessarily look like
+   it is aiming the same direction the invisible ray actually
+   shoots (0 0 -1 local space). This rotates only the loaded hand
+   mesh by a fixed pitch/yaw/roll so the visible hand appears to
+   point where the laser / grab-hit-test actually is.
+============================================================ */
+
+AFRAME.registerComponent(
+  'controller-hand-visual-offset',
+  {
+    schema: {
+      pitch: {
+        default: 0
+      },
+
+      yaw: {
+        default: 0
+      },
+
+      roll: {
+        default: 0
+      }
+    },
+
+
+    init: function () {
+      this.onModelLoaded =
+        this.onModelLoaded.bind(
+          this
+        );
+
+      this.el.addEventListener(
+        'model-loaded',
+        this.onModelLoaded
+      );
+
+      /*
+        Model may already have loaded before
+        this component initialized.
+      */
+
+      const existingModel =
+        this.el.getObject3D(
+          'mesh'
+        );
+
+      if (existingModel) {
+        this.applyOffset(
+          existingModel
+        );
+      }
+    },
+
+
+    onModelLoaded:
+      function (event) {
+        const model =
+          (
+            event &&
+            event.detail &&
+            event.detail.model
+          ) ||
+          this.el.getObject3D(
+            'mesh'
+          );
+
+        if (model) {
+          this.applyOffset(
+            model
+          );
+        }
+      },
+
+
+    applyOffset:
+      function (model) {
+        model.rotation.set(
+          THREE.MathUtils.degToRad(
+            this.data.pitch
+          ),
+
+          THREE.MathUtils.degToRad(
+            this.data.yaw
+          ),
+
+          THREE.MathUtils.degToRad(
+            this.data.roll
+          )
+        );
+      },
+
+
+    update: function (oldData) {
+      if (!oldData || Object.keys(oldData).length === 0) {
+        return;
+      }
+
+      const model =
+        this.el.getObject3D(
+          'mesh'
+        );
+
+      if (model) {
+        this.applyOffset(
+          model
+        );
+      }
+    },
+
+
+    remove: function () {
+      this.el.removeEventListener(
+        'model-loaded',
+        this.onModelLoaded
+      );
+
+      const model =
+        this.el.getObject3D(
+          'mesh'
+        );
+
+      if (model) {
+        model.rotation.set(
+          0,
+          0,
+          0
+        );
+      }
+    }
+  }
+);
+
 
 /* ============================================================
    AUTOMATIC SETUP

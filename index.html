@@ -1036,72 +1036,6 @@
     blackoutDuration: 1900
   ">
 </a-entity>
-    <!-- ====================================================
-         ALTAR / BAN THO
-    ===================================================== -->
-
-    <a-entity
-
-      id="bantho"
-
-      class="
-        roompart
-        offering-smoke-interactable
-      "
-
-      visible="true"
-
-      gltf-model="url(bantho.glb)"
-
-      position="0 0 0"
-
-      temporary-offering-table-smoke="
-        burnDuration: 60000;
-        smokeOffsetX: 0.14;
-        smokeOffsetY: 0.3;
-        smokeOffsetZ: 0;
-        count: 24;
-        height: 0.85;
-        speed: 0.20;
-        width: 0.13;
-        opacity: 0.24;
-        size: 0.052;
-        color: #d4d4d4;
-        hitboxScale: 1.08
-      "
-
-      model-status="
-        name: Ban tho
-      ">
-
-    </a-entity>
-
-
-    <!-- ====================================================
-         INCENSE OFFERING MANAGER
-    ===================================================== -->
-
-    <a-entity
-
-      id="offeringManager"
-
-      offering-layout="
-        altar: #bantho;
-        surfaceRatio: 0.62;
-        pickupSide: -0.28;
-        flameSide: 0.28;
-        frontOffset: 0;
-        temporaryFlame: true;
-        debugVisible: false
-      "
-
-      offering-blackout="
-        delay: 1400;
-        blackoutDuration: 1900
-      ">
-
-    </a-entity>
-
 
     <!-- INCENSE FLAME ZONE -->
 
@@ -1620,7 +1554,7 @@
 
       visible="true"
 
-      gltf-model="url(hairclipper.glb)"
+      gltf-model="url(hairpin.glb)"
 
       position="0 0 0"
 
@@ -2252,6 +2186,7 @@
         raycaster="
           objects:
             #door,
+            [natural-grabbable],
             .mirror-interactable,
             .tv-interactable,
             .offering-smoke-interactable,
@@ -2284,6 +2219,8 @@
 
         vr-door-interactor
 
+        vr-grab-interactor
+
         vr-tv-interactor
 
         vr-mirror-interactor
@@ -2303,4 +2240,4 @@
 
 </body>
 
-</html></html>
+</html>
