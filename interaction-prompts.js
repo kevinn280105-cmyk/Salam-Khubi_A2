@@ -71,7 +71,7 @@ const ROOMS_QUEST_ITEMS = [
 ];
 
 const ROOMS_DESCRIPTION_UI = {
-  questPosition: '0.77 0.39 -0.85',
+  questPosition: '0.74 0.27 -0.85',
   actionPromptPosition: '0 -0.18 -0.80',
 
   /*
@@ -2062,6 +2062,74 @@ AFRAME.registerComponent(
             }
           );
 
+        /* ----------------------------------------------------
+           SMALL / FULL PANEL SIZE VARIANTS
+
+           Before the incense is lit only the header + incense
+           row are meaningful, so the panel/shadow render at a
+           shorter "small" size. Once lit, they resize to the
+           "full" size that also shows the 3 item rows below.
+        ---------------------------------------------------- */
+
+        const smallPanelTexture =
+          roomsCreateRoundedPanelTexture(
+            {
+              width: 600,
+              height: 253,
+              radius: 24,
+              fillColor: '#15171c',
+              fillOpacity: 0.86,
+              strokeColor: '#454b55',
+              strokeOpacity: 0.65,
+              strokeWidth: 4
+            }
+          );
+
+        const smallShadowTexture =
+          roomsCreatePanelShadowTexture(
+            {
+              width: 600,
+              height: 307,
+              radius: 26,
+              blur: 18,
+              opacity: 0.45
+            }
+          );
+
+        this.questPanel = panel;
+        this.questShadowPlane = shadowPlane;
+
+        this.questPanelFullSize = {
+          width: '0.304',
+          height: '0.266',
+          position: '0 0 0'
+        };
+
+        this.questShadowFullSize = {
+          width: '0.360',
+          height: '0.322',
+          position: '0.007 -0.007 -0.012'
+        };
+
+        this.questPanelSmallSize = {
+          width: '0.304',
+          height: '0.128',
+          position: '0 0.069 0'
+        };
+
+        this.questShadowSmallSize = {
+          width: '0.360',
+          height: '0.184',
+          position: '0.007 0.062 -0.012'
+        };
+
+        this.questPanelFullTexture = panelTexture;
+        this.questShadowFullTexture = shadowTexture;
+        this.questPanelSmallTexture = smallPanelTexture;
+        this.questShadowSmallTexture = smallShadowTexture;
+
+        this.questPanelLit = null;
+
         this.camera
           .appendChild(
             root
@@ -3081,6 +3149,86 @@ AFRAME.registerComponent(
             roomsPromptState
               .incenseLit
           );
+
+        if (
+          this.questPanel &&
+          this.questShadowPlane &&
+          this.questPanelLit !==
+            incenseLit
+        ) {
+          this.questPanelLit =
+            incenseLit;
+
+          const panelSize =
+            incenseLit
+              ? this.questPanelFullSize
+              : this.questPanelSmallSize;
+
+          const shadowSize =
+            incenseLit
+              ? this.questShadowFullSize
+              : this.questShadowSmallSize;
+
+          const panelTexture =
+            incenseLit
+              ? this.questPanelFullTexture
+              : this.questPanelSmallTexture;
+
+          const shadowTexture =
+            incenseLit
+              ? this.questShadowFullTexture
+              : this.questShadowSmallTexture;
+
+          this.questPanel
+            .setAttribute(
+              'width',
+              panelSize.width
+            );
+
+          this.questPanel
+            .setAttribute(
+              'height',
+              panelSize.height
+            );
+
+          this.questPanel
+            .setAttribute(
+              'position',
+              panelSize.position
+            );
+
+          this.questShadowPlane
+            .setAttribute(
+              'width',
+              shadowSize.width
+            );
+
+          this.questShadowPlane
+            .setAttribute(
+              'height',
+              shadowSize.height
+            );
+
+          this.questShadowPlane
+            .setAttribute(
+              'position',
+              shadowSize.position
+            );
+
+          if (panelTexture) {
+            roomsApplyCanvasTexture(
+              this.questPanel,
+              panelTexture
+            );
+          }
+
+          if (shadowTexture) {
+            roomsApplyCanvasTexture(
+              this.questShadowPlane,
+              shadowTexture
+            );
+          }
+        }
 
         if (
           this.incenseRow
