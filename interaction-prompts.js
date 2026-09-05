@@ -119,6 +119,13 @@ const roomsPromptState = {
   */
   foundItems: new Set(),
 
+  /*
+    incenseLit tracks the ritual objective shown at the
+    top of the quest HUD (set by onIncenseLit() when
+    incense.js emits "incense-lit" on #incenseStick).
+  */
+  incenseLit: false,
+
   pausedByInspection: false
 };
 
@@ -217,6 +224,136 @@ function roomsCreateText(
 }
 
 
+/* ============================================================
+   ROUNDED PANEL / SOFT SHADOW TEXTURES
+
+   A-Frame planes are sharp rectangles by default. These build
+   small Canvas2D textures (rounded rect fill + border, and a
+   blurred rounded rect for a drop shadow) so the quest HUD can
+   look like a proper rounded card instead of a flat box.
+============================================================ */
+
+function roomsHexToRgbParts(hex) {
+  const value = String(hex || '#000000').replace('#', '');
+  const bigint = parseInt(value, 16);
+
+  return {
+    r: (bigint >> 16) & 255,
+    g: (bigint >> 8) & 255,
+    b: bigint & 255
+  };
+}
+
+function roomsRgba(hex, opacity) {
+  const parts = roomsHexToRgbParts(hex);
+  return `rgba(${parts.r}, ${parts.g}, ${parts.b}, ${opacity})`;
+}
+
+function roomsDrawRoundedRectPath(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + width - r, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx.lineTo(x + width, y + height - r);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx.lineTo(x + r, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+}
+
+function roomsCreateRoundedPanelTexture(options) {
+  const width = options.width;
+  const height = options.height;
+  const margin = Math.max(6, Math.ceil((options.strokeWidth || 0) / 2) + 2);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+
+  roomsDrawRoundedRectPath(
+    ctx,
+    margin,
+    margin,
+    width - margin * 2,
+    height - margin * 2,
+    options.radius
+  );
+
+  ctx.fillStyle = roomsRgba(options.fillColor, options.fillOpacity);
+  ctx.fill();
+
+  if (options.strokeWidth > 0) {
+    ctx.lineWidth = options.strokeWidth;
+    ctx.strokeStyle = roomsRgba(options.strokeColor, options.strokeOpacity);
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  return texture;
+}
+
+function roomsCreatePanelShadowTexture(options) {
+  const blur = options.blur;
+  const pad = blur * 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = options.width + pad * 2;
+  canvas.height = options.height + pad * 2;
+
+  const ctx = canvas.getContext('2d');
+
+  ctx.filter = `blur(${blur}px)`;
+  ctx.fillStyle = roomsRgba('#000000', options.opacity);
+
+  roomsDrawRoundedRectPath(
+    ctx,
+    pad,
+    pad,
+    options.width,
+    options.height,
+    options.radius
+  );
+
+  ctx.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  return texture;
+}
+
+function roomsApplyCanvasTexture(entity, texture) {
+  const mesh = entity.getObject3D('mesh');
+
+  if (!mesh || !mesh.material) {
+    /*
+      Mesh not ready yet (should be rare -- entities only get
+      here after being connected to a loaded scene, and plane
+      primitives initialize synchronously). Fall back to the
+      entity's own "loaded" lifecycle event just in case.
+    */
+    entity.addEventListener(
+      'loaded',
+      () => roomsApplyCanvasTexture(entity, texture),
+      { once: true }
+    );
+
+    return;
+  }
+
+  mesh.material.map = texture;
+  mesh.material.color.set('#ffffff');
+  mesh.material.transparent = true;
+  mesh.material.needsUpdate = true;
+}
 /* ============================================================
    QUEST ITEM INVISIBLE AIM HITBOXES
 ============================================================ */
@@ -1212,6 +1349,12 @@ AFRAME.registerComponent(
               this
             );
 
+        this.onIncenseLit =
+          this.onIncenseLit
+            .bind(
+              this
+            );
+
         this.prepare =
           this.prepare
             .bind(
@@ -1448,6 +1591,19 @@ AFRAME.registerComponent(
             'exit-vr',
             this.onExitVR
           );
+
+        const incenseStick =
+          document.querySelector(
+            '#incenseStick'
+          );
+
+        if (incenseStick) {
+          incenseStick
+            .addEventListener(
+              'incense-lit',
+              this.onIncenseLit
+            );
+        }
       },
 
 
@@ -1469,6 +1625,12 @@ AFRAME.registerComponent(
         this.questRows
           .clear();
 
+        this.incenseRow =
+          null;
+
+        this.questProgressText =
+          null;
+
         const root =
           roomsCreateEntity(
             'a-entity',
@@ -1485,7 +1647,71 @@ AFRAME.registerComponent(
             }
           );
 
-        const border =
+        /* ----------------------------------------------------
+           SOFT DROP SHADOW
+
+           A blurred, slightly larger rounded rectangle sitting
+           behind the panel. Baked with Canvas2D since A-Frame
+           planes have no native blur/shadow.
+        ---------------------------------------------------- */
+
+        const shadowTexture =
+          roomsCreatePanelShadowTexture(
+            {
+              width: 600,
+              height: 525,
+              radius: 44,
+              blur: 26,
+              opacity: 0.45
+            }
+          );
+
+        const shadowPlane =
+          roomsCreateEntity(
+            'a-plane',
+            {
+              width:
+                '0.360',
+
+              height:
+                '0.322',
+
+              position:
+                '0.007 -0.007 -0.012',
+
+              material:
+                'shader: flat; transparent: true; ' +
+                'depthTest: false; depthWrite: false'
+            }
+          );
+
+        root.appendChild(
+          shadowPlane
+        );
+
+        /* ----------------------------------------------------
+           PANEL
+
+           Single rounded-rect plane (fill + border baked
+           into one Canvas2D texture) instead of two flat
+           stacked planes.
+        ---------------------------------------------------- */
+
+        const panelTexture =
+          roomsCreateRoundedPanelTexture(
+            {
+              width: 600,
+              height: 525,
+              radius: 44,
+              fillColor: '#15171c',
+              fillOpacity: 0.86,
+              strokeColor: '#454b55',
+              strokeOpacity: 0.65,
+              strokeWidth: 5
+            }
+          );
+
+        const panel =
           roomsCreateEntity(
             'a-plane',
             {
@@ -1493,58 +1719,213 @@ AFRAME.registerComponent(
                 '0.304',
 
               height:
-                '0.204',
-
-              position:
-                '0 0 -0.003',
-
-              material:
-                'color: #d9d9d9; opacity: 0.22; ' +
-                'transparent: true; shader: flat; ' +
-                'depthTest: false; depthWrite: false'
-            }
-          );
-
-        const background =
-          roomsCreateEntity(
-            'a-plane',
-            {
-              width:
-                '0.298',
-
-              height:
-                '0.198',
+                '0.266',
 
               position:
                 '0 0 0',
 
               material:
-                'color: #111318; opacity: 0.76; ' +
+                'shader: flat; transparent: true; ' +
+                'depthTest: false; depthWrite: false'
+            }
+          );
+
+        root.appendChild(
+          panel
+        );
+
+        const header =
+          roomsCreateText(
+            'OBJECTIVES',
+            '-0.126 0.094 0.008',
+            '0.25',
+            'left',
+            '#e8ba6e',
+            18
+          );
+
+        this.questProgressText =
+          roomsCreateText(
+            '0 / 3',
+            '0.126 0.094 0.008',
+            '0.12',
+            'right',
+            '#e8ba6e',
+            10
+          );
+
+        root.append(
+          header,
+          this.questProgressText
+        );
+
+        /* ----------------------------------------------------
+           STEP 1 — LIGHT THE INCENSE
+
+           Always visible. Ticks once incense.js emits
+           "incense-lit" on #incenseStick (see onIncenseLit).
+        ---------------------------------------------------- */
+
+        const incenseRowEntity =
+          roomsCreateEntity(
+            'a-entity',
+            {
+              position:
+                '0 0.044 0.010'
+            }
+          );
+
+        const incenseRing =
+          roomsCreateEntity(
+            'a-ring',
+            {
+              'radius-inner':
+                '0.0060',
+
+              'radius-outer':
+                '0.0082',
+
+              'segments-theta':
+                '24',
+
+              position:
+                '-0.116 0 0',
+
+              material:
+                'color: #c9cbd0; opacity: 0.85; ' +
                 'transparent: true; shader: flat; ' +
                 'depthTest: false; depthWrite: false'
             }
           );
 
-        const header =
-          roomsCreateText(
-            'FIND 3 ITEMS',
-            '-0.126 0.070 0.008',
-            '0.25',
-            'left',
-            '#ffffff',
-            18
+        const incenseCheck =
+          roomsCreateEntity(
+            'a-entity',
+            {
+              position:
+                '-0.116 0 0.002',
+
+              visible:
+                'false'
+            }
           );
 
-        root.append(
-          border,
-          background,
-          header
+        const incenseCheckShort =
+          roomsCreateEntity(
+            'a-plane',
+            {
+              width:
+                '0.010',
+
+              height:
+                '0.0032',
+
+              position:
+                '-0.003 -0.002 0',
+
+              rotation:
+                '0 0 -42',
+
+              material:
+                'color: #8fd6a0; shader: flat; ' +
+                'depthTest: false; depthWrite: false'
+            }
+          );
+
+        const incenseCheckLong =
+          roomsCreateEntity(
+            'a-plane',
+            {
+              width:
+                '0.017',
+
+              height:
+                '0.0032',
+
+              position:
+                '0.004 0.002 0',
+
+              rotation:
+                '0 0 48',
+
+              material:
+                'color: #8fd6a0; shader: flat; ' +
+                'depthTest: false; depthWrite: false'
+            }
+          );
+
+        incenseCheck.append(
+          incenseCheckShort,
+          incenseCheckLong
         );
 
+        const incenseLabel =
+          roomsCreateText(
+            'Light the incense',
+            '-0.096 0 0',
+            '0.215',
+            'left',
+            '#e9eaec',
+            26
+          );
+
+        incenseRowEntity.append(
+          incenseRing,
+          incenseCheck,
+          incenseLabel
+        );
+
+        root.appendChild(
+          incenseRowEntity
+        );
+
+        this.incenseRow = {
+          emptyCircle:
+            incenseRing,
+
+          check:
+            incenseCheck
+        };
+
+        /* ----------------------------------------------------
+           DIVIDER
+        ---------------------------------------------------- */
+
+        const divider =
+          roomsCreateEntity(
+            'a-plane',
+            {
+              width:
+                '0.270',
+
+              height:
+                '0.0014',
+
+              position:
+                '0 0.014 0.006',
+
+              material:
+                'color: #454b55; opacity: 0.55; ' +
+                'transparent: true; shader: flat; ' +
+                'depthTest: false; depthWrite: false'
+            }
+          );
+
+        root.appendChild(
+          divider
+        );
+
+        /* ----------------------------------------------------
+           STEP 2 — FIND 3 ITEMS
+
+           Rows stay hidden until the incense is lit.
+           See updateQuestUI().
+        ---------------------------------------------------- */
+
         const rowY = [
-          0.020,
-          -0.030,
-          -0.080
+          -0.016,
+          -0.066,
+          -0.116
         ];
 
         ROOMS_QUEST_ITEMS
@@ -1558,7 +1939,10 @@ AFRAME.registerComponent(
                   'a-entity',
                   {
                     position:
-                      `0 ${rowY[index]} 0.010`
+                      `0 ${rowY[index]} 0.010`,
+
+                    visible:
+                      'false'
                   }
                 );
 
@@ -1579,7 +1963,7 @@ AFRAME.registerComponent(
                       '-0.116 0 0',
 
                     material:
-                      'color: #d7d9dd; opacity: 0.90; ' +
+                      'color: #c9cbd0; opacity: 0.85; ' +
                       'transparent: true; shader: flat; ' +
                       'depthTest: false; depthWrite: false'
                   }
@@ -1614,7 +1998,7 @@ AFRAME.registerComponent(
                       '0 0 -42',
 
                     material:
-                      'color: #ffffff; shader: flat; ' +
+                      'color: #8fd6a0; shader: flat; ' +
                       'depthTest: false; depthWrite: false'
                   }
                 );
@@ -1636,7 +2020,7 @@ AFRAME.registerComponent(
                       '0 0 48',
 
                     material:
-                      'color: #ffffff; shader: flat; ' +
+                      'color: #8fd6a0; shader: flat; ' +
                       'depthTest: false; depthWrite: false'
                   }
                 );
@@ -1652,7 +2036,7 @@ AFRAME.registerComponent(
                   '-0.096 0 0',
                   '0.215',
                   'left',
-                  '#e7e7e7',
+                  '#e9eaec',
                   22
                 );
 
@@ -1671,7 +2055,8 @@ AFRAME.registerComponent(
                   item.key,
                   {
                     emptyCircle,
-                    check
+                    check,
+                    row
                   }
                 );
             }
@@ -1684,6 +2069,16 @@ AFRAME.registerComponent(
 
         this.questRoot =
           root;
+
+        roomsApplyCanvasTexture(
+          shadowPlane,
+          shadowTexture
+        );
+
+        roomsApplyCanvasTexture(
+          panel,
+          panelTexture
+        );
       },
 
 
@@ -2646,8 +3041,63 @@ AFRAME.registerComponent(
       },
 
 
+    onIncenseLit:
+      function () {
+        this.setIncenseLit(
+          true
+        );
+      },
+
+
+    setIncenseLit:
+      function (
+        lit
+      ) {
+        const value =
+          Boolean(
+            lit
+          );
+
+        if (
+          roomsPromptState
+            .incenseLit ===
+          value
+        ) {
+          return;
+        }
+
+        roomsPromptState
+          .incenseLit =
+          value;
+
+        this.updateQuestUI();
+      },
+
+
     updateQuestUI:
       function () {
+        const incenseLit =
+          Boolean(
+            roomsPromptState
+              .incenseLit
+          );
+
+        if (
+          this.incenseRow
+        ) {
+          roomsSetVisible(
+            this.incenseRow
+              .emptyCircle,
+            !incenseLit
+          );
+
+          roomsSetVisible(
+            this.incenseRow
+              .check,
+            incenseLit
+          );
+        }
+
         ROOMS_QUEST_ITEMS
           .forEach(
             (item) => {
@@ -2659,6 +3109,15 @@ AFRAME.registerComponent(
 
               if (!row) {
                 return;
+              }
+
+              if (
+                row.row
+              ) {
+                roomsSetVisible(
+                  row.row,
+                  incenseLit
+                );
               }
 
               const found =
@@ -2679,6 +3138,16 @@ AFRAME.registerComponent(
               );
             }
           );
+
+        if (
+          this.questProgressText
+        ) {
+          this.questProgressText
+            .setAttribute(
+              'value',
+              `${roomsPromptState.foundItems.size} / ${ROOMS_QUEST_ITEMS.length}`
+            );
+        }
       },
 
 

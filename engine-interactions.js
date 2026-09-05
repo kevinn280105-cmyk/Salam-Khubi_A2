@@ -1585,6 +1585,226 @@ AFRAME.registerComponent(
   }
 );
 
+/* ============================================================
+   VR CLICK-TO-GRAB ITEM INTERACTOR
+
+   Lets Quest players grab a natural-grabbable item by pointing
+   the controller ray at it and pulling the trigger once, instead
+   of having to hold the grip down.
+
+   - Trigger click #1 (pointing at an item): grabs it, attaches
+     it to the hand.
+   - Trigger click #2 (while already holding something): releases
+     it right where the hand currently is. If that happens to be
+     near the altar target (#truocbantho), story.js's own
+     trySnapReleasedItem() auto-snap logic (used already for
+     desktop / grip drops) takes over and locks it into its slot.
+============================================================ */
+
+AFRAME.registerComponent(
+  'vr-grab-interactor',
+  {
+
+    init: function () {
+
+      this.heldItem =
+        null;
+
+      this.onTriggerDown =
+        this.onTriggerDown.bind(
+          this
+        );
+
+      this.onControllerDisconnected =
+        this.onControllerDisconnected.bind(
+          this
+        );
+
+      this.el.addEventListener(
+        'triggerdown',
+        this.onTriggerDown
+      );
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.onControllerDisconnected
+      );
+
+    },
+
+
+    findGrabbableHit:
+      function () {
+
+        const raycaster =
+          this.el.components
+            .raycaster;
+
+        if (!raycaster) {
+          return null;
+        }
+
+        if (
+          raycaster.refreshObjects
+        ) {
+          raycaster.refreshObjects();
+        }
+
+        const hit =
+          getClosestRayIntersection(
+            raycaster
+          );
+
+        if (!hit) {
+          return null;
+        }
+
+        const items =
+          this.el.sceneEl
+            .querySelectorAll(
+              '[natural-grabbable]'
+            );
+
+        for (
+          let i = 0;
+          i < items.length;
+          i++
+        ) {
+
+          const entity =
+            items[i];
+
+          const component =
+            entity.components[
+              'natural-grabbable'
+            ];
+
+          if (
+            !component ||
+            component.heldBy
+          ) {
+            continue;
+          }
+
+          if (
+            objectBelongsToEntity(
+              hit.object,
+              entity
+            )
+          ) {
+            return component;
+          }
+
+        }
+
+        return null;
+
+      },
+
+
+    onTriggerDown:
+      function () {
+
+        if (
+          roomsGameplayInputLocked()
+        ) {
+          return;
+        }
+
+        if (
+          this.heldItem
+        ) {
+
+          const item =
+            this.heldItem;
+
+          this.heldItem =
+            null;
+
+          item.release(
+            new THREE.Vector3()
+          );
+
+          return;
+
+        }
+
+        const grabbable =
+          this.findGrabbableHit();
+
+        if (!grabbable) {
+          return;
+        }
+
+        if (
+          grabbable.grab(
+            this.el
+          )
+        ) {
+          this.heldItem =
+            grabbable;
+        }
+
+      },
+
+
+    onControllerDisconnected:
+      function () {
+
+        if (
+          !this.heldItem
+        ) {
+          return;
+        }
+
+        const item =
+          this.heldItem;
+
+        this.heldItem =
+          null;
+
+        item.release(
+          new THREE.Vector3()
+        );
+
+      },
+
+
+    remove:
+      function () {
+
+        this.el.removeEventListener(
+          'triggerdown',
+          this.onTriggerDown
+        );
+
+        this.el.removeEventListener(
+          'controllerdisconnected',
+          this.onControllerDisconnected
+        );
+
+        if (
+          this.heldItem
+        ) {
+
+          const item =
+            this.heldItem;
+
+          this.heldItem =
+            null;
+
+          item.release(
+            new THREE.Vector3()
+          );
+
+        }
+
+      }
+
+  }
+
+);
+
 
 /* ============================================================
    STANDALONE TV — tv.glb
