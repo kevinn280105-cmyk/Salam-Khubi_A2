@@ -45,6 +45,30 @@ function objectBelongsToEntity(hitObject, entity) {
 
   return false;
 }
+/*
+  Like objectBelongsToEntity(), but walks up to the entity's own
+  object3D container instead of stopping at getObject3D('mesh').
+
+  Needed for entities that have extra invisible children -- e.g.
+  the oversized ".quest-hover-hitbox" boxes interaction-prompts.js
+  adds on top of small items (teddy / hairpin / picture) so they
+  are actually hittable. A hit on that hitbox is a sibling of the
+  gltf mesh, not a descendant of it, so objectBelongsToEntity()
+  alone would miss it and report "no hit" even though the ray is
+  clearly on the item.
+*/
+function objectBelongsToEntitySubtree(hitObject, entity) {
+  if (!hitObject || !entity || !entity.object3D) return false;
+
+  let current = hitObject;
+
+  while (current) {
+    if (current === entity.object3D) return true;
+    current = current.parent;
+  }
+
+  return false;
+}
 
 function appendRaycasterObjectSelector(entity, selector) {
   if (!entity || !selector) return;
@@ -872,6 +896,9 @@ AFRAME.registerComponent(
       this.lastDistance =
         Infinity;
 
+      this.hasBeenOutsideOpenRange =
+        false;
+
       this.playerPosition =
         new THREE.Vector3();
 
@@ -1260,6 +1287,28 @@ AFRAME.registerComponent(
             this.data
               .triggerPadding
           );
+
+        /*
+          Don't auto-open just because the player SPAWNED inside
+          opening range. Require having been observed outside it
+          at least once first -- i.e. the player actually walked
+          up to the door, rather than starting right next to it.
+        */
+
+        if (
+          !this.hasBeenOutsideOpenRange
+        ) {
+          if (
+            rawDistance >
+              effectiveOpenDistance
+          ) {
+            this.hasBeenOutsideOpenRange =
+              true;
+
+          } else {
+            return;
+          }
+        }
 
         const effectiveCloseDistance =
           Math.max(
@@ -1687,7 +1736,7 @@ AFRAME.registerComponent(
           }
 
           if (
-            objectBelongsToEntity(
+            objectBelongsToEntitySubtree(
               hit.object,
               entity
             )
