@@ -909,11 +909,11 @@ AFRAME.registerComponent(
   {
     schema: {
       openDistance: {
-        default: 0.20
+        default: 0.45
       },
 
       closeDistance: {
-        default: 0.45
+        default: 0.75
       },
 
       interval: {
@@ -3805,8 +3805,8 @@ function setupRoomsInteractions() {
       'auto-door-proximity',
 
       `
-        openDistance: 0.20;
-        closeDistance: 0.45;
+        openDistance: 0.45;
+        closeDistance: 0.75;
         interval: 120
       `
     );

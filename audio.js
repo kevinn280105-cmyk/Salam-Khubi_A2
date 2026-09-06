@@ -31,6 +31,7 @@ let roomsVRStarted = false;
 let roomsLastUnlockSource = 'none';
 let roomsLastUnlockSuccess = false;
 let roomsLastThunderTime = -Infinity;
+let roomsLastVolumeGateSilent = null;
 
 window.roomsMuted = roomsMuted;
 
@@ -788,6 +789,64 @@ AFRAME.registerComponent(
 
     updateVolumes: function (force) {
       this.getPlayerTransform();
+
+      /*
+        DEBUG: log the instant the shared "should ambient audio be
+        silent" gate flips either way, with the exact reason and how
+        many items are currently held. This is here to catch the
+        "audio goes silent while holding an item" report without
+        needing console access set up ahead of time -- it only prints
+        on a state CHANGE, so it is silent the rest of the time.
+      */
+      const gateSilent =
+        Boolean(
+          roomsMuted ||
+          !roomsVRStarted ||
+          isRoomsPauseMenuOpen()
+        );
+
+      if (
+        roomsLastVolumeGateSilent !==
+        gateSilent
+      ) {
+        roomsLastVolumeGateSilent =
+          gateSilent;
+
+        let heldCount = 0;
+
+        try {
+          document
+            .querySelectorAll('[natural-grabbable]')
+            .forEach(
+              (entity) => {
+                const grabbable =
+                  entity.components &&
+                  entity.components['natural-grabbable'];
+
+                if (
+                  grabbable &&
+                  grabbable.heldBy
+                ) {
+                  heldCount += 1;
+                }
+              }
+            );
+        } catch (error) {
+          heldCount = -1;
+        }
+
+        console.log(
+          gateSilent
+            ? '[rooms-audio] ambient audio SILENCED --'
+            : '[rooms-audio] ambient audio RESUMED --',
+          {
+            roomsMuted,
+            roomsVRStarted,
+            pauseMenuOpen: isRoomsPauseMenuOpen(),
+            itemsCurrentlyHeld: heldCount
+          }
+        );
+      }
 
       this.tracks.forEach(
         (track) => {
