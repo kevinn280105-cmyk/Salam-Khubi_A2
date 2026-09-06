@@ -310,20 +310,45 @@ AFRAME.registerComponent(
           parts.length >
           1
         ) {
-          const doorNamedParts =
+          /*
+            cua.glb actually bundles 3 separate door leaves for 3
+            different doorways in the house -- they are not 3 panels
+            of one wide door, they sit far apart from each other.
+            Only ONE of them is actually named "door" in the exported
+            mesh data; the other two got generic export names
+            ("Sphere...") despite being door-shaped, so the old
+            name-based filter silently dropped them. A real door
+            leaf is roughly human-height; the genuinely decorative
+            extras bundled in this file (small talisman charms) are
+            much smaller in every dimension, so height is a reliable
+            way to tell a door leaf from a decoration.
+          */
+          const doorSizedParts =
             parts.filter(
-              (part) =>
-                this.hasNamedMeshDescendant(
-                  part,
-                  'door'
-                )
+              (part) => {
+                const box =
+                  this.getLocalBoundingBox(
+                    part
+                  );
+
+                if (box.isEmpty()) {
+                  return false;
+                }
+
+                const size =
+                  new THREE.Vector3();
+
+                box.getSize(size);
+
+                return size.y >= 0.9;
+              }
             );
 
           if (
-            doorNamedParts.length
+            doorSizedParts.length
           ) {
             parts =
-              doorNamedParts;
+              doorSizedParts;
           }
         }
 
@@ -909,11 +934,11 @@ AFRAME.registerComponent(
   {
     schema: {
       openDistance: {
-        default: 0.45
+        default: 0.6
       },
 
       closeDistance: {
-        default: 0.75
+        default: 0.9
       },
 
       interval: {
@@ -933,44 +958,32 @@ AFRAME.registerComponent(
 
     init: function () {
       this.lastCheck = 0;
+      this.lastPrepareAttempt = 0;
+      this.ready = false;
 
-      this.lastPrepareAttempt =
-        0;
+      /*
+        cua.glb bundles 3 separate door leaves for 3 different doorways
+        in the house (see door-hinge's onModelLoaded). Each one needs
+        its OWN cached closed-footprint box and its OWN independent
+        open/close distance check -- they are not panels of one wide
+        door, so they must not all open together just because the
+        player is near ONE of them.
 
-      this.ready =
-        false;
+        this.doorStates: [{ part, box }]
+      */
+      this.doorStates = [];
 
-      this.closedDoorBox =
-        null;
+      this.lastDistance = Infinity;
+      this.playerPosition = new THREE.Vector3();
+      this.closestPoint = new THREE.Vector3();
 
-      this.lastDistance =
-        Infinity;
 
-      this.playerPosition =
-        new THREE.Vector3();
 
-      this.closestPoint =
-        new THREE.Vector3();
+      this.prepareDoor = this.prepareDoor.bind(this);
+      this.onDoorReady = this.onDoorReady.bind(this);
 
-      this.prepareDoor =
-        this.prepareDoor.bind(
-          this
-        );
-
-      this.onDoorReady =
-        this.onDoorReady.bind(
-          this
-        );
-
-      this.el.addEventListener(
-        'model-loaded',
-        this.prepareDoor
-      );
-
-      this.el.addEventListener(
-        'rooms-door-ready',
-        this.onDoorReady
-      );
+      this.el.addEventListener('model-loaded', this.prepareDoor);
+      this.el.addEventListener('rooms-door-ready', this.onDoorReady);
 
       /*
         Handles both orders:
@@ -981,25 +994,10 @@ AFRAME.registerComponent(
 
       this.prepareDoor();
 
-      window.setTimeout(
-        this.prepareDoor,
-        0
-      );
-
-      window.setTimeout(
-        this.prepareDoor,
-        100
-      );
-
-      window.setTimeout(
-        this.prepareDoor,
-        400
-      );
-
-      window.setTimeout(
-        this.prepareDoor,
-        1000
-      );
+      window.setTimeout(this.prepareDoor, 0);
+      window.setTimeout(this.prepareDoor, 100);
+      window.setTimeout(this.prepareDoor, 400);
+      window.setTimeout(this.prepareDoor, 1000);
     },
 
 
@@ -1011,144 +1009,94 @@ AFRAME.registerComponent(
 
     prepareDoor:
       function () {
-        const hinge =
-          this.el.components[
-            'door-hinge'
-          ];
+        /*
+          BUGFIX: this used to recompute unconditionally, which meant one
+          of the delayed retry calls (setTimeout 0/100/400/1000ms, or a
+          stray "model-loaded"/"rooms-door-ready" event) could fire again
+          AFTER a door had already started auto-opening (very possible --
+          one of these doors sits only ~0.8m from spawn). If that
+          happened, it re-measured mid-animation and silently overwrote
+          the cached CLOSED footprint with the wrong one. Once we have
+          good boxes, never recompute them again.
+        */
+        if (this.ready && this.doorStates.length) {
+          return true;
+        }
 
-        const mesh =
-          this.el.getObject3D(
-            'mesh'
-          );
+        const hinge = this.el.components['door-hinge'];
+        const mesh = this.el.getObject3D('mesh');
 
-        if (
-          !hinge ||
-          !mesh
-        ) {
-          this.ready =
-            false;
-
+        if (!hinge || !mesh) {
+          this.ready = false;
           return false;
         }
 
         /*
-          If the model exists but door-hinge has not populated its parts yet,
-          ask it to prepare immediately instead of waiting forever in tick().
+          If the model exists but door-hinge has not populated its parts
+          yet, ask it to prepare immediately instead of waiting forever
+          in tick().
         */
-
-        if (
-          !hinge.root ||
-          !hinge.parts ||
-          !hinge.parts.length
-        ) {
-          if (
-            typeof hinge
-              .onModelLoaded ===
-              'function'
-          ) {
+        if (!hinge.root || !hinge.parts || !hinge.parts.length) {
+          if (typeof hinge.onModelLoaded === 'function') {
             hinge.onModelLoaded();
           }
         }
 
-        if (
-          !hinge.root ||
-          !hinge.parts ||
-          !hinge.parts.length
-        ) {
-          this.ready =
-            false;
-
+        if (!hinge.root || !hinge.parts || !hinge.parts.length) {
+          this.ready = false;
           return false;
         }
 
         /*
-          Cache the CLOSED world-space door footprint BEFORE any leaf opens.
-
-          The automatic trigger therefore stays in the doorway instead of
-          following the moving GLB mesh.
+          Cache the CLOSED world-space footprint of EACH door leaf
+          separately, BEFORE any leaf opens. Each door's trigger area
+          therefore stays at that door's own doorway instead of
+          following the moving GLB mesh, and instead of being lumped
+          together with the other 2 doors bundled in this same file.
         */
+        this.el.object3D.updateMatrixWorld(true);
 
-        this.el.object3D
-          .updateMatrixWorld(
-            true
-          );
-
-        /*
-          IMPORTANT: build this from hinge.parts, NOT the whole
-          loaded mesh. Some GLBs (cua.glb included) bundle
-          unrelated leftover props from the original scene
-          alongside the actual door, positioned meters away --
-          using the whole mesh here would make the trigger box
-          balloon out to cover those stray objects too, which is
-          why proximity distance was never matching where the door
-          actually visually is.
-        */
+        const doorStates = [];
 
         hinge.parts.forEach(
           (part) => {
-            part.updateMatrixWorld(
-              true
-            );
+            part.updateMatrixWorld(true);
+
+            const box =
+              new THREE.Box3().setFromObject(part);
+
+            if (box.isEmpty()) {
+              return;
+            }
+
+            doorStates.push({
+              part,
+              box
+            });
           }
         );
 
-        const box =
-          new THREE.Box3();
-
-        hinge.parts.forEach(
-          (part) => {
-            box.union(
-              new THREE.Box3()
-                .setFromObject(
-                  part
-                )
-            );
-          }
-        );
-
-        if (
-          box.isEmpty()
-        ) {
-          this.ready =
-            false;
-
+        if (!doorStates.length) {
+          this.ready = false;
           return false;
         }
 
-        this.closedDoorBox =
-          box.clone();
-
-        this.ready =
-          true;
+        this.doorStates = doorStates;
+        this.ready = true;
 
         console.log(
-          'Automatic door ready:',
-
+          'Automatic doors ready:',
           {
-            parts:
-              hinge.parts.length,
-
-            openDistance:
-              this.data
-                .openDistance,
-
-            closeDistance:
-              this.data
-                .closeDistance,
-
-            triggerPadding:
-              this.data
-                .triggerPadding,
-
-            boxMin:
-              this.closedDoorBox
-                .min
-                .toArray(),
-
-            boxMax:
-              this.closedDoorBox
-                .max
-                .toArray()
+            doorCount: this.doorStates.length,
+            openDistance: this.data.openDistance,
+            closeDistance: this.data.closeDistance,
+            triggerPadding: this.data.triggerPadding,
+            doors: this.doorStates.map(
+              (doorState) => ({
+                boxMin: doorState.box.min.toArray(),
+                boxMax: doorState.box.max.toArray()
+              })
+            )
           }
         );
 
@@ -1159,125 +1107,59 @@ AFRAME.registerComponent(
     getPlayerPosition:
       function () {
         const source =
-          document.querySelector(
-            '#cam'
-          ) ||
-          document.querySelector(
-            '#rig'
-          );
+          document.querySelector('#cam') ||
+          document.querySelector('#rig');
 
         if (!source) {
           return null;
         }
 
-        source.object3D
-          .getWorldPosition(
-            this.playerPosition
-          );
+        source.object3D.getWorldPosition(this.playerPosition);
 
-        return this
-          .playerPosition;
+        return this.playerPosition;
       },
 
 
     getHorizontalDistance:
-      function (player) {
-        if (
-          !player ||
-          !this.closedDoorBox
-        ) {
+      function (box, player) {
+        if (!player || !box) {
           return Infinity;
         }
 
-        const box =
-          this.closedDoorBox;
-
         this.closestPoint.set(
-          THREE.MathUtils.clamp(
-            player.x,
-            box.min.x,
-            box.max.x
-          ),
-
+          THREE.MathUtils.clamp(player.x, box.min.x, box.max.x),
           player.y,
-
-          THREE.MathUtils.clamp(
-            player.z,
-            box.min.z,
-            box.max.z
-          )
+          THREE.MathUtils.clamp(player.z, box.min.z, box.max.z)
         );
 
         return Math.hypot(
-          player.x -
-            this.closestPoint.x,
-
-          player.z -
-            this.closestPoint.z
+          player.x - this.closestPoint.x,
+          player.z - this.closestPoint.z
         );
       },
 
 
     setDoorOpen:
-      function (
-        shouldOpen
-      ) {
-        const hinge =
-          this.el.components[
-            'door-hinge'
-          ];
+      function (part, shouldOpen) {
+        const hinge = this.el.components['door-hinge'];
 
-        if (
-          !hinge ||
-          !hinge.parts ||
-          !hinge.parts.length
-        ) {
+        if (!hinge || !part) {
           return false;
         }
 
-        let changed =
-          false;
+        const state = hinge.createState(part);
 
-        hinge.parts
-          .forEach(
-            (part) => {
-              const state =
-                hinge.createState(
-                  part
-                );
+        if (!state) {
+          return false;
+        }
 
-              if (!state) {
-                return;
-              }
+        if (Boolean(state.isOpen) === Boolean(shouldOpen)) {
+          return false;
+        }
 
-              if (
-                Boolean(
-                  state.isOpen
-                ) ===
-                Boolean(
-                  shouldOpen
-                )
-              ) {
-                return;
-              }
-
-              if (
-                hinge
-                  .startDoorAnimation(
-                    state,
-                    Boolean(
-                      shouldOpen
-                    ),
-                    true
-                  )
-              ) {
-                changed =
-                  true;
-              }
-            }
-          );
-
-        return changed;
+        return Boolean(
+          hinge.startDoorAnimation(state, Boolean(shouldOpen), true)
+        );
       },
 
 
@@ -1285,15 +1167,12 @@ AFRAME.registerComponent(
       function (time) {
         if (
           roomsGameplayInputLocked() ||
-          time -
-            this.lastCheck <
-            this.data.interval
+          time - this.lastCheck < this.data.interval
         ) {
           return;
         }
 
-        this.lastCheck =
-          time;
+        this.lastCheck = time;
 
         /*
           Never stay permanently dead if component/model initialization
@@ -1301,167 +1180,96 @@ AFRAME.registerComponent(
 
           Retry approximately twice/sec.
         */
-
-        if (
-          !this.ready ||
-          !this.closedDoorBox
-        ) {
-          if (
-            time -
-              this.lastPrepareAttempt >=
-            500
-          ) {
-            this.lastPrepareAttempt =
-              time;
-
+        if (!this.ready || !this.doorStates.length) {
+          if (time - this.lastPrepareAttempt >= 500) {
+            this.lastPrepareAttempt = time;
             this.prepareDoor();
           }
 
-          if (
-            !this.ready ||
-            !this.closedDoorBox
-          ) {
+          if (!this.ready || !this.doorStates.length) {
             return;
           }
         }
 
-        const player =
-          this.getPlayerPosition();
+        const player = this.getPlayerPosition();
 
         if (!player) {
           return;
         }
 
-        const rawDistance =
-          this.getHorizontalDistance(
-            player
-          );
+        const hinge = this.el.components['door-hinge'];
 
-        if (
-          !Number.isFinite(
-            rawDistance
-          )
-        ) {
+        if (!hinge) {
           return;
         }
-
-        this.lastDistance =
-          rawDistance;
 
         const effectiveOpenDistance =
           Math.max(
             0,
-
-            this.data
-              .openDistance +
-            this.data
-              .triggerPadding
+            this.data.openDistance + this.data.triggerPadding
           );
 
         const effectiveCloseDistance =
           Math.max(
-            effectiveOpenDistance +
-              0.05,
-
-            this.data
-              .closeDistance +
-            this.data
-              .triggerPadding
+            effectiveOpenDistance + 0.05,
+            this.data.closeDistance + this.data.triggerPadding
           );
 
-        const hinge =
-          this.el.components[
-            'door-hinge'
-          ];
+        let nearestDistance = Infinity;
 
-        if (
-          !hinge ||
-          !hinge.parts ||
-          !hinge.parts.length
-        ) {
-          return;
-        }
+        /*
+          Each of the 3 doors bundled in this file gets checked and
+          toggled completely independently -- opening the one you are
+          standing next to must not open the other two.
+        */
+        this.doorStates.forEach(
+          (doorState) => {
+            const distance =
+              this.getHorizontalDistance(doorState.box, player);
 
-        const anyOpen =
-          hinge.parts.some(
-            (part) => {
-              const state =
-                hinge.createState(
-                  part
-                );
-
-              return Boolean(
-                state &&
-                state.isOpen
-              );
+            if (!Number.isFinite(distance)) {
+              return;
             }
-          );
 
-        if (
-          rawDistance <=
-            effectiveOpenDistance &&
-          !anyOpen
-        ) {
-          if (
-            this.setDoorOpen(
-              true
-            )
-          ) {
-            this.el.emit(
-              'door-auto-opened',
+            if (distance < nearestDistance) {
+              nearestDistance = distance;
+            }
 
-              {
-                distance:
-                  rawDistance,
+            const state = hinge.createState(doorState.part);
+            const isOpen = Boolean(state && state.isOpen);
 
-                effectiveOpenDistance
-              },
+            if (distance <= effectiveOpenDistance && !isOpen) {
+              if (this.setDoorOpen(doorState.part, true)) {
+                this.el.emit(
+                  'door-auto-opened',
+                  { distance, effectiveOpenDistance },
+                  false
+                );
+              }
 
-              false
-            );
+              return;
+            }
+
+            if (distance >= effectiveCloseDistance && isOpen) {
+              if (this.setDoorOpen(doorState.part, false)) {
+                this.el.emit(
+                  'door-auto-closed',
+                  { distance, effectiveCloseDistance },
+                  false
+                );
+              }
+            }
           }
+        );
 
-          return;
-        }
-
-        if (
-          rawDistance >=
-            effectiveCloseDistance &&
-          anyOpen
-        ) {
-          if (
-            this.setDoorOpen(
-              false
-            )
-          ) {
-            this.el.emit(
-              'door-auto-closed',
-
-              {
-                distance:
-                  rawDistance,
-
-                effectiveCloseDistance
-              },
-
-              false
-            );
-          }
-        }
+        this.lastDistance = nearestDistance;
       },
 
 
     remove:
       function () {
-        this.el.removeEventListener(
-          'model-loaded',
-          this.prepareDoor
-        );
-
-        this.el.removeEventListener(
-          'rooms-door-ready',
-          this.onDoorReady
-        );
+        this.el.removeEventListener('model-loaded', this.prepareDoor);
+        this.el.removeEventListener('rooms-door-ready', this.onDoorReady);
       }
   }
 );
@@ -3805,8 +3613,8 @@ function setupRoomsInteractions() {
       'auto-door-proximity',
 
       `
-        openDistance: 0.45;
-        closeDistance: 0.75;
+        openDistance: 0.6;
+        closeDistance: 0.9;
         interval: 120
       `
     );
