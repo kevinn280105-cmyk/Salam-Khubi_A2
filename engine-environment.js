@@ -1132,6 +1132,15 @@ AFRAME.registerComponent(
         this.refreshColliders
           .bind(this);
 
+      /*
+        Lets door-hinge (and anything similar) force an immediate
+        re-scan right after it reparents geometry into a pivot
+        group, instead of relying on the next unrelated
+        model-loaded event to happen to catch it.
+      */
+      window.roomsRefreshColliders =
+        this.refreshColliders;
+
       this.resetPosition =
         this.resetPosition
           .bind(this);
@@ -1212,11 +1221,22 @@ AFRAME.registerComponent(
           )
           .forEach(
             (entity) => {
+              /*
+                IMPORTANT: always scan the full entity.object3D,
+                not just getObject3D('mesh').
+
+                door-hinge (and anything else that reparents part
+                of a loaded GLB into its own pivot group) attaches
+                that pivot directly to entity.object3D, not under
+                the original loaded mesh root. Scanning only
+                getObject3D('mesh') would silently drop those
+                reparented meshes the next time refreshColliders()
+                re-runs (e.g. when another model finishes loading
+                after the door has already been opened/closed once),
+                letting the player walk straight through a still-
+                closed door forever after.
+              */
               const root =
-                entity
-                  .getObject3D(
-                    'mesh'
-                  ) ||
                 entity
                   .object3D;
 
@@ -1921,6 +1941,14 @@ AFRAME.registerComponent(
 
         this.modelListeners =
           [];
+
+        if (
+          window.roomsRefreshColliders ===
+            this.refreshColliders
+        ) {
+          window.roomsRefreshColliders =
+            null;
+        }
       }
   }
 );

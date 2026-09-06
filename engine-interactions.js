@@ -45,6 +45,7 @@ function objectBelongsToEntity(hitObject, entity) {
 
   return false;
 }
+
 /*
   Like objectBelongsToEntity(), but walks up to the entity's own
   object3D container instead of stopping at getObject3D('mesh').
@@ -235,6 +236,31 @@ AFRAME.registerComponent(
         return found;
       },
 
+    hasNamedMeshDescendant:
+      function (object, nameSubstring) {
+        const needle =
+          String(nameSubstring)
+            .toLowerCase();
+
+        let found = false;
+
+        object.traverse(
+          (node) => {
+            if (
+              node.isMesh &&
+              node.name &&
+              node.name
+                .toLowerCase()
+                .includes(needle)
+            ) {
+              found = true;
+            }
+          }
+        );
+
+        return found;
+      },
+
 
     onModelLoaded:
       function () {
@@ -271,7 +297,7 @@ AFRAME.registerComponent(
             children[0];
         }
 
-        this.parts =
+        let parts =
           container.children
             .filter(
               (child) =>
@@ -279,6 +305,30 @@ AFRAME.registerComponent(
                   child
                 )
             );
+
+        if (
+          parts.length >
+          1
+        ) {
+          const doorNamedParts =
+            parts.filter(
+              (part) =>
+                this.hasNamedMeshDescendant(
+                  part,
+                  'door'
+                )
+            );
+
+          if (
+            doorNamedParts.length
+          ) {
+            parts =
+              doorNamedParts;
+          }
+        }
+
+        this.parts =
+          parts;
 
         if (
           !this.parts.length
@@ -859,11 +909,11 @@ AFRAME.registerComponent(
   {
     schema: {
       openDistance: {
-        default: 1.25
+        default: 0.20
       },
 
       closeDistance: {
-        default: 1.75
+        default: 0.45
       },
 
       interval: {
@@ -876,7 +926,7 @@ AFRAME.registerComponent(
       */
 
       triggerPadding: {
-        default: 0.18
+        default: 0.02
       }
     },
 
@@ -895,9 +945,6 @@ AFRAME.registerComponent(
 
       this.lastDistance =
         Infinity;
-
-      this.hasBeenOutsideOpenRange =
-        false;
 
       this.playerPosition =
         new THREE.Vector3();
@@ -1026,15 +1073,38 @@ AFRAME.registerComponent(
             true
           );
 
-        mesh.updateMatrixWorld(
-          true
+        /*
+          IMPORTANT: build this from hinge.parts, NOT the whole
+          loaded mesh. Some GLBs (cua.glb included) bundle
+          unrelated leftover props from the original scene
+          alongside the actual door, positioned meters away --
+          using the whole mesh here would make the trigger box
+          balloon out to cover those stray objects too, which is
+          why proximity distance was never matching where the door
+          actually visually is.
+        */
+
+        hinge.parts.forEach(
+          (part) => {
+            part.updateMatrixWorld(
+              true
+            );
+          }
         );
 
         const box =
-          new THREE.Box3()
-            .setFromObject(
-              mesh
+          new THREE.Box3();
+
+        hinge.parts.forEach(
+          (part) => {
+            box.union(
+              new THREE.Box3()
+                .setFromObject(
+                  part
+                )
             );
+          }
+        );
 
         if (
           box.isEmpty()
@@ -1287,28 +1357,6 @@ AFRAME.registerComponent(
             this.data
               .triggerPadding
           );
-
-        /*
-          Don't auto-open just because the player SPAWNED inside
-          opening range. Require having been observed outside it
-          at least once first -- i.e. the player actually walked
-          up to the door, rather than starting right next to it.
-        */
-
-        if (
-          !this.hasBeenOutsideOpenRange
-        ) {
-          if (
-            rawDistance >
-              effectiveOpenDistance
-          ) {
-            this.hasBeenOutsideOpenRange =
-              true;
-
-          } else {
-            return;
-          }
-        }
 
         const effectiveCloseDistance =
           Math.max(
@@ -1633,6 +1681,7 @@ AFRAME.registerComponent(
       }
   }
 );
+
 
 /* ============================================================
    VR CLICK-TO-GRAB ITEM INTERACTOR
@@ -3561,6 +3610,7 @@ AFRAME.registerComponent(
   }
 );
 
+
 /* ============================================================
    CONTROLLER HAND VISUAL OFFSET
 
@@ -3755,8 +3805,8 @@ function setupRoomsInteractions() {
       'auto-door-proximity',
 
       `
-        openDistance: 1.25;
-        closeDistance: 1.75;
+        openDistance: 0.20;
+        closeDistance: 0.45;
         interval: 120
       `
     );

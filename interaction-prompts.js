@@ -71,7 +71,17 @@ const ROOMS_QUEST_ITEMS = [
 ];
 
 const ROOMS_DESCRIPTION_UI = {
-  questPosition: '0.74 0.27 -0.85',
+  /*
+    Desktop/Mac (magic window) vs actual VR headset use a
+    different effective field of view, so the same camera-
+    local offset lands in a different spot on screen in each.
+    Kept separate so either can be tuned without touching the
+    other. Swapped automatically on enter-vr / exit-vr.
+  */
+  questPositionDesktop: '0.74 0.27 -0.85',
+  questPositionVR: '0.62 0.24 -0.62',
+  questScaleDesktop: '1 1 1',
+  questScaleVR: '1.2 1.2 1.2',
   actionPromptPosition: '0 -0.18 -0.80',
 
   /*
@@ -1640,7 +1650,7 @@ AFRAME.registerComponent(
 
               position:
                 ROOMS_DESCRIPTION_UI
-                  .questPosition,
+                  .questPositionDesktop,
 
               visible:
                 'false'
@@ -2137,6 +2147,7 @@ AFRAME.registerComponent(
 
         this.questRoot =
           root;
+        this.updateQuestPlacement();
 
         roomsApplyCanvasTexture(
           shadowPlane,
@@ -2842,6 +2853,8 @@ AFRAME.registerComponent(
 
     onEnterVR:
       function () {
+        this.updateQuestPlacement();
+
         [
           0,
           50,
@@ -2867,6 +2880,8 @@ AFRAME.registerComponent(
 
     onExitVR:
       function () {
+        this.updateQuestPlacement();
+
         this.hideHoverDescription(
           true
         );
@@ -2876,6 +2891,42 @@ AFRAME.registerComponent(
         this.setActionPrompt(
           ''
         );
+      },
+
+
+    /* ========================================================
+       QUEST HUD PLACEMENT (DESKTOP vs VR)
+
+       Desktop (magic window) and an actual VR headset use a
+       different effective field of view, so the same camera-
+       local offset doesn't land in the same spot on screen in
+       both. Swap position/scale whenever the XR presenting
+       state changes.
+    ======================================================== */
+
+    updateQuestPlacement:
+      function () {
+        if (!this.questRoot) {
+          return;
+        }
+
+        const immersive =
+          roomsPromptsImmersiveXR(
+            this.scene
+          );
+
+        const position =
+          immersive
+            ? ROOMS_DESCRIPTION_UI.questPositionVR
+            : ROOMS_DESCRIPTION_UI.questPositionDesktop;
+
+        const scale =
+          immersive
+            ? ROOMS_DESCRIPTION_UI.questScaleVR
+            : ROOMS_DESCRIPTION_UI.questScaleDesktop;
+
+        this.questRoot.setAttribute('position', position);
+        this.questRoot.setAttribute('scale', scale);
       },
 
 
