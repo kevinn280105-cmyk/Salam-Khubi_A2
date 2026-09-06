@@ -1756,7 +1756,7 @@ AFRAME.registerComponent(
 
         this.questProgressText =
           roomsCreateText(
-            '0 / 3',
+            '0 / 1',
             '0.126 0.094 0.008',
             '0.12',
             'right',
@@ -3189,7 +3189,43 @@ AFRAME.registerComponent(
           .incenseLit =
           value;
 
-        this.updateQuestUI();
+        if (!value) {
+          this.updateQuestUI();
+          return;
+        }
+
+        /*
+          "Light the incense" is objective 1 of 1. Tick its row and
+          show 1 / 1 immediately so the player actually sees that
+          objective complete, then hand off to the "collect 3 items"
+          objective a moment later -- previously this all happened in
+          the same call, so 1 / 1 was never actually visible.
+        */
+        if (this.incenseRow) {
+          roomsSetVisible(
+            this.incenseRow.emptyCircle,
+            false
+          );
+
+          roomsSetVisible(
+            this.incenseRow.check,
+            true
+          );
+        }
+
+        if (this.questProgressText) {
+          this.questProgressText.setAttribute(
+            'value',
+            '1 / 1'
+          );
+        }
+
+        window.setTimeout(
+          () => {
+            this.updateQuestUI();
+          },
+          1100
+        );
       },
 
 
@@ -3341,10 +3377,22 @@ AFRAME.registerComponent(
         if (
           this.questProgressText
         ) {
+          /*
+            Before the incense is lit, this counter tracks that single
+            objective (0 / 1). setIncenseLit() briefly shows 1 / 1 and
+            then calls back into this function, at which point
+            incenseLit is already true and we switch over to tracking
+            the 3-item objective instead.
+          */
+          const progressValue =
+            incenseLit
+              ? `${roomsPromptState.foundItems.size} / ${ROOMS_QUEST_ITEMS.length}`
+              : '0 / 1';
+
           this.questProgressText
             .setAttribute(
               'value',
-              `${roomsPromptState.foundItems.size} / ${ROOMS_QUEST_ITEMS.length}`
+              progressValue
             );
         }
       },
