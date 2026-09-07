@@ -1184,15 +1184,55 @@ AFRAME.registerComponent(
 
       const hit = (element) => {
         if (
-          !element ||
-          !raycaster.getIntersection
+          !element
         ) {
           return null;
         }
 
-        return raycaster.getIntersection(
-          element
-        );
+        /*
+          FIX:
+
+          #vrPauseButton draws its gear icon (ring, inner ring,
+          spokes) as CHILD entities nested inside the clickable
+          circle. The raycaster hits whatever geometry is
+          physically closest -- often one of those decorative
+          children, not the circle itself -- and each child is
+          its own separate element. raycaster.getIntersection()
+          only matches by strict element equality, so aiming at
+          the visible icon artwork (dead center, where a player
+          naturally points) silently failed to register as a
+          hit on the button.
+
+          Fix: check every currently intersected element against
+          this control AND its descendants, using the ray's full
+          hit list instead of a single exact-match lookup.
+        */
+        const intersectedEls =
+          raycaster.intersectedEls ||
+          [];
+
+        for (
+          let i = 0;
+          i < intersectedEls.length;
+          i++
+        ) {
+          const candidate =
+            intersectedEls[i];
+
+          if (
+            candidate === element ||
+            (
+              element.contains &&
+              element.contains(
+                candidate
+              )
+            )
+          ) {
+            return true;
+          }
+        }
+
+        return null;
       };
 
       const pauseButton =
