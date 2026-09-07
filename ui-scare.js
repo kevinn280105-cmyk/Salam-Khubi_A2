@@ -1331,6 +1331,60 @@ AFRAME.registerComponent(
   }
 );
 
+/* ============================================================
+   QUEST CONTROLLER FACE BUTTON -> PAUSE MENU
+
+   Aiming a raycaster at the tiny 3D settings icon is fiddly.
+   B (right controller) and Y (left controller) aren't used for
+   anything else in this game, so either one toggles the pause
+   menu directly -- same open/close behaviour as the desktop
+   'P' / Escape key and the settings icon's own click.
+============================================================ */
+
+AFRAME.registerComponent(
+  'vr-menu-button',
+  {
+    schema: {
+      event: {
+        default: 'bbuttondown'
+      }
+    },
+
+    init: function () {
+      this.onButtonDown =
+        this.onButtonDown.bind(this);
+
+      this.el.addEventListener(
+        this.data.event,
+        this.onButtonDown
+      );
+    },
+
+    onButtonDown: function () {
+      /*
+        Only in genuine immersive VR -- same guard as
+        vr-ui-interactor, so this never fires on desktop.
+      */
+      if (
+        !hasImmersiveXRSession(
+          this.el.sceneEl
+        )
+      ) {
+        return;
+      }
+
+      toggleRoomsPauseMenu();
+    },
+
+    remove: function () {
+      this.el.removeEventListener(
+        this.data.event,
+        this.onButtonDown
+      );
+    }
+  }
+);
+
 
 /* ============================================================
    UI FLOW MANAGER

@@ -1235,16 +1235,27 @@ AFRAME.registerComponent(
 
 
           /*
-            IMPORTANT:
+            POSITION CORRECTION
 
-            Do NOT move this.
+            walking.glb was NOT actually exported at a spot
+            near the middle cua.glb doorway. Measured live in
+            the running scene: the character's baked position
+            was (1.61, 0, 3.51), while the door it's supposed
+            to appear next to sits at (1.44, 0.85, -3.31) --
+            about 7m away on the wrong side. standing.glb has
+            the same kind of mismatch relative to the altar,
+            so this looks like these characters were exported
+            from an unrelated Blender staging scene rather than
+            the actual house layout.
 
-            Position is baked into walking.glb.
+            Re-baking the correct position in Blender is the
+            real fix, but until that happens this offset moves
+            it to stand just past the middle door instead.
           */
 
           walking.setAttribute(
             'position',
-            '0 0 0'
+            '-0.17 0 -7.11'
           );
 
 

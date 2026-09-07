@@ -1248,12 +1248,6 @@
 
     </a-entity>
 
-<a-entity
-  id="walkingMonster"
-  gltf-model="url(walking.glb)"
-  position="0 0 0"
-  visible="false">
-</a-entity>
     <!-- ====================================================
          MIRROR
     ===================================================== -->
@@ -2160,7 +2154,9 @@
         natural-grab-hand="
           radius: 0.4;
           velocitySmoothing: 0.35
-        ">
+        "
+
+        vr-menu-button="event: ybuttondown">
 
       </a-entity>
 
@@ -2227,7 +2223,9 @@
 
         vr-offering-table-smoke-interactor
 
-        vr-ui-interactor>
+        vr-ui-interactor
+
+        vr-menu-button="event: bbuttondown">
 
       </a-entity>
 
