@@ -1332,13 +1332,14 @@ AFRAME.registerComponent(
 );
 
 /* ============================================================
-   QUEST CONTROLLER FACE BUTTON -> PAUSE MENU
+   QUEST CONTROLLER A BUTTON -> PAUSE MENU
 
-   Aiming a raycaster at the tiny 3D settings icon is fiddly.
-   B (right controller) and Y (left controller) aren't used for
-   anything else in this game, so either one toggles the pause
-   menu directly -- same open/close behaviour as the desktop
-   'P' / Escape key and the settings icon's own click.
+   The on-screen gear icon was fiddly to aim a raycaster at, so
+   it's gone -- the right controller's A button opens/closes the
+   pause menu directly instead, same behaviour as the desktop
+   'P' / Escape key. A used to double as the alternate grab
+   button too (natural-grab-hand) -- that binding was removed so
+   A does just this now, with no overlap.
 ============================================================ */
 
 AFRAME.registerComponent(
@@ -1346,7 +1347,7 @@ AFRAME.registerComponent(
   {
     schema: {
       event: {
-        default: 'bbuttondown'
+        default: 'abuttondown'
       }
     },
 

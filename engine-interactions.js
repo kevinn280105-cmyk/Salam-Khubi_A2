@@ -3088,7 +3088,6 @@ AFRAME.registerComponent(
       [
         'gripdown',
         'squeezestart',
-        'abuttondown',
         'xbuttondown'
       ].forEach(
         (name) => {
@@ -3102,7 +3101,6 @@ AFRAME.registerComponent(
       [
         'gripup',
         'squeezeend',
-        'abuttonup',
         'xbuttonup',
         'controllerdisconnected'
       ].forEach(
@@ -3367,7 +3365,6 @@ AFRAME.registerComponent(
         [
           'gripdown',
           'squeezestart',
-          'abuttondown',
           'xbuttondown'
         ].forEach(
           (name) => {
@@ -3381,7 +3378,6 @@ AFRAME.registerComponent(
         [
           'gripup',
           'squeezeend',
-          'abuttonup',
           'xbuttonup',
           'controllerdisconnected'
         ].forEach(

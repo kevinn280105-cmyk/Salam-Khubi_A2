@@ -1708,154 +1708,6 @@
 
 
         <!-- ==================================================
-             QUEST HEADSET-FOLLOWING SETTINGS BUTTON
-        =================================================== -->
-
-        <a-circle
-
-          id="vrPauseButton"
-
-          class="vr-control"
-
-          onclick="
-            toggleRoomsPauseMenu()
-          "
-
-          visible="false"
-
-          position="-0.38 -0.22 -0.85"
-
-          radius="0.040"
-
-          segments="40"
-
-          material="
-            color: #17191c;
-            opacity: 0.94;
-            transparent: true;
-            shader: flat;
-            side: double
-          ">
-
-
-          <a-ring
-
-            radius-inner="0.038"
-
-            radius-outer="0.044"
-
-            segments-theta="40"
-
-            position="0 0 0.002"
-
-            material="
-              color: #69758d;
-              shader: flat;
-              side: double
-            ">
-
-          </a-ring>
-
-
-          <a-ring
-
-            radius-inner="0.010"
-
-            radius-outer="0.017"
-
-            segments-theta="24"
-
-            position="0 0 0.006"
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double
-            ">
-
-          </a-ring>
-
-
-          <a-plane
-
-            width="0.036"
-
-            height="0.004"
-
-            position="0 0 0.007"
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double
-            ">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.036"
-
-            height="0.004"
-
-            rotation="0 0 60"
-
-            position="0 0 0.008"
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double
-            ">
-
-          </a-plane>
-
-
-          <a-plane
-
-            width="0.036"
-
-            height="0.004"
-
-            rotation="0 0 120"
-
-            position="0 0 0.009"
-
-            material="
-              color: #ffffff;
-              shader: flat;
-              side: double
-            ">
-
-          </a-plane>
-
-
-          <a-text
-
-            value="SETTINGS"
-
-            align="center"
-
-            width="0.34"
-
-            position="0 -0.065 0.010"
-
-            color="#ffffff"
-
-            material="
-              shader: flat;
-              depthTest: false;
-              depthWrite: false
-            ">
-
-          </a-text>
-
-
-        </a-circle>
-
-
-        <!-- ==================================================
              QUEST HEADSET-FOLLOWING SETTINGS PANEL
         =================================================== -->
 
@@ -2154,9 +2006,7 @@
         natural-grab-hand="
           radius: 0.4;
           velocitySmoothing: 0.35
-        "
-
-        vr-menu-button="event: ybuttondown">
+        ">
 
       </a-entity>
 
@@ -2225,7 +2075,7 @@
 
         vr-ui-interactor
 
-        vr-menu-button="event: bbuttondown">
+        vr-menu-button="event: abuttondown">
 
       </a-entity>
 
