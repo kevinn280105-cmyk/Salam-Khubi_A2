@@ -78,8 +78,8 @@ const ROOMS_DESCRIPTION_UI = {
     Kept separate so either can be tuned without touching the
     other. Swapped automatically on enter-vr / exit-vr.
   */
-  questPositionDesktop: '0.74 0.27 -0.85',
-  questPositionVR: '0.62 0.24 -0.62',
+  questPositionDesktop: '0 -0.13 -0.85',
+  questPositionVR: '0 -0.13 -0.62',
   questScaleDesktop: '1 1 1',
   questScaleVR: '1.2 1.2 1.2',
   actionPromptPosition: '0 -0.18 -0.80',
@@ -1658,487 +1658,29 @@ AFRAME.registerComponent(
           );
 
         /* ----------------------------------------------------
-           SOFT DROP SHADOW
+           PLAIN TEXT OBJECTIVE LINE
 
-           A blurred, slightly larger rounded rectangle sitting
-           behind the panel. Baked with Canvas2D since A-Frame
-           planes have no native blur/shadow.
+           Simplified per request: no background panel, no
+           icons, no per-item checklist rows -- just the
+           current objective as a single line of text,
+           bottom-center of the player's view (so it's
+           actually visible in VR). Content is filled in by
+           updateQuestUI() below.
         ---------------------------------------------------- */
 
-        const shadowTexture =
-          roomsCreatePanelShadowTexture(
-            {
-              width: 600,
-              height: 525,
-              radius: 44,
-              blur: 26,
-              opacity: 0.45
-            }
-          );
-
-        const shadowPlane =
-          roomsCreateEntity(
-            'a-plane',
-            {
-              width:
-                '0.360',
-
-              height:
-                '0.322',
-
-              position:
-                '0.007 -0.007 -0.012',
-
-              material:
-                'shader: flat; transparent: true; ' +
-                'depthTest: false; depthWrite: false'
-            }
-          );
-
-        root.appendChild(
-          shadowPlane
-        );
-
-        /* ----------------------------------------------------
-           PANEL
-
-           Single rounded-rect plane (fill + border baked
-           into one Canvas2D texture) instead of two flat
-           stacked planes.
-        ---------------------------------------------------- */
-
-        const panelTexture =
-          roomsCreateRoundedPanelTexture(
-            {
-              width: 600,
-              height: 525,
-              radius: 44,
-              fillColor: '#15171c',
-              fillOpacity: 0.86,
-              strokeColor: '#454b55',
-              strokeOpacity: 0.65,
-              strokeWidth: 5
-            }
-          );
-
-        const panel =
-          roomsCreateEntity(
-            'a-plane',
-            {
-              width:
-                '0.304',
-
-              height:
-                '0.266',
-
-              position:
-                '0 0 0',
-
-              material:
-                'shader: flat; transparent: true; ' +
-                'depthTest: false; depthWrite: false'
-            }
-          );
-
-        root.appendChild(
-          panel
-        );
-
-        const header =
+        this.questText =
           roomsCreateText(
-            'OBJECTIVES',
-            '-0.126 0.094 0.008',
-            '0.25',
-            'left',
-            '#e8ba6e',
-            18
-          );
-
-        this.questProgressText =
-          roomsCreateText(
-            '0 / 1',
-            '0.126 0.094 0.008',
-            '0.12',
-            'right',
-            '#e8ba6e',
-            10
-          );
-
-        root.append(
-          header,
-          this.questProgressText
-        );
-
-        /* ----------------------------------------------------
-           STEP 1 — LIGHT THE INCENSE
-
-           Always visible. Ticks once incense.js emits
-           "incense-lit" on #incenseStick (see onIncenseLit).
-        ---------------------------------------------------- */
-
-        const incenseRowEntity =
-          roomsCreateEntity(
-            'a-entity',
-            {
-              position:
-                '0 0.044 0.010'
-            }
-          );
-
-        const incenseRing =
-          roomsCreateEntity(
-            'a-ring',
-            {
-              'radius-inner':
-                '0.0060',
-
-              'radius-outer':
-                '0.0082',
-
-              'segments-theta':
-                '24',
-
-              position:
-                '-0.116 0 0',
-
-              material:
-                'color: #c9cbd0; opacity: 0.85; ' +
-                'transparent: true; shader: flat; ' +
-                'depthTest: false; depthWrite: false'
-            }
-          );
-
-        const incenseCheck =
-          roomsCreateEntity(
-            'a-entity',
-            {
-              position:
-                '-0.116 0 0.002',
-
-              visible:
-                'false'
-            }
-          );
-
-        const incenseCheckShort =
-          roomsCreateEntity(
-            'a-plane',
-            {
-              width:
-                '0.010',
-
-              height:
-                '0.0032',
-
-              position:
-                '-0.003 -0.002 0',
-
-              rotation:
-                '0 0 -42',
-
-              material:
-                'color: #8fd6a0; shader: flat; ' +
-                'depthTest: false; depthWrite: false'
-            }
-          );
-
-        const incenseCheckLong =
-          roomsCreateEntity(
-            'a-plane',
-            {
-              width:
-                '0.017',
-
-              height:
-                '0.0032',
-
-              position:
-                '0.004 0.002 0',
-
-              rotation:
-                '0 0 48',
-
-              material:
-                'color: #8fd6a0; shader: flat; ' +
-                'depthTest: false; depthWrite: false'
-            }
-          );
-
-        incenseCheck.append(
-          incenseCheckShort,
-          incenseCheckLong
-        );
-
-        const incenseLabel =
-          roomsCreateText(
-            'Light the incense',
-            '-0.096 0 0',
-            '0.215',
-            'left',
-            '#e9eaec',
-            26
-          );
-
-        incenseRowEntity.append(
-          incenseRing,
-          incenseCheck,
-          incenseLabel
-        );
-
-        root.appendChild(
-          incenseRowEntity
-        );
-
-        this.incenseRow = {
-          emptyCircle:
-            incenseRing,
-
-          check:
-            incenseCheck
-        };
-
-        /* ----------------------------------------------------
-           DIVIDER
-        ---------------------------------------------------- */
-
-        const divider =
-          roomsCreateEntity(
-            'a-plane',
-            {
-              width:
-                '0.270',
-
-              height:
-                '0.0014',
-
-              position:
-                '0 0.014 0.006',
-
-              material:
-                'color: #454b55; opacity: 0.55; ' +
-                'transparent: true; shader: flat; ' +
-                'depthTest: false; depthWrite: false'
-            }
+            '',
+            '0 0 0',
+            '0.70',
+            'center',
+            '#ffffff',
+            48
           );
 
         root.appendChild(
-          divider
+          this.questText
         );
-
-        /* ----------------------------------------------------
-           STEP 2 — FIND 3 ITEMS
-
-           Rows stay hidden until the incense is lit.
-           See updateQuestUI().
-        ---------------------------------------------------- */
-
-        const rowY = [
-          -0.016,
-          -0.066,
-          -0.116
-        ];
-
-        ROOMS_QUEST_ITEMS
-          .forEach(
-            (
-              item,
-              index
-            ) => {
-              const row =
-                roomsCreateEntity(
-                  'a-entity',
-                  {
-                    position:
-                      `0 ${rowY[index]} 0.010`,
-
-                    visible:
-                      'false'
-                  }
-                );
-
-              const emptyCircle =
-                roomsCreateEntity(
-                  'a-ring',
-                  {
-                    'radius-inner':
-                      '0.0060',
-
-                    'radius-outer':
-                      '0.0082',
-
-                    'segments-theta':
-                      '24',
-
-                    position:
-                      '-0.116 0 0',
-
-                    material:
-                      'color: #c9cbd0; opacity: 0.85; ' +
-                      'transparent: true; shader: flat; ' +
-                      'depthTest: false; depthWrite: false'
-                  }
-                );
-
-              const check =
-                roomsCreateEntity(
-                  'a-entity',
-                  {
-                    position:
-                      '-0.116 0 0.002',
-
-                    visible:
-                      'false'
-                  }
-                );
-
-              const checkShort =
-                roomsCreateEntity(
-                  'a-plane',
-                  {
-                    width:
-                      '0.010',
-
-                    height:
-                      '0.0032',
-
-                    position:
-                      '-0.003 -0.002 0',
-
-                    rotation:
-                      '0 0 -42',
-
-                    material:
-                      'color: #8fd6a0; shader: flat; ' +
-                      'depthTest: false; depthWrite: false'
-                  }
-                );
-
-              const checkLong =
-                roomsCreateEntity(
-                  'a-plane',
-                  {
-                    width:
-                      '0.017',
-
-                    height:
-                      '0.0032',
-
-                    position:
-                      '0.004 0.002 0',
-
-                    rotation:
-                      '0 0 48',
-
-                    material:
-                      'color: #8fd6a0; shader: flat; ' +
-                      'depthTest: false; depthWrite: false'
-                  }
-                );
-
-              check.append(
-                checkShort,
-                checkLong
-              );
-
-              const label =
-                roomsCreateText(
-                  item.title,
-                  '-0.096 0 0',
-                  '0.215',
-                  'left',
-                  '#e9eaec',
-                  22
-                );
-
-              row.append(
-                emptyCircle,
-                check,
-                label
-              );
-
-              root.appendChild(
-                row
-              );
-
-              this.questRows
-                .set(
-                  item.key,
-                  {
-                    emptyCircle,
-                    check,
-                    row
-                  }
-                );
-            }
-          );
-
-        /* ----------------------------------------------------
-           SMALL / FULL PANEL SIZE VARIANTS
-
-           Before the incense is lit only the header + incense
-           row are meaningful, so the panel/shadow render at a
-           shorter "small" size. Once lit, they resize to the
-           "full" size that also shows the 3 item rows below.
-        ---------------------------------------------------- */
-
-        const smallPanelTexture =
-          roomsCreateRoundedPanelTexture(
-            {
-              width: 600,
-              height: 253,
-              radius: 24,
-              fillColor: '#15171c',
-              fillOpacity: 0.86,
-              strokeColor: '#454b55',
-              strokeOpacity: 0.65,
-              strokeWidth: 4
-            }
-          );
-
-        const smallShadowTexture =
-          roomsCreatePanelShadowTexture(
-            {
-              width: 600,
-              height: 307,
-              radius: 26,
-              blur: 18,
-              opacity: 0.45
-            }
-          );
-
-        this.questPanel = panel;
-        this.questShadowPlane = shadowPlane;
-
-        this.questPanelFullSize = {
-          width: '0.304',
-          height: '0.266',
-          position: '0 0 0'
-        };
-
-        this.questShadowFullSize = {
-          width: '0.360',
-          height: '0.322',
-          position: '0.007 -0.007 -0.012'
-        };
-
-        this.questPanelSmallSize = {
-          width: '0.304',
-          height: '0.128',
-          position: '0 0.069 0'
-        };
-
-        this.questShadowSmallSize = {
-          width: '0.360',
-          height: '0.184',
-          position: '0.007 0.062 -0.012'
-        };
-
-        this.questPanelFullTexture = panelTexture;
-        this.questShadowFullTexture = shadowTexture;
-        this.questPanelSmallTexture = smallPanelTexture;
-        this.questShadowSmallTexture = smallShadowTexture;
-
-        this.questPanelLit = null;
 
         this.camera
           .appendChild(
@@ -2147,17 +1689,8 @@ AFRAME.registerComponent(
 
         this.questRoot =
           root;
+
         this.updateQuestPlacement();
-
-        roomsApplyCanvasTexture(
-          shadowPlane,
-          shadowTexture
-        );
-
-        roomsApplyCanvasTexture(
-          panel,
-          panelTexture
-        );
       },
 
 
@@ -3195,28 +2728,15 @@ AFRAME.registerComponent(
         }
 
         /*
-          "Light the incense" is objective 1 of 1. Tick its row and
-          show 1 / 1 immediately so the player actually sees that
-          objective complete, then hand off to the "collect 3 items"
-          objective a moment later -- previously this all happened in
-          the same call, so 1 / 1 was never actually visible.
+          "Light the incense" is objective 1 of 1. Show it as
+          done for a moment so the player actually sees that
+          objective complete, then hand off to the "place 3
+          items on the altar" objective a moment later.
         */
-        if (this.incenseRow) {
-          roomsSetVisible(
-            this.incenseRow.emptyCircle,
-            false
-          );
-
-          roomsSetVisible(
-            this.incenseRow.check,
-            true
-          );
-        }
-
-        if (this.questProgressText) {
-          this.questProgressText.setAttribute(
+        if (this.questText) {
+          this.questText.setAttribute(
             'value',
-            '1 / 1'
+            'Incense lit'
           );
         }
 
@@ -3231,170 +2751,54 @@ AFRAME.registerComponent(
 
     updateQuestUI:
       function () {
+        if (!this.questText) {
+          return;
+        }
+
         const incenseLit =
           Boolean(
             roomsPromptState
               .incenseLit
           );
 
-        if (
-          this.questPanel &&
-          this.questShadowPlane &&
-          this.questPanelLit !==
-            incenseLit
-        ) {
-          this.questPanelLit =
-            incenseLit;
+        let label =
+          'Light the incense';
 
-          const panelSize =
-            incenseLit
-              ? this.questPanelFullSize
-              : this.questPanelSmallSize;
+        if (incenseLit) {
+          const total =
+            ROOMS_QUEST_ITEMS
+              .length;
 
-          const shadowSize =
-            incenseLit
-              ? this.questShadowFullSize
-              : this.questShadowSmallSize;
+          const foundCount =
+            roomsPromptState
+              .foundItems
+              .size;
 
-          const panelTexture =
-            incenseLit
-              ? this.questPanelFullTexture
-              : this.questPanelSmallTexture;
-
-          const shadowTexture =
-            incenseLit
-              ? this.questShadowFullTexture
-              : this.questShadowSmallTexture;
-
-          this.questPanel
-            .setAttribute(
-              'width',
-              panelSize.width
-            );
-
-          this.questPanel
-            .setAttribute(
-              'height',
-              panelSize.height
-            );
-
-          this.questPanel
-            .setAttribute(
-              'position',
-              panelSize.position
-            );
-
-          this.questShadowPlane
-            .setAttribute(
-              'width',
-              shadowSize.width
-            );
-
-          this.questShadowPlane
-            .setAttribute(
-              'height',
-              shadowSize.height
-            );
-
-          this.questShadowPlane
-            .setAttribute(
-              'position',
-              shadowSize.position
-            );
-
-          if (panelTexture) {
-            roomsApplyCanvasTexture(
-              this.questPanel,
-              panelTexture
-            );
-          }
-
-          if (shadowTexture) {
-            roomsApplyCanvasTexture(
-              this.questShadowPlane,
-              shadowTexture
-            );
-          }
-        }
-
-        if (
-          this.incenseRow
-        ) {
-          roomsSetVisible(
-            this.incenseRow
-              .emptyCircle,
-            !incenseLit
-          );
-
-          roomsSetVisible(
-            this.incenseRow
-              .check,
-            incenseLit
-          );
-        }
-
-        ROOMS_QUEST_ITEMS
-          .forEach(
-            (item) => {
-              const row =
-                this.questRows
-                  .get(
-                    item.key
-                  );
-
-              if (!row) {
-                return;
-              }
-
-              if (
-                row.row
-              ) {
-                roomsSetVisible(
-                  row.row,
-                  incenseLit
-                );
-              }
-
-              const found =
-                roomsPromptState
-                  .foundItems
-                  .has(
-                    item.key
-                  );
-
-              roomsSetVisible(
-                row.emptyCircle,
-                !found
+          const remainingTitles =
+            ROOMS_QUEST_ITEMS
+              .filter(
+                (item) =>
+                  !roomsPromptState
+                    .foundItems
+                    .has(
+                      item.key
+                    )
+              )
+              .map(
+                (item) =>
+                  item.title
               );
 
-              roomsSetVisible(
-                row.check,
-                found
-              );
-            }
-          );
-
-        if (
-          this.questProgressText
-        ) {
-          /*
-            Before the incense is lit, this counter tracks that single
-            objective (0 / 1). setIncenseLit() briefly shows 1 / 1 and
-            then calls back into this function, at which point
-            incenseLit is already true and we switch over to tracking
-            the 3-item objective instead.
-          */
-          const progressValue =
-            incenseLit
-              ? `${roomsPromptState.foundItems.size} / ${ROOMS_QUEST_ITEMS.length}`
-              : '0 / 1';
-
-          this.questProgressText
-            .setAttribute(
-              'value',
-              progressValue
-            );
+          label =
+            remainingTitles.length
+              ? `Place on the altar: ${remainingTitles.join(', ')} (${foundCount} / ${total})`
+              : `All items placed (${foundCount} / ${total})`;
         }
+
+        this.questText.setAttribute(
+          'value',
+          label
+        );
       },
 
 
