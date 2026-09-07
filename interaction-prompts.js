@@ -364,6 +364,65 @@ function roomsApplyCanvasTexture(entity, texture) {
   mesh.material.transparent = true;
   mesh.material.needsUpdate = true;
 }
+
+/* ============================================================
+   QUEST OBJECTIVE CHECKBOX
+
+   Small square icon drawn next to the objective text so the
+   HUD reads as a checklist item instead of a stray line of
+   text. Empty outline while the current objective is still
+   pending, filled with a checkmark once it is satisfied.
+============================================================ */
+
+function roomsCreateCheckboxTexture(checked) {
+  const size = 64;
+  const margin = 7;
+  const radius = 9;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+
+  const ctx = canvas.getContext('2d');
+
+  roomsDrawRoundedRectPath(
+    ctx,
+    margin,
+    margin,
+    size - margin * 2,
+    size - margin * 2,
+    radius
+  );
+
+  if (checked) {
+    ctx.fillStyle = roomsRgba('#e0a552', 0.95);
+    ctx.fill();
+  }
+
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = roomsRgba(
+    checked ? '#e0a552' : '#9aa0ad',
+    checked ? 1 : 0.85
+  );
+  ctx.stroke();
+
+  if (checked) {
+    ctx.beginPath();
+    ctx.moveTo(size * 0.27, size * 0.53);
+    ctx.lineTo(size * 0.44, size * 0.70);
+    ctx.lineTo(size * 0.75, size * 0.32);
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = '#1a1206';
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  return texture;
+}
 /* ============================================================
    QUEST ITEM INVISIBLE AIM HITBOXES
 ============================================================ */
@@ -1641,6 +1700,9 @@ AFRAME.registerComponent(
         this.questProgressText =
           null;
 
+        this.questChecked =
+          null;
+
         const root =
           roomsCreateEntity(
             'a-entity',
@@ -1658,22 +1720,81 @@ AFRAME.registerComponent(
           );
 
         /* ----------------------------------------------------
-           PLAIN TEXT OBJECTIVE LINE
+           OBJECTIVE ROW -- background card + checkbox + text
 
-           Simplified per request: no background panel, no
-           icons, no per-item checklist rows -- just the
-           current objective as a single line of text,
-           bottom-center of the player's view (so it's
-           actually visible in VR). Content is filled in by
-           updateQuestUI() below.
+           A bare line of text read as a stray caption rather
+           than an objective, so this frames it: a dark card
+           behind it, and a checkbox to the left that fills in
+           once the current objective is satisfied. Content and
+           checked state are filled in by updateQuestUI() below.
         ---------------------------------------------------- */
+
+        this.questBackground =
+          roomsCreateEntity(
+            'a-plane',
+            {
+              width:
+                '0.60',
+
+              height:
+                '0.13',
+
+              position:
+                '0 0 0',
+
+              material:
+                'shader: flat; transparent: true; opacity: 0.94; side: double; depthTest: false; depthWrite: false'
+            }
+          );
+
+        root.appendChild(
+          this.questBackground
+        );
+
+        roomsApplyCanvasTexture(
+          this.questBackground,
+          roomsCreateRoundedPanelTexture(
+            {
+              width: 470,
+              height: 102,
+              radius: 18,
+              fillColor: '#0b0b0e',
+              fillOpacity: 0.82,
+              strokeColor: '#caa46a',
+              strokeOpacity: 0.55,
+              strokeWidth: 3
+            }
+          )
+        );
+
+        this.questCheckbox =
+          roomsCreateEntity(
+            'a-plane',
+            {
+              width:
+                '0.036',
+
+              height:
+                '0.036',
+
+              position:
+                '-0.245 0 0.001',
+
+              material:
+                'shader: flat; transparent: true; side: double; depthTest: false; depthWrite: false'
+            }
+          );
+
+        root.appendChild(
+          this.questCheckbox
+        );
 
         this.questText =
           roomsCreateText(
             '',
-            '0 0 0',
-            '0.70',
-            'center',
+            '-0.195 0 0.002',
+            '0.46',
+            'left',
             '#ffffff',
             48
           );
@@ -1690,9 +1811,44 @@ AFRAME.registerComponent(
         this.questRoot =
           root;
 
+        this.setQuestChecked(
+          false
+        );
+
         this.updateQuestPlacement();
       },
 
+
+    setQuestChecked:
+      function (
+        checked
+      ) {
+        const value =
+          Boolean(
+            checked
+          );
+
+        if (
+          this.questChecked ===
+          value
+        ) {
+          return;
+        }
+
+        this.questChecked =
+          value;
+
+        if (!this.questCheckbox) {
+          return;
+        }
+
+        roomsApplyCanvasTexture(
+          this.questCheckbox,
+          roomsCreateCheckboxTexture(
+            value
+          )
+        );
+      },
 
     /* ========================================================
        UNIVERSAL WORLD ACTION PROMPT
@@ -2740,6 +2896,10 @@ AFRAME.registerComponent(
           );
         }
 
+        this.setQuestChecked(
+          true
+        );
+
         window.setTimeout(
           () => {
             this.updateQuestUI();
@@ -2763,6 +2923,9 @@ AFRAME.registerComponent(
 
         let label =
           'Light the incense';
+
+        let checked =
+          false;
 
         if (incenseLit) {
           const total =
@@ -2789,6 +2952,9 @@ AFRAME.registerComponent(
                   item.title
               );
 
+          checked =
+            remainingTitles.length === 0;
+
           label =
             remainingTitles.length
               ? `Place on the altar: ${remainingTitles.join(', ')} (${foundCount} / ${total})`
@@ -2798,6 +2964,10 @@ AFRAME.registerComponent(
         this.questText.setAttribute(
           'value',
           label
+        );
+
+        this.setQuestChecked(
+          checked
         );
       },
 
