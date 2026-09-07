@@ -371,6 +371,52 @@ function roomsMonsterWorldBox(
 
 
 /* ============================================================
+   SHADER PRE-WARM
+
+   walking.glb and standing.glb sit invisible (visible: false)
+   from scene load until the moment they are revealed -- the
+   walking one right as the player crosses the middle doorway,
+   the standing one after items are placed. A three.js object
+   with visible: false is never sent to the GPU, so the FIRST
+   time it becomes visible is also the FIRST time its skinned
+   mesh shader gets compiled and its buffers get uploaded. That
+   compile is synchronous and can freeze the frame for a beat --
+   exactly the kind of stutter that would show up as "lag" right
+   at the doorway, the moment walking.glb turns on.
+
+   renderer.compile() walks a scene graph and warms up shaders
+   WITHOUT drawing anything the player can see, regardless of
+   each object's own visible flag. Doing this once, right after
+   each monster's GLB finishes loading (while the player is
+   still near the start of the game), moves that one-time cost
+   off of the scare moment.
+============================================================ */
+
+function roomsPrewarmMonsterShaders(sceneEl) {
+  if (!sceneEl) {
+    return;
+  }
+
+  const renderer = sceneEl.renderer;
+  const camera = sceneEl.camera;
+
+  if (
+    !renderer ||
+    !camera ||
+    typeof renderer.compile !== 'function'
+  ) {
+    return;
+  }
+
+  try {
+    renderer.compile(sceneEl.object3D, camera);
+  } catch (error) {
+    /* Pre-warm is a nice-to-have -- never block the game on it. */
+  }
+}
+
+
+/* ============================================================
    PLAYER POSITION
 ============================================================ */
 
@@ -633,6 +679,11 @@ AFRAME.registerComponent(
           .roomsMonsterState
           .walkingModelReady =
           true;
+
+
+        roomsPrewarmMonsterShaders(
+          this.el.sceneEl
+        );
 
 
         console.log(
@@ -1238,24 +1289,32 @@ AFRAME.registerComponent(
             POSITION CORRECTION
 
             walking.glb was NOT actually exported at a spot
-            near the middle cua.glb doorway. Measured live in
-            the running scene: the character's baked position
-            was (1.61, 0, 3.51), while the door it's supposed
-            to appear next to sits at (1.44, 0.85, -3.31) --
-            about 7m away on the wrong side. standing.glb has
-            the same kind of mismatch relative to the altar,
-            so this looks like these characters were exported
-            from an unrelated Blender staging scene rather than
-            the actual house layout.
+            near the house layout at all -- its baked position
+            was (1.61, 0, 3.51), nowhere near anything else in
+            the scene. This offset re-targets it.
 
-            Re-baking the correct position in Blender is the
-            real fix, but until that happens this offset moves
-            it to stand just past the middle door instead.
+            NEW TARGET: beside truocbantho.glb (the low altar
+            table), on its LEFT side. "Left" here means: the
+            player spawns at #rig (7.2, 0.08, -1) facing -X
+            (rotation.y: 90), so -X is the direction of travel
+            toward the altar room -- facing that way, LEFT is
+            +Z. truocbantho.glb sits at world position (0,0,0)
+            with its own bounding-box center around
+            (0.58, 0.37, 1.62), so the target world spot used
+            here is roughly (0.58, 0, 2.6) -- the table's own
+            X, floor level, about 1m past its center on the +Z
+            (left) side.
+
+            This is a best-effort placement based on the
+            bounding box, not a live-tested one -- flip the Z
+            sign below (and/or nudge the numbers) if it lands
+            on the wrong side or too close/far once you see it
+            in the headset.
           */
 
           walking.setAttribute(
             'position',
-            '-0.17 0 -7.11'
+            '-1.03 0 -0.9'
           );
 
 
@@ -1362,6 +1421,11 @@ AFRAME.registerComponent(
                 .roomsMonsterState
                 .standingModelReady =
                 true;
+
+
+              roomsPrewarmMonsterShaders(
+                this.el.sceneEl
+              );
 
 
               console.log(
