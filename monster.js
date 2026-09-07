@@ -45,6 +45,24 @@ const ROOMS_MONSTER_CONFIG = {
 
   doorSelector: '#door',
 
+  /*
+    cua.glb actually bundles 3 separate doorways that sit far
+    apart in the house (not 3 panels of one wide door). This
+    jump-scare only fires for ONE specific doorway -- the
+    middle one of the three, confirmed with the developer --
+    not the bedroom's own door and not the farthest doorway.
+
+    This is that specific door's baked Blender world position
+    (relative to the #door entity's origin). It is used only to
+    pick out the correct door among the three that
+    auto-door-proximity tracks independently.
+  */
+  walkingTriggerDoorPosition: {
+    x: 1.442,
+    y: 0.849,
+    z: -3.307
+  },
+
   playerSelector: '#cam',
 
   teddySelector: '#teddy',
@@ -1971,8 +1989,16 @@ AFRAME.registerComponent(
         /*
           BEST SOURCE:
 
-          auto-door-proximity already stores the CLOSED
-          door box before the door swings open.
+          cua.glb actually bundles THREE separate doorways.
+          auto-door-proximity tracks each one independently
+          and keeps every door's CLOSED box (captured once,
+          before that specific door ever swings open) in
+          autoDoor.doorStates.
+
+          Only ONE of those three is the actual bedroom door
+          this jump-scare cares about, so pick whichever door
+          sits closest to the bedroom model instead of lumping
+          all three doorways together.
         */
 
         const autoDoor =
@@ -1984,19 +2010,22 @@ AFRAME.registerComponent(
 
         if (
           autoDoor &&
-          autoDoor.closedDoorBox &&
-          !autoDoor.closedDoorBox
-            .isEmpty()
+          autoDoor.doorStates &&
+          autoDoor.doorStates.length
         ) {
           sourceBox =
-            autoDoor.closedDoorBox;
+            this.pickTriggerDoorBox(
+              autoDoor.doorStates
+            );
         }
 
 
         /*
           FALLBACK:
 
-          Only use the live door model if it is currently closed.
+          Only use the live (combined, all-doorways) door
+          model if it is currently closed, and only when the
+          per-door boxes above are not available yet.
         */
 
         if (
@@ -2099,6 +2128,99 @@ AFRAME.registerComponent(
 
 
         return true;
+      },
+
+
+    /* ========================================================
+       PICK WHICH OF THE 3 CUA.GLB DOORS TRIGGERS THE SCARE
+
+       cua.glb bundles 3 unrelated doorways in one file. This
+       jump-scare only cares about ONE specific doorway (the
+       middle one, confirmed with the developer -- see
+       ROOMS_MONSTER_CONFIG.walkingTriggerDoorPosition), so
+       pick whichever tracked door box is closest to that
+       known baked position. Falls back to the first tracked
+       door if something is ever badly out of range.
+    ======================================================== */
+
+    pickTriggerDoorBox:
+      function (
+        doorStates
+      ) {
+        if (
+          !doorStates ||
+          !doorStates.length
+        ) {
+          return null;
+        }
+
+
+        const validStates =
+          doorStates.filter(
+            (state) =>
+              state &&
+              state.box &&
+              !state.box.isEmpty()
+          );
+
+
+        if (
+          !validStates.length
+        ) {
+          return null;
+        }
+
+
+        const target =
+          ROOMS_MONSTER_CONFIG
+            .walkingTriggerDoorPosition;
+
+        const targetVector =
+          new THREE.Vector3(
+            target.x,
+            target.y,
+            target.z
+          );
+
+
+        let best =
+          null;
+
+        let bestDistance =
+          Infinity;
+
+
+        validStates.forEach(
+          (state) => {
+            const center =
+              state.box
+                .getCenter(
+                  new THREE.Vector3()
+                );
+
+            const distance =
+              targetVector
+                .distanceTo(
+                  center
+                );
+
+            if (
+              distance <
+              bestDistance
+            ) {
+              bestDistance =
+                distance;
+
+              best =
+                state.box;
+            }
+          }
+        );
+
+
+        return best ||
+          validStates[0]
+            .box;
       },
 
 
