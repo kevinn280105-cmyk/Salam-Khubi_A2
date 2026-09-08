@@ -1814,12 +1814,21 @@ AFRAME.registerComponent(
         null;
 
       this.codeGlitchMode =
-        'static';
+        'glitch';
 
       this.nextGlitchAt =
         0;
 
       this.lastStaticNoiseUpdate =
+        0;
+
+      /*
+        Which single digit of the code is currently shown --
+        the TV now cycles through the code one digit at a
+        time (show digit, glitch, next digit, glitch, repeat)
+        instead of flashing the whole code at once.
+      */
+      this.codeDigitIndex =
         0;
 
       this.onModelLoaded =
@@ -2092,14 +2101,19 @@ AFRAME.registerComponent(
           'tvCodeOverlay'
         );
 
+        /*
+          Square now instead of a wide strip -- this shows one
+          big digit at a time (see buildCodeDigitCanvas), not
+          the whole 4-digit code side by side.
+        */
         display.setAttribute(
           'width',
-          0.46
+          0.22
         );
 
         display.setAttribute(
           'height',
-          0.26
+          0.22
         );
 
         display.setAttribute(
@@ -2177,6 +2191,14 @@ AFRAME.registerComponent(
                 0.01
             );
 
+        /*
+          Match positionGlowLight()'s vertical nudge so the code
+          lines up with where the TV's own glow light actually
+          sits on the screen, instead of the raw box center.
+        */
+        world.y +=
+          0.02;
+
         this.el.sceneEl
           .object3D
           .updateMatrixWorld(
@@ -2248,13 +2270,20 @@ AFRAME.registerComponent(
           so often (see tickCodeGlitch).
         */
         this.codeGlitchMode =
-          'static';
+          'glitch';
 
         this.nextGlitchAt =
           0;
 
         this.lastStaticNoiseUpdate =
           0;
+
+        /*
+          -1 so the first tickCodeGlitch() advance (0-index math)
+          lands on digit 0 instead of skipping straight to digit 1.
+        */
+        this.codeDigitIndex =
+          -1;
 
         this.applyCodeTexture(
           this.buildCodeStaticCanvas()
@@ -2321,30 +2350,36 @@ AFRAME.registerComponent(
       },
 
 
-    buildCodeRevealCanvas:
+    getCodeDigits:
       function () {
         /*
-          Random-per-playthrough safe code (see safe.js) drawn
-          straight onto the TV screen -- only shown for brief
-          windows, see tickCodeGlitch.
+          Random-per-playthrough safe code (see safe.js).
         */
-        const code =
-          window.getRoomsSafeCode
-            ? window.getRoomsSafeCode()
-            : [
-                '?',
-                '?',
-                '?',
-                '?'
-              ];
+        return window.getRoomsSafeCode
+          ? window.getRoomsSafeCode()
+          : [
+              '?',
+              '?',
+              '?',
+              '?'
+            ];
+      },
 
+    buildCodeDigitCanvas:
+      function (digit) {
+        /*
+          One digit of the safe code, drawn with a fully
+          transparent background -- no solid panel behind it,
+          so it reads as light glowing directly on the glass
+          instead of an overlay box stuck to the screen.
+        */
         const canvas =
           document.createElement(
             'canvas'
           );
 
         canvas.width =
-          400;
+          220;
 
         canvas.height =
           220;
@@ -2354,10 +2389,7 @@ AFRAME.registerComponent(
             '2d'
           );
 
-        ctx.fillStyle =
-          'rgba(4, 8, 4, 0.92)';
-
-        ctx.fillRect(
+        ctx.clearRect(
           0,
           0,
           canvas.width,
@@ -2368,7 +2400,7 @@ AFRAME.registerComponent(
           '#6fff8f';
 
         ctx.font =
-          'bold 96px monospace';
+          'bold 160px monospace';
 
         ctx.textAlign =
           'center';
@@ -2380,10 +2412,10 @@ AFRAME.registerComponent(
           '#6fff8f';
 
         ctx.shadowBlur =
-          18;
+          26;
 
         ctx.fillText(
-          code.join(' '),
+          String(digit),
           canvas.width / 2,
           canvas.height / 2
         );
@@ -2449,8 +2481,20 @@ AFRAME.registerComponent(
           imageData.data[i + 2] =
             shade;
 
+          /*
+            Sparse, semi-transparent specks instead of a solid
+            opaque panel -- most pixels stay fully transparent
+            so this glitch has no background either, just
+            scattered interference over the TV's own screen.
+          */
           imageData.data[i + 3] =
-            255;
+            Math.random() < 0.35
+              ? Math.floor(
+                  60 +
+                    Math.random() *
+                      140
+                )
+              : 0;
         }
 
         ctx.putImageData(
@@ -2465,45 +2509,67 @@ AFRAME.registerComponent(
 
     tickCodeGlitch:
       function (time) {
+        /*
+          Cycles one digit of the code at a time: show a digit,
+          glitch briefly, show the next digit, glitch, repeat --
+          instead of flashing the whole code at once.
+        */
         if (
           time >=
           this.nextGlitchAt
         ) {
-          const revealing =
-            this.codeGlitchMode !==
-            'reveal';
+          const wasShowingDigit =
+            this.codeGlitchMode ===
+            'digit';
 
-          this.codeGlitchMode =
-            revealing
-              ? 'reveal'
-              : 'static';
-
-          if (revealing) {
+          if (wasShowingDigit) {
             /*
-              A short flash of the real code -- long enough to
-              read if you're watching for it, short enough that
-              it's easy to miss at a glance.
+              Brief glitch burst between digits.
             */
+            this.codeGlitchMode =
+              'glitch';
+
             this.nextGlitchAt =
               time +
-              350 +
+              180 +
               Math.random() *
-                300;
+                180;
 
             this.applyCodeTexture(
-              this.buildCodeRevealCanvas()
+              this.buildCodeStaticCanvas()
             );
 
           } else {
             /*
-              Long static stretch in between -- most of the
-              time the screen just looks like dead signal.
+              Glitch is over -- advance to and show the next
+              digit in the code, wrapping back to the start.
             */
+            const digits =
+              this.getCodeDigits();
+
+            this.codeDigitIndex =
+              (
+                this.codeDigitIndex +
+                1
+              ) %
+              digits.length;
+
+            this.codeGlitchMode =
+              'digit';
+
             this.nextGlitchAt =
               time +
-              1200 +
+              500 +
               Math.random() *
-                1800;
+                250;
+
+            this.applyCodeTexture(
+              this.buildCodeDigitCanvas(
+                digits[
+                  this.codeDigitIndex
+                ]
+              )
+            );
           }
 
           this.lastStaticNoiseUpdate =
@@ -2513,7 +2579,7 @@ AFRAME.registerComponent(
 
         if (
           this.codeGlitchMode ===
-            'static' &&
+            'glitch' &&
           time -
             this.lastStaticNoiseUpdate >=
             90

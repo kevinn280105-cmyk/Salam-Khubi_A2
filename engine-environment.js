@@ -29,6 +29,160 @@ function roomsEnvironmentPaused() {
 
 
 /* ============================================================
+   MOVEMENT COLLISION -- WORLD BOUNDING SPHERE CACHE
+
+   The player-collision system used to raycast against EVERY
+   loaded mesh in the whole house on every single movement step
+   (up to 9 rays x 3 raycasts per substep). Early in the game few
+   rooms have loaded so this is cheap, but by the time the player
+   reaches areas explored later (e.g. the middle door), almost the
+   whole house's colliders have accumulated and every step pays
+   for a full-house raycast -- this was the real source of the
+   reported lag near the middle door, not GPU shader/texture warm-up.
+
+   roomsComputeWorldBoundingSphere() is called once per mesh when
+   colliders refresh (a rare, load-time event) so isBlocked() can
+   cheaply distance-cull the candidate list before doing the actual
+   (much more expensive) triangle-level raycast.
+============================================================ */
+
+function roomsComputeWorldBoundingSphere(node) {
+  if (!node || !node.geometry) {
+    return null;
+  }
+
+  if (!node.geometry.boundingSphere) {
+    node.geometry.computeBoundingSphere();
+  }
+
+  const localSphere = node.geometry.boundingSphere;
+
+  if (!localSphere) {
+    return null;
+  }
+
+  const center = localSphere.center.clone().applyMatrix4(node.matrixWorld);
+
+  const scale = new THREE.Vector3();
+  node.matrixWorld.decompose(new THREE.Vector3(), new THREE.Quaternion(), scale);
+
+  const maxScale = Math.max(
+    Math.abs(scale.x),
+    Math.abs(scale.y),
+    Math.abs(scale.z)
+  ) || 1;
+
+  return {
+    center: center,
+    radius: localSphere.radius * maxScale
+  };
+}
+
+
+/* ============================================================
+   WHOLE-SCENE SHADER/TEXTURE WARM-UP
+
+   The house is loaded as ~15 separate large GLBs. THREE.js only
+   uploads a mesh's shader program and textures to the GPU the
+   first time that mesh actually passes frustum culling in a real
+   render() call -- i.e. the first time the player looks at it.
+   On a fast desktop GPU that upload is imperceptible; on a Quest's
+   much weaker mobile GPU it shows up as a stutter every time a
+   new, not-yet-seen chunk of the house first comes into view --
+   which reads exactly like "walk, stutter-stop, walk, stutter-
+   stop" while exploring, even nowhere near the monster.
+
+   This forces the whole currently-loaded scene through one real
+   (offscreen, invisible) render pass -- with frustum culling
+   temporarily disabled so nothing gets skipped regardless of where
+   the camera actually happens to be looking -- so all of that GPU
+   upload work happens once, up front, instead of being scattered
+   across gameplay. It's re-scheduled (debounced) every time new
+   colliders are found, so late-loading rooms get warmed up too.
+============================================================ */
+
+let roomsWholeScenePrewarmTimer = null;
+
+function roomsPrewarmWholeScene(sceneEl) {
+  if (!sceneEl) {
+    return;
+  }
+
+  const renderer = sceneEl.renderer;
+  const camera = sceneEl.camera;
+
+  if (!renderer || !camera) {
+    return;
+  }
+
+  try {
+    if (typeof renderer.compile === 'function') {
+      renderer.compile(sceneEl.object3D, camera);
+    }
+  } catch (error) {
+    /* Warm-up is a nice-to-have -- never block the game on it. */
+  }
+
+  const root = sceneEl.object3D;
+  const previousCulling = [];
+
+  root.traverse((node) => {
+    if (node.isMesh) {
+      previousCulling.push({ node: node, value: node.frustumCulled });
+      node.frustumCulled = false;
+    }
+  });
+
+  let target = null;
+  let priorTarget = null;
+
+  try {
+    target = new THREE.WebGLRenderTarget(1, 1);
+    priorTarget = renderer.getRenderTarget();
+
+    renderer.setRenderTarget(target);
+    renderer.render(sceneEl.object3D, camera);
+    renderer.setRenderTarget(priorTarget);
+  } catch (error) {
+    /* Warm-up is a nice-to-have -- never block the game on it. */
+  } finally {
+    if (target) {
+      target.dispose();
+    }
+
+    previousCulling.forEach((entry) => {
+      entry.node.frustumCulled = entry.value;
+    });
+  }
+
+  console.log(
+    `Whole-scene shader/texture warm-up ran (${previousCulling.length} mesh(es)).`
+  );
+}
+
+function roomsScheduleWholeScenePrewarm(sceneEl) {
+  if (!sceneEl) {
+    return;
+  }
+
+  if (roomsWholeScenePrewarmTimer) {
+    window.clearTimeout(roomsWholeScenePrewarmTimer);
+  }
+
+  /*
+    Debounced: many models finish loading in a burst, so wait until
+    things go quiet for a moment before paying for one real render
+    of everything loaded so far, instead of doing it after every
+    single model-loaded event.
+  */
+  roomsWholeScenePrewarmTimer = window.setTimeout(() => {
+    roomsWholeScenePrewarmTimer = null;
+    roomsPrewarmWholeScene(sceneEl);
+  }, 600);
+}
+
+
+/* ============================================================
    IRREGULAR HORROR FLICKER + THUNDER
 ============================================================ */
 
@@ -1245,6 +1399,11 @@ AFRAME.registerComponent(
               }
 
               root
+                .updateMatrixWorld(
+                  true
+                );
+
+              root
                 .traverse(
                   (node) => {
                     if (
@@ -1256,6 +1415,20 @@ AFRAME.registerComponent(
                         .userData
                         .collisionEntity =
                         entity;
+
+                      /*
+                        Cache a world-space bounding sphere once here
+                        (refreshColliders only runs on load events, not
+                        every frame) so isBlocked() can cheaply skip
+                        meshes nowhere near the player instead of
+                        raycasting against the whole house every step.
+                      */
+                      node
+                        .userData
+                        .collisionSphere =
+                        roomsComputeWorldBoundingSphere(
+                          node
+                        );
 
                       meshes
                         .push(
@@ -1273,6 +1446,49 @@ AFRAME.registerComponent(
         console.log(
           `Player collision loaded ${meshes.length} mesh collider(s).`
         );
+
+        /*
+          Piggyback on this same "something new just finished
+          loading" signal to also (debounced) warm up shaders and
+          textures for everything loaded so far -- see
+          roomsPrewarmWholeScene() above for why this matters.
+        */
+        roomsScheduleWholeScenePrewarm(
+          this.el.sceneEl
+        );
+      },
+
+    /*
+      Cheap distance-only pre-filter run before the real (expensive)
+      triangle raycast. Only excludes a mesh when its cached bounding
+      sphere proves it cannot possibly be within maxDistance -- a
+      mesh with no cached sphere is always kept, so this can only
+      make isBlocked() faster, never less correct.
+    */
+    filterNearbyColliders:
+      function (origin, maxDistance) {
+        const nearby = [];
+
+        for (let index = 0; index < this.colliderMeshes.length; index++) {
+          const mesh = this.colliderMeshes[index];
+          const sphere = mesh.userData.collisionSphere;
+
+          if (!sphere) {
+            nearby.push(mesh);
+            continue;
+          }
+
+          const dx = origin.x - sphere.center.x;
+          const dy = origin.y - sphere.center.y;
+          const dz = origin.z - sphere.center.z;
+          const limit = maxDistance + sphere.radius;
+
+          if ((dx * dx + dy * dy + dz * dz) <= limit * limit) {
+            nearby.push(mesh);
+          }
+        }
+
+        return nearby;
       },
 
     isBlocked:
@@ -1352,6 +1568,28 @@ AFRAME.registerComponent(
           this.data
             .skin;
 
+        /*
+          Only consider colliders that could plausibly be hit by
+          ANY of the 9 rays below, instead of raycasting against
+          every mesh in the whole house on every movement step.
+          See roomsComputeWorldBoundingSphere() for why this exists.
+        */
+        const cullRadius =
+          rayLength +
+          (this.data.radius * 0.72) +
+          1.42 +
+          0.25;
+
+        const nearbyColliderMeshes =
+          this.filterNearbyColliders(
+            from,
+            cullRadius
+          );
+
+        if (!nearbyColliderMeshes.length) {
+          return false;
+        }
+
         for (
           let heightIndex =
             0;
@@ -1409,8 +1647,7 @@ AFRAME.registerComponent(
             const hits =
               this.raycaster
                 .intersectObjects(
-                  this
-                    .colliderMeshes,
+                  nearbyColliderMeshes,
 
                   false
                 );

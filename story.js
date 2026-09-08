@@ -698,8 +698,25 @@ function roomsStoryAppendRaySelector(
     rayEntity.components
       .raycaster;
 
+  /*
+    FIX: this can run very early (story-manager's own init(),
+    which can fire before #rightHand's raycaster component has
+    finished ITS init -- the component object already exists in
+    rayEntity.components at that point, but component.data isn't
+    populated yet). Calling refreshObjects() on it then throws
+    "Cannot read properties of undefined (reading 'objects')"
+    inside A-Frame's raycaster code -- this was an UNCAUGHT
+    exception that killed the rest of story-manager's init() on
+    every load, silently disabling item placement entirely (this
+    is the same error that's been showing up in the console this
+    whole time). setAttribute() above already queues the real
+    update for whenever the component actually finishes
+    initializing, so it's safe to just skip the immediate
+    refresh when the component isn't ready for it yet.
+  */
   if (
     component &&
+    component.data &&
     component.refreshObjects
   ) {
     component.refreshObjects();
@@ -870,6 +887,14 @@ AFRAME.registerComponent(
         this.bindPlacementControls();
 
         this.syncInspectionProgress();
+
+        /*
+          Placing the 3 items on the altar IS the objective --
+          no separate hidden "inspect each item first" step is
+          shown to the player, so make placement available right
+          away instead of waiting on that legacy milestone gate.
+        */
+        this.armFinalPlacement();
 
         [
           100,
@@ -1920,12 +1945,22 @@ AFRAME.registerComponent(
 
     armFinalPlacement:
       function () {
+        /*
+          This used to also require every item to be
+          hover-inspected first (this.collected.size >=
+          ROOMS_STORY_MILESTONES.length). interaction-prompts.js
+          no longer completes the checklist from hovering --
+          only a real placement does -- so that requirement had
+          become a deadlock: nothing could ever place a first
+          item, so nothing could ever collect a milestone, so
+          this never armed and the altar counter stayed stuck at
+          0/3 forever. Placing an item on the altar is the whole
+          objective now (see interaction-prompts.js's quest
+          text), so arm this unconditionally instead.
+        */
         if (
           this.inspectedComplete ||
-          this.completed ||
-          this.collected.size <
-            ROOMS_STORY_MILESTONES
-              .length
+          this.completed
         ) {
           return;
         }
