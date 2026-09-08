@@ -438,6 +438,8 @@
 
   <script src="engine-interactions.js"></script>
 
+  <script src="safe.js"></script>
+
   <script src="interaction-prompts.js"></script>
 
   <script src="audio.js"></script>
@@ -896,6 +898,36 @@
 
       model-status="
         name: Television
+      ">
+
+    </a-entity>
+
+
+    <!-- ====================================================
+         SAFETY BOX (code puzzle, shown on the TV)
+    ===================================================== -->
+
+    <a-entity
+
+      id="safetybox"
+
+      class="
+        roompart
+        safe-interactable
+      "
+
+      visible="true"
+
+      gltf-model="url(safetybox.glb)"
+
+      position="3.85 0 5.15"
+
+      rotation="0 0 0"
+
+      embedded-safe
+
+      model-status="
+        name: Safety box
       ">
 
     </a-entity>

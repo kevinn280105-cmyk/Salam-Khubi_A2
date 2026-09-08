@@ -1779,6 +1779,18 @@ AFRAME.registerComponent(
       this.lastFlickerUpdate =
         0;
 
+      this.codeDisplay =
+        null;
+
+      this.codeGlitchMode =
+        'static';
+
+      this.nextGlitchAt =
+        0;
+
+      this.lastStaticNoiseUpdate =
+        0;
+
       this.onModelLoaded =
         this.onModelLoaded.bind(
           this
@@ -1825,6 +1837,10 @@ AFRAME.registerComponent(
         this.createGlowLight();
 
         this.positionGlowLight();
+
+        this.createCodeDisplay();
+
+        this.positionCodeDisplay();
 
         this.ready =
           true;
@@ -2023,6 +2039,431 @@ AFRAME.registerComponent(
       },
 
 
+    createCodeDisplay:
+      function () {
+        if (
+          this.codeDisplay
+        ) {
+          return;
+        }
+
+        const display =
+          document.createElement(
+            'a-plane'
+          );
+
+        display.setAttribute(
+          'id',
+          'tvCodeOverlay'
+        );
+
+        display.setAttribute(
+          'width',
+          0.46
+        );
+
+        display.setAttribute(
+          'height',
+          0.26
+        );
+
+        display.setAttribute(
+          'material',
+          'shader: flat; transparent: true; side: double; opacity: 0'
+        );
+
+        display.setAttribute(
+          'visible',
+          false
+        );
+
+        this.el.sceneEl
+          .appendChild(
+            display
+          );
+
+        this.codeDisplay =
+          display;
+      },
+
+
+    positionCodeDisplay:
+      function () {
+        if (
+          !this.codeDisplay ||
+          !this.root
+        ) {
+          return;
+        }
+
+        this.updateTVWorldPosition();
+
+        /*
+          Much smaller offset than the glow light -- this one
+          needs to sit right on the screen surface, not float
+          out in front of it.
+        */
+        const world =
+          this.screenPointWorld
+            .clone()
+            .addScaledVector(
+              this
+                .screenNormalWorld,
+
+              0.015
+            );
+
+        this.el.sceneEl
+          .object3D
+          .updateMatrixWorld(
+            true
+          );
+
+        const local =
+          this.el.sceneEl
+            .object3D
+            .worldToLocal(
+              world.clone()
+            );
+
+        this.codeDisplay
+          .object3D
+          .position
+          .copy(
+            local
+          );
+
+        const facing =
+          new THREE.Quaternion()
+            .setFromUnitVectors(
+              new THREE.Vector3(
+                0,
+                0,
+                1
+              ),
+              this
+                .screenNormalWorld
+            );
+
+        this.codeDisplay
+          .object3D
+          .quaternion
+          .copy(
+            facing
+          );
+      },
+
+
+    updateCodeDisplay:
+      function () {
+        if (
+          !this.codeDisplay
+        ) {
+          return;
+        }
+
+        this.positionCodeDisplay();
+
+        this.codeDisplay
+          .setAttribute(
+            'visible',
+            this.isOn
+          );
+
+        if (
+          !this.isOn
+        ) {
+          return;
+        }
+
+        /*
+          Don't just snap straight to the readable code the
+          instant the TV turns on -- that reads as blatant.
+          Reset the glitch cycle so it starts on a static/snow
+          frame and only flashes the real code into view every
+          so often (see tickCodeGlitch).
+        */
+        this.codeGlitchMode =
+          'static';
+
+        this.nextGlitchAt =
+          0;
+
+        this.lastStaticNoiseUpdate =
+          0;
+
+        this.applyCodeTexture(
+          this.buildCodeStaticCanvas()
+        );
+      },
+
+
+    applyCodeTexture:
+      function (canvas) {
+        if (
+          !this.codeDisplay
+        ) {
+          return;
+        }
+
+        const texture =
+          new THREE.CanvasTexture(
+            canvas
+          );
+
+        texture.needsUpdate =
+          true;
+
+        const mesh =
+          this.codeDisplay.getObject3D(
+            'mesh'
+          );
+
+        if (
+          mesh &&
+          mesh.material
+        ) {
+          /*
+            FIX: a fresh CanvasTexture is created every time this
+            runs (up to ~11x/sec while the TV is on, for the
+            static-noise redraw). Without disposing the outgoing
+            texture first, each one leaks a GPU texture handle --
+            over a minute of the TV being left on that is
+            hundreds of leaked textures, enough to make the whole
+            page (clicks included) feel unresponsive.
+          */
+          if (
+            mesh.material.map &&
+            mesh.material.map !==
+              texture
+          ) {
+            mesh.material.map.dispose();
+          }
+
+          mesh.material.map =
+            texture;
+
+          mesh.material.opacity =
+            1;
+
+          mesh.material.needsUpdate =
+            true;
+        } else {
+          /*
+            Nowhere to use this texture -- don't leak it either.
+          */
+          texture.dispose();
+        }
+      },
+
+
+    buildCodeRevealCanvas:
+      function () {
+        /*
+          Random-per-playthrough safe code (see safe.js) drawn
+          straight onto the TV screen -- only shown for brief
+          windows, see tickCodeGlitch.
+        */
+        const code =
+          window.getRoomsSafeCode
+            ? window.getRoomsSafeCode()
+            : [
+                '?',
+                '?',
+                '?',
+                '?'
+              ];
+
+        const canvas =
+          document.createElement(
+            'canvas'
+          );
+
+        canvas.width =
+          400;
+
+        canvas.height =
+          220;
+
+        const ctx =
+          canvas.getContext(
+            '2d'
+          );
+
+        ctx.fillStyle =
+          'rgba(4, 8, 4, 0.92)';
+
+        ctx.fillRect(
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+
+        ctx.fillStyle =
+          '#6fff8f';
+
+        ctx.font =
+          'bold 96px monospace';
+
+        ctx.textAlign =
+          'center';
+
+        ctx.textBaseline =
+          'middle';
+
+        ctx.shadowColor =
+          '#6fff8f';
+
+        ctx.shadowBlur =
+          18;
+
+        ctx.fillText(
+          code.join(' '),
+          canvas.width / 2,
+          canvas.height / 2
+        );
+
+        return canvas;
+      },
+
+
+    buildCodeStaticCanvas:
+      function () {
+        /*
+          Cheap TV-snow effect: a small canvas of random
+          grayscale noise, stretched blurry across the same
+          plane the real code renders on. Low-res on purpose --
+          it's noise, not detail, and it keeps this fast enough
+          to redraw several times a second.
+        */
+        const width =
+          80;
+
+        const height =
+          44;
+
+        const canvas =
+          document.createElement(
+            'canvas'
+          );
+
+        canvas.width =
+          width;
+
+        canvas.height =
+          height;
+
+        const ctx =
+          canvas.getContext(
+            '2d'
+          );
+
+        const imageData =
+          ctx.createImageData(
+            width,
+            height
+          );
+
+        for (
+          let i = 0;
+          i < imageData.data.length;
+          i += 4
+        ) {
+          const shade =
+            Math.floor(
+              Math.random() *
+                255
+            );
+
+          imageData.data[i] =
+            shade;
+
+          imageData.data[i + 1] =
+            shade;
+
+          imageData.data[i + 2] =
+            shade;
+
+          imageData.data[i + 3] =
+            255;
+        }
+
+        ctx.putImageData(
+          imageData,
+          0,
+          0
+        );
+
+        return canvas;
+      },
+
+
+    tickCodeGlitch:
+      function (time) {
+        if (
+          time >=
+          this.nextGlitchAt
+        ) {
+          const revealing =
+            this.codeGlitchMode !==
+            'reveal';
+
+          this.codeGlitchMode =
+            revealing
+              ? 'reveal'
+              : 'static';
+
+          if (revealing) {
+            /*
+              A short flash of the real code -- long enough to
+              read if you're watching for it, short enough that
+              it's easy to miss at a glance.
+            */
+            this.nextGlitchAt =
+              time +
+              350 +
+              Math.random() *
+                300;
+
+            this.applyCodeTexture(
+              this.buildCodeRevealCanvas()
+            );
+
+          } else {
+            /*
+              Long static stretch in between -- most of the
+              time the screen just looks like dead signal.
+            */
+            this.nextGlitchAt =
+              time +
+              1200 +
+              Math.random() *
+                1800;
+          }
+
+          this.lastStaticNoiseUpdate =
+            time;
+          return;
+        }
+
+        if (
+          this.codeGlitchMode ===
+            'static' &&
+          time -
+            this.lastStaticNoiseUpdate >=
+            90
+        ) {
+          this.lastStaticNoiseUpdate =
+            time;
+
+          this.applyCodeTexture(
+            this.buildCodeStaticCanvas()
+          );
+        }
+      },
+
+
     setState:
       function (on) {
         if (
@@ -2049,6 +2490,8 @@ AFRAME.registerComponent(
                 : 0
             );
         }
+
+        this.updateCodeDisplay();
 
         if (
           window.setRoomsTVState
@@ -2184,38 +2627,42 @@ AFRAME.registerComponent(
         if (
           this.componentPaused ||
           roomsGameplayInputLocked() ||
-          !this.isOn ||
-          !this.glowLight
+          !this.isOn
         ) {
           return;
         }
 
         if (
+          this.glowLight &&
           time -
-            this.lastFlickerUpdate <
+            this.lastFlickerUpdate >=
           this.data
             .flickerInterval
         ) {
-          return;
+          this.lastFlickerUpdate =
+            time;
+
+          const brightness =
+            0.88 +
+            Math.random() *
+              0.12;
+
+          this.glowLight
+            .setAttribute(
+              'light',
+              'intensity',
+
+              this.data
+                .lightIntensity *
+                brightness
+            );
         }
 
-        this.lastFlickerUpdate =
-          time;
-
-        const brightness =
-          0.88 +
-          Math.random() *
-            0.12;
-
-        this.glowLight
-          .setAttribute(
-            'light',
-            'intensity',
-
-            this.data
-              .lightIntensity *
-              brightness
+        if (this.codeDisplay) {
+          this.tickCodeGlitch(
+            time
           );
+        }
       },
 
 
