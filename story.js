@@ -151,6 +151,67 @@ function roomsStoryGetModelBox(entity) {
 }
 
 
+/*
+  #truocbantho bundles the WHOLE altar-front area, not just the
+  offering table: two floor rugs, a distant floor mat, and 4 small
+  decorative objects already sitting on the table -- alongside the
+  actual table itself. roomsStoryGetModelBox()'s bounding box over
+  ALL of that is huge (about 3.2m x 6m) and mostly empty air over
+  the rugs, so "is the item near the altar" and "what's the real
+  surface height here" were both being measured against a zone
+  that barely corresponds to the real, much smaller table -- this
+  is why placing an item that visually looks like it's resting on
+  the altar could fail to register, or land at the wrong height.
+
+  Picking the mesh part with the tallest vertical extent finds the
+  actual table reliably (it's the only part with real height --
+  the rugs are ~1-8cm thick, the table is ~68cm) without depending
+  on a specific mesh name that could change on a re-export.
+*/
+function roomsStoryGetAltarSurfaceBox(entity) {
+  if (!entity) {
+    return null;
+  }
+
+  const root = entity.getObject3D('mesh');
+
+  if (!root) {
+    return null;
+  }
+
+  entity.object3D.updateMatrixWorld(true);
+  root.updateMatrixWorld(true);
+
+  let tallestBox = null;
+  let tallestHeight = -Infinity;
+
+  root.traverse((node) => {
+    if (!node.isMesh || !node.geometry) {
+      return;
+    }
+
+    const box = new THREE.Box3().setFromObject(node);
+
+    if (box.isEmpty()) {
+      return;
+    }
+
+    const height = box.max.y - box.min.y;
+
+    if (height > tallestHeight) {
+      tallestHeight = height;
+      tallestBox = box;
+    }
+  });
+
+  /*
+    Should not normally happen, but never make placement worse
+    than before -- fall back to the whole-model box.
+  */
+  return tallestBox || roomsStoryGetModelBox(entity);
+}
+
+
 function roomsStoryEntityIsGrabbed(
   entity
 ) {
@@ -1545,7 +1606,7 @@ AFRAME.registerComponent(
         }
 
         const targetBox =
-          roomsStoryGetModelBox(
+          roomsStoryGetAltarSurfaceBox(
             this.targetEntity
           );
 
@@ -1591,7 +1652,7 @@ AFRAME.registerComponent(
         }
 
         const targetBox =
-          roomsStoryGetModelBox(
+          roomsStoryGetAltarSurfaceBox(
             this.targetEntity
           );
 
@@ -2020,7 +2081,7 @@ AFRAME.registerComponent(
         }
 
         const targetBox =
-          roomsStoryGetModelBox(
+          roomsStoryGetAltarSurfaceBox(
             this.targetEntity
           );
 

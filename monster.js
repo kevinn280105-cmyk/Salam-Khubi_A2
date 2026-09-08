@@ -14,10 +14,10 @@
    - Happens only once.
 
    STANDING MONSTER EVENT:
-   - story.js emits "story-item-snapped" whenever one of the
-     three quest items successfully locks onto #truocbantho.
-   - After TWO unique items have been placed:
-       standing.glb becomes visible.
+   - Triggered by walking into the kitchen (#kitchen /
+     kitchenasset.glb) -- see isPlayerInsideKitchen().
+   - standing.glb becomes visible the moment the player enters
+     that zone.
    - standing.glb stays completely still.
    - The player must actually LOOK toward her.
    - Once seen:
@@ -82,6 +82,17 @@ const ROOMS_MONSTER_CONFIG = {
 
 
   /* ----------------------------------------------------------
+     KITCHEN ZONE (STANDING MONSTER TRIGGER)
+  ---------------------------------------------------------- */
+
+  kitchenSelector: '#kitchen',
+
+  kitchenInsetX: 0.18,
+
+  kitchenInsetZ: 0.18,
+
+
+  /* ----------------------------------------------------------
      DOOR CROSSING
   ---------------------------------------------------------- */
 
@@ -142,7 +153,10 @@ const ROOMS_MONSTER_CONFIG = {
   ---------------------------------------------------------- */
 
   /*
-    Number of altar objects required before she appears.
+    Kept only as informational telemetry (see
+    onStoryItemSnapped) -- she is no longer triggered by
+    reaching this count. See kitchenSelector /
+    isPlayerInsideKitchen() for the real trigger.
   */
 
   standingRequiredItems: 2,
@@ -225,6 +239,12 @@ window.roomsMonsterState = {
   playerInsideBedroom: false,
 
   hasEnteredBedroom: false,
+
+  playerInsideKitchen: false,
+
+  hasEnteredKitchen: false,
+
+  kitchenReady: false,
 
   teddyGrabbed: false,
 
@@ -1072,6 +1092,10 @@ AFRAME.registerComponent(
         new THREE.Box3();
 
 
+      this.kitchenBox =
+        new THREE.Box3();
+
+
       /* --------------------------------------------------------
          DOOR CROSSING
       -------------------------------------------------------- */
@@ -1114,6 +1138,10 @@ AFRAME.registerComponent(
 
 
       this.previousInside =
+        null;
+
+
+      this.previousInsideKitchen =
         null;
 
 
@@ -1181,6 +1209,14 @@ AFRAME.registerComponent(
       this.onBedroomModelLoaded =
         this
           .onBedroomModelLoaded
+          .bind(
+            this
+          );
+
+
+      this.onKitchenModelLoaded =
+        this
+          .onKitchenModelLoaded
           .bind(
             this
           );
@@ -1353,42 +1389,20 @@ AFRAME.registerComponent(
             walking.glb was NOT actually exported at a spot
             near the house layout at all -- its baked position
             was (1.61, 0, 3.51), nowhere near anything else in
-            the scene. This offset re-targets it.
+            the scene.
 
-            NEW TARGET: the doorway on the far side of the altar
-            room, past the altar table. Inspected the live scene
-            directly (door.glb's actual door-knob meshes) instead
-            of guessing from bounding boxes this time:
+            Originally re-targeted to the altar-room doorway at
+            (-2.8, 0, -0.6) based on door.glb's knob mesh
+            position, but that was never confirmed live in the
+            headset.
 
-              - door.glb contains a knob mesh named
-                'Sphere001_white_paint_0001' at world
-                (1.442, 0.849, -3.307) -- this is the OTHER,
-                already-known 'middle door' (ROOMS_MONSTER_CONFIG
-                .walkingTriggerDoorPosition), the one between
-                spawn and the altar room. Not this one.
-              - door.glb also contains a second knob mesh,
-                'Sphere001_white_paint_0003', at world
-                (-2.836, 1.029, -0.606) -- on the far side of
-                the altar/truocbantho area (which sits around
-                x: -1.4..2.2, z: -2.2..4.6), sitting almost
-                exactly between the two vases flanking the altar
-                (vase002 at z -1.78, vase001 at z 2.35). This is
-                the doorway with the checkered floor beyond it
-                that you pointed at in your screenshot.
-
-            Target used here: (-2.8, 0, -0.6) -- that door's own
-            X/Z, floor level, right at its threshold.
-
-            Still not live-tested from inside the headset -- the
-            game's own camera position could not be moved from
-            spawn to visually confirm this one either, so nudge
-            the numbers if it's sitting a little inside the door
-            frame vs. the room once you see it.
+            CONFIRMED: adjusted to (-4.41, 0, -4.11) after
+            checking it live -- this is the value to trust now.
           */
 
           walking.setAttribute(
             'position',
-            '-2.8 0 -0.6'
+            '-4.41 0 -4.11'
           );
 
 
@@ -1916,6 +1930,59 @@ AFRAME.registerComponent(
 
 
         /* ----------------------------------------------------
+           KITCHEN (STANDING MONSTER TRIGGER ZONE)
+        ---------------------------------------------------- */
+
+        const kitchen =
+          document.querySelector(
+            ROOMS_MONSTER_CONFIG
+              .kitchenSelector
+          );
+
+
+        if (
+          kitchen &&
+          kitchen !==
+            this.kitchen
+        ) {
+          if (
+            this.kitchen
+          ) {
+            this.kitchen
+              .removeEventListener(
+                'model-loaded',
+                this
+                  .onKitchenModelLoaded
+              );
+          }
+
+
+          this.kitchen =
+            kitchen;
+
+
+          this.kitchen
+            .addEventListener(
+              'model-loaded',
+              this
+                .onKitchenModelLoaded
+            );
+        }
+
+
+        if (
+          this.kitchen &&
+          this.kitchen
+            .getObject3D(
+              'mesh'
+            )
+        ) {
+          this.updateKitchenBox();
+        }
+
+
+
+        /* ----------------------------------------------------
            DOOR / CUA.GLB
         ---------------------------------------------------- */
 
@@ -2052,6 +2119,12 @@ AFRAME.registerComponent(
       },
 
 
+    onKitchenModelLoaded:
+      function () {
+        this.updateKitchenBox();
+      },
+
+
     /* ========================================================
        DOOR MODEL READY
     ======================================================== */
@@ -2106,6 +2179,43 @@ AFRAME.registerComponent(
         window
           .roomsMonsterState
           .bedroomReady =
+          true;
+
+
+        return true;
+      },
+
+
+    updateKitchenBox:
+      function () {
+        const box =
+          roomsMonsterWorldBox(
+            this.kitchen
+          );
+
+
+        if (
+          !box
+        ) {
+          window
+            .roomsMonsterState
+            .kitchenReady =
+            false;
+
+
+          return false;
+        }
+
+
+        this.kitchenBox
+          .copy(
+            box
+          );
+
+
+        window
+          .roomsMonsterState
+          .kitchenReady =
           true;
 
 
@@ -2790,6 +2900,95 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
+       IS PLAYER INSIDE KITCHEN?
+
+       standing.glb's trigger zone.
+    ======================================================== */
+
+    isPlayerInsideKitchen:
+      function (
+        suppliedPlayer
+      ) {
+        if (
+          !window
+            .roomsMonsterState
+            .kitchenReady
+        ) {
+          return false;
+        }
+
+
+        const player =
+          suppliedPlayer ||
+          roomsMonsterPlayerPosition(
+            this.playerWorld
+          );
+
+
+        if (
+          !player
+        ) {
+          return false;
+        }
+
+
+        const box =
+          this.kitchenBox;
+
+
+        const width =
+          box.max.x -
+          box.min.x;
+
+
+        const depth =
+          box.max.z -
+          box.min.z;
+
+
+        const insetX =
+          width >
+            ROOMS_MONSTER_CONFIG
+              .kitchenInsetX *
+              2 +
+            0.35
+            ? ROOMS_MONSTER_CONFIG
+                .kitchenInsetX
+            : 0;
+
+
+        const insetZ =
+          depth >
+            ROOMS_MONSTER_CONFIG
+              .kitchenInsetZ *
+              2 +
+            0.35
+            ? ROOMS_MONSTER_CONFIG
+                .kitchenInsetZ
+            : 0;
+
+
+        return Boolean(
+          player.x >=
+            box.min.x +
+              insetX &&
+
+          player.x <=
+            box.max.x -
+              insetX &&
+
+          player.z >=
+            box.min.z +
+              insetZ &&
+
+          player.z <=
+            box.max.z -
+              insetZ
+        );
+      },
+
+
+    /* ========================================================
        TRIGGER WALKING.GLB
     ======================================================== */
 
@@ -2952,15 +3151,12 @@ AFRAME.registerComponent(
           `Standing scare altar count: ${this.standingPlacedItems.size}/3`
         );
 
-
-        if (
-          this.standingPlacedItems
-            .size >=
-            ROOMS_MONSTER_CONFIG
-              .standingRequiredItems
-        ) {
-          this.showStandingMonster();
-        }
+        /*
+          Placing altar items used to trigger standing.glb here.
+          She is now triggered by walking into the kitchen instead
+          (see isPlayerInsideKitchen() / tick()) -- this count is
+          kept only as informational telemetry.
+        */
       },
 
 
@@ -3037,15 +3233,10 @@ AFRAME.registerComponent(
           this.standingPlacedItems
             .size;
 
-
-        if (
-          this.standingPlacedItems
-            .size >=
-            ROOMS_MONSTER_CONFIG
-              .standingRequiredItems
-        ) {
-          this.showStandingMonster();
-        }
+        /*
+          No longer auto-triggers showStandingMonster() here --
+          she's triggered by walking into the kitchen instead.
+        */
       },
 
 
@@ -3670,6 +3861,48 @@ AFRAME.registerComponent(
 
 
         /* ----------------------------------------------------
+           KITCHEN ZONE CHECK (STANDING MONSTER TRIGGER)
+        ---------------------------------------------------- */
+
+        if (
+          window
+            .roomsMonsterState
+            .kitchenReady &&
+          !window
+            .roomsMonsterState
+            .standingTriggered &&
+          !window
+            .roomsMonsterState
+            .standingFinished
+        ) {
+          const insideKitchen =
+            this
+              .isPlayerInsideKitchen(
+                player
+              );
+
+
+          window
+            .roomsMonsterState
+            .playerInsideKitchen =
+            insideKitchen;
+
+
+          if (
+            insideKitchen
+          ) {
+            window
+              .roomsMonsterState
+              .hasEnteredKitchen =
+              true;
+
+
+            this.showStandingMonster();
+          }
+        }
+
+
+        /* ----------------------------------------------------
            BEDROOM DEBUG / COMPATIBILITY
         ---------------------------------------------------- */
 
@@ -4048,6 +4281,24 @@ window.getRoomsMonsterState =
         window
           .roomsMonsterState
           .bedroomReady,
+
+
+      kitchenReady:
+        window
+          .roomsMonsterState
+          .kitchenReady,
+
+
+      playerInsideKitchen:
+        window
+          .roomsMonsterState
+          .playerInsideKitchen,
+
+
+      hasEnteredKitchen:
+        window
+          .roomsMonsterState
+          .hasEnteredKitchen,
 
 
       doorReady:

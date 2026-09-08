@@ -798,10 +798,314 @@ function toggleRoomsPauseMenu(
 
 /* ============================================================
    RESTART
+
+   Restart used to be a hard window.location.reload() -- a real
+   browser navigation. On Quest that visibly drops the headset out
+   of the WebXR session and back into flat browser chrome before
+   the page comes back, and even on desktop it's a jump-cut to a
+   blank page reloading -- both read as "a different page" rather
+   than a game restarting.
+
+   This resets the actual game state in place instead, on the same
+   loaded page / VR session: player position, quest items and their
+   altar-placement locks, the story/quest counters and checklist UI,
+   the incense/offering ritual, the safe, the mirror, and both
+   monster sequences. It leans on the fact that almost every
+   component in this project already has a clean init()/remove()
+   pair -- toggling a component's attribute off and back on re-runs
+   that pair and gives it fresh internal state for free, without
+   needing to hand-reset every private field.
 ============================================================ */
 
+const ROOMS_RESTART_ITEM_IDS = [
+  'teddy',
+  'hairClipper',
+  'picture',
+  'incenseStick'
+];
+
+let roomsRestartSnapshot = null;
+
+function roomsCaptureRestartSnapshot() {
+  const snapshot = {};
+
+  ROOMS_RESTART_ITEM_IDS.concat(['rig', 'cam']).forEach(function (id) {
+    const entity = document.querySelector('#' + id);
+
+    if (!entity || !entity.object3D) {
+      return;
+    }
+
+    snapshot[id] = {
+      position: entity.object3D.position.clone(),
+      rotation: entity.object3D.rotation.clone(),
+      scale: entity.object3D.scale.clone()
+    };
+  });
+
+  roomsRestartSnapshot = snapshot;
+}
+
+(function scheduleRestartSnapshotCapture() {
+  const scene = document.querySelector('a-scene');
+
+  if (!scene) {
+    return;
+  }
+
+  const start = function () {
+    /*
+      Re-capture a few times early on so the snapshot settles on
+      wherever things end up resting once any startup layout (e.g.
+      the incense stick's holder placement) has finished -- nowhere
+      close to how long a real player takes to reach and move
+      anything, so the final capture is always the true spawn state.
+    */
+    [300, 800, 1500, 3000, 5000].forEach(function (delay) {
+      window.setTimeout(roomsCaptureRestartSnapshot, delay);
+    });
+  };
+
+  if (scene.hasLoaded) {
+    start();
+  } else {
+    scene.addEventListener('loaded', start, { once: true });
+  }
+})();
+
+
+function roomsReinitComponent(entity, componentName) {
+  if (!entity || !entity.hasAttribute || !entity.hasAttribute(componentName)) {
+    return;
+  }
+
+  try {
+    const data = entity.getAttribute(componentName);
+    entity.removeAttribute(componentName);
+    entity.setAttribute(componentName, data === true ? '' : data);
+  } catch (error) {
+    console.warn('Restart: could not reinitialize "' + componentName + '":', error);
+  }
+}
+
+
+function roomsRestartResetItemEntity(id) {
+  const entity = document.querySelector('#' + id);
+
+  if (!entity) {
+    return;
+  }
+
+  try {
+    if (typeof window.roomsStoryReleaseItemFromHolder === 'function') {
+      window.roomsStoryReleaseItemFromHolder(entity);
+    }
+
+    if (typeof window.roomsStoryStopItemPhysics === 'function') {
+      window.roomsStoryStopItemPhysics(entity);
+    }
+
+    const scene = entity.sceneEl;
+
+    if (scene && entity.object3D.parent !== scene.object3D) {
+      scene.object3D.attach(entity.object3D);
+    }
+
+    const snap = roomsRestartSnapshot && roomsRestartSnapshot[id];
+
+    if (snap) {
+      entity.object3D.position.copy(snap.position);
+      entity.object3D.rotation.copy(snap.rotation);
+      entity.object3D.scale.copy(snap.scale);
+      entity.object3D.updateMatrixWorld(true);
+    }
+
+    if (entity.is && entity.is('grabbed')) {
+      entity.removeState('grabbed');
+    }
+
+    entity.removeAttribute('data-altar-locked');
+    entity.classList.remove('altar-locked');
+
+    /*
+      Placing an item on the altar removes natural-grabbable
+      entirely (story.js snapItemToSlot) so it can't be re-grabbed --
+      put it back, freshly initialized either way.
+    */
+    if (entity.hasAttribute('natural-grabbable')) {
+      roomsReinitComponent(entity, 'natural-grabbable');
+    } else {
+      entity.setAttribute('natural-grabbable', '');
+    }
+  } catch (error) {
+    console.warn('Restart: could not reset item "' + id + '":', error);
+  }
+}
+
+
+function roomsRestartResetPlayer() {
+  try {
+    const rig = document.querySelector('#rig');
+    const cam = document.querySelector('#cam');
+    const rigSnap = roomsRestartSnapshot && roomsRestartSnapshot.rig;
+    const camSnap = roomsRestartSnapshot && roomsRestartSnapshot.cam;
+
+    if (rig && rigSnap) {
+      rig.object3D.position.copy(rigSnap.position);
+      rig.object3D.rotation.copy(rigSnap.rotation);
+      rig.object3D.updateMatrixWorld(true);
+    }
+
+    if (cam && camSnap) {
+      cam.object3D.position.copy(camSnap.position);
+      cam.object3D.rotation.copy(camSnap.rotation);
+      cam.object3D.updateMatrixWorld(true);
+    }
+
+    const movement = rig && rig.components && rig.components['movement-controls'];
+
+    if (movement && movement.velocity) {
+      movement.velocity.set(0, 0, 0);
+    }
+  } catch (error) {
+    console.warn('Restart: could not reset player position:', error);
+  }
+}
+
+
+function roomsRestartResetMonsters() {
+  try {
+    const walking = document.querySelector('#walkingMonster');
+
+    if (walking) {
+      roomsReinitComponent(walking, 'rooms-walking-monster-player');
+      walking.setAttribute('position', '-4.41 0 -4.11');
+      walking.setAttribute('rotation', '0 0 0');
+      walking.setAttribute('visible', 'false');
+    }
+
+    const standing = document.querySelector('#standingMonster');
+
+    if (standing) {
+      standing.setAttribute('position', '0 0 0');
+      standing.setAttribute('rotation', '0 0 0');
+      standing.setAttribute('visible', 'false');
+    }
+
+    const monsterEvents = document.querySelector('[rooms-monster-events]');
+    roomsReinitComponent(monsterEvents, 'rooms-monster-events');
+
+    const jumpscare = document.querySelector('[jumpscare-controller]');
+    roomsReinitComponent(jumpscare, 'jumpscare-controller');
+
+    const scareCharacter = document.querySelector('#scare-character');
+
+    if (scareCharacter) {
+      scareCharacter.setAttribute('position', '0 0 0');
+      scareCharacter.setAttribute('visible', 'false');
+    }
+  } catch (error) {
+    console.warn('Restart: could not reset monster state:', error);
+  }
+}
+
+
+function roomsRestartResetOffering() {
+  try {
+    const incenseStick = document.querySelector('#incenseStick');
+    roomsReinitComponent(incenseStick, 'incense-offering');
+
+    document.querySelectorAll('[incense-smoke]').forEach(function (entity) {
+      roomsReinitComponent(entity, 'incense-smoke');
+    });
+
+    const offeringManager = document.querySelector('#offeringManager');
+    roomsReinitComponent(offeringManager, 'offering-layout');
+    roomsReinitComponent(offeringManager, 'offering-blackout');
+
+    const bantho = document.querySelector('#bantho');
+    roomsReinitComponent(bantho, 'temporary-offering-table-smoke');
+  } catch (error) {
+    console.warn('Restart: could not reset incense/offering state:', error);
+  }
+}
+
+
+function roomsRestartResetQuestUI() {
+  try {
+    roomsPromptState.foundItems.clear();
+    roomsPromptState.inspectedItems.clear();
+    roomsPromptState.incenseLit = false;
+    roomsPromptState.hoverVisible = false;
+    roomsPromptState.hoverItem = null;
+    roomsPromptState.hoverEntity = null;
+
+    if (
+      roomsPromptState.system &&
+      typeof roomsPromptState.system.updateQuestUI === 'function'
+    ) {
+      roomsPromptState.system.updateQuestUI();
+    }
+  } catch (error) {
+    console.warn('Restart: could not reset quest checklist UI:', error);
+  }
+}
+
+
+function roomsRestartResetStory() {
+  const storyEntity = document.querySelector('#story-manager');
+  roomsReinitComponent(storyEntity, 'story-manager');
+}
+
+
+function roomsRestartResetSafeAndMirror() {
+  try {
+    const safe = document.querySelector('#safetybox');
+    roomsReinitComponent(safe, 'embedded-safe');
+
+    const mirror = document.querySelector('#mirror');
+    roomsReinitComponent(mirror, 'haunted-mirror');
+  } catch (error) {
+    console.warn('Restart: could not reset safe/mirror state:', error);
+  }
+}
+
+
+function softRestartRoomsWithin() {
+  /*
+    No snapshot yet -- restart was pressed within the first ~5s of
+    load, before the first capture had a chance to run. There is
+    nothing safe to reset back to, so fall back to the old hard
+    reload rather than snapping things to the wrong spot.
+  */
+  if (!roomsRestartSnapshot) {
+    window.location.reload();
+    return;
+  }
+
+  if (roomsPaused) {
+    setRoomsPaused(false);
+  }
+
+  hideAllPauseUI();
+
+  ROOMS_RESTART_ITEM_IDS.forEach(roomsRestartResetItemEntity);
+
+  roomsRestartResetOffering();
+  roomsRestartResetStory();
+  roomsRestartResetQuestUI();
+  roomsRestartResetMonsters();
+  roomsRestartResetSafeAndMirror();
+  roomsRestartResetPlayer();
+
+  window.setTimeout(syncPauseUI, 50);
+
+  console.log('Rooms Within: soft-restarted in place (no page reload).');
+}
+
+
 function restartRoomsWithin() {
-  window.location.reload();
+  softRestartRoomsWithin();
 }
 
 
