@@ -79,7 +79,7 @@ const ROOMS_DESCRIPTION_UI = {
     other. Swapped automatically on enter-vr / exit-vr.
   */
   questPositionDesktop: '0 -0.13 -0.85',
-  questPositionVR: '0 -0.13 -0.62',
+  questPositionVR: '0 -0.22 -0.62',
   questScaleDesktop: '1 1 1',
   questScaleVR: '1.2 1.2 1.2',
   actionPromptPosition: '0 -0.18 -0.80',
@@ -1673,6 +1673,21 @@ AFRAME.registerComponent(
               this.onIncenseLit
             );
         }
+
+        /*
+          Clicking bantho.glb (temporary-offering-table-smoke,
+          see incense.js) is the real "light the incense" action
+          now -- it emits 'temporary-offering-smoke' the moment
+          the smoke starts. Hook that straight into the same
+          onIncenseLit() the old stick ritual used, so lighting
+          the altar checks off objective 1 and hands off to the
+          "place 3 items" objective, same as before.
+        */
+        this.scene
+          .addEventListener(
+            'temporary-offering-smoke',
+            this.onIncenseLit
+          );
       },
 
 

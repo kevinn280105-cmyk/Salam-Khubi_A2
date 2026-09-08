@@ -716,6 +716,18 @@ AFRAME.registerComponent(
           return false;
         }
 
+        /*
+          Keep the spawn-side door leaf permanently shut -- block
+          manual click/VR activation too, not just the automatic
+          proximity trigger (see prepareDoor above).
+        */
+        if (
+          part.name ===
+          'Sketchfab_model'
+        ) {
+          return false;
+        }
+
         const state =
           this.createState(
             part
@@ -1060,6 +1072,22 @@ AFRAME.registerComponent(
 
         hinge.parts.forEach(
           (part) => {
+            /*
+              "Sketchfab_model" is the door leaf right next to
+              spawn (~1.1m away) -- requested to just always stay
+              shut rather than auto-swinging open on proximity
+              like the other 2 doors bundled in this file. Skip it
+              here so it never enters doorStates and tick() never
+              touches it; it keeps whatever closed pose it loaded
+              in permanently.
+            */
+            if (
+              part.name ===
+              'Sketchfab_model'
+            ) {
+              return;
+            }
+
             part.updateMatrixWorld(true);
 
             const box =
@@ -1766,6 +1794,9 @@ AFRAME.registerComponent(
       this.screenPointWorld =
         new THREE.Vector3();
 
+      this.screenSizeWorld =
+        new THREE.Vector3();
+
       this.screenNormalWorld =
         new THREE.Vector3(
           0,
@@ -1873,6 +1904,10 @@ AFRAME.registerComponent(
 
         box.getCenter(
           this.screenPointWorld
+        );
+
+        box.getSize(
+          this.screenSizeWorld
         );
 
         const worldQuaternion =
@@ -2099,10 +2134,38 @@ AFRAME.registerComponent(
         this.updateTVWorldPosition();
 
         /*
-          Much smaller offset than the glow light -- this one
-          needs to sit right on the screen surface, not float
-          out in front of it.
+          FIX: screenPointWorld is the CENTER of tv.glb's whole
+          bounding box (the entire TV body, not just the thin
+          screen surface) -- a fixed small offset like 0.015 from
+          there was still well inside the model for any TV with
+          real depth to it, so this plane was rendering behind
+          the TV's own screen mesh and never actually visible.
+
+          Instead, project the box's half-size onto the screen
+          normal to find how far the front face actually is from
+          center, and clear that by a small margin so the plane
+          sits just outside the real geometry instead of buried
+          in it.
         */
+        const halfExtentAlongNormal =
+          (
+            Math.abs(
+              this.screenNormalWorld.x
+            ) *
+              this.screenSizeWorld
+                .x +
+            Math.abs(
+              this.screenNormalWorld.y
+            ) *
+              this.screenSizeWorld
+                .y +
+            Math.abs(
+              this.screenNormalWorld.z
+            ) *
+              this.screenSizeWorld
+                .z
+          ) / 2;
+
         const world =
           this.screenPointWorld
             .clone()
@@ -2110,7 +2173,8 @@ AFRAME.registerComponent(
               this
                 .screenNormalWorld,
 
-              0.015
+              halfExtentAlongNormal +
+                0.01
             );
 
         this.el.sceneEl

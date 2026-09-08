@@ -371,7 +371,7 @@ function roomsMonsterWorldBox(
 
 
 /* ============================================================
-   SHADER PRE-WARM
+   SHADER + TEXTURE PRE-WARM
 
    walking.glb and standing.glb sit invisible (visible: false)
    from scene load until the moment they are revealed -- the
@@ -379,20 +379,36 @@ function roomsMonsterWorldBox(
    the standing one after items are placed. A three.js object
    with visible: false is never sent to the GPU, so the FIRST
    time it becomes visible is also the FIRST time its skinned
-   mesh shader gets compiled and its buffers get uploaded. That
-   compile is synchronous and can freeze the frame for a beat --
-   exactly the kind of stutter that would show up as "lag" right
-   at the doorway, the moment walking.glb turns on.
+   mesh shader gets compiled AND its textures get uploaded to
+   the GPU. That work is synchronous and can freeze the frame
+   for a beat -- exactly the kind of stutter that would show up
+   as "lag" right at the doorway, the moment walking.glb turns
+   on.
 
-   renderer.compile() walks a scene graph and warms up shaders
-   WITHOUT drawing anything the player can see, regardless of
-   each object's own visible flag. Doing this once, right after
-   each monster's GLB finishes loading (while the player is
-   still near the start of the game), moves that one-time cost
-   off of the scare moment.
+   UPDATE: renderer.compile() alone (the original fix here)
+   only covers shader compilation. It does NOT upload textures --
+   that still happens lazily on the first real draw call, so
+   reveal-time lag persisted even with shaders pre-compiled.
+   Fixed by actually rendering each monster once, off-screen,
+   into a throwaway 1x1 render target immediately after its GLB
+   loads:
+
+     1. Temporarily flip the entity visible (a real render()
+        call skips invisible objects the way compile() doesn't).
+     2. Temporarily disable frustum culling on its meshes -- at
+        load time the monster is nowhere near the camera/doorway
+        yet, so a normal render would frustum-cull it right back
+        out and skip the texture upload anyway.
+     3. Render once into a 1x1 WebGLRenderTarget so nothing ever
+        reaches the screen.
+     4. Restore visibility and frustum culling exactly as they
+        were.
+
+   This forces the real GPU upload path (shaders AND textures)
+   to run once at load time instead of at the scare moment.
 ============================================================ */
 
-function roomsPrewarmMonsterShaders(sceneEl) {
+function roomsPrewarmMonsterShaders(sceneEl, entity) {
   if (!sceneEl) {
     return;
   }
@@ -400,18 +416,63 @@ function roomsPrewarmMonsterShaders(sceneEl) {
   const renderer = sceneEl.renderer;
   const camera = sceneEl.camera;
 
-  if (
-    !renderer ||
-    !camera ||
-    typeof renderer.compile !== 'function'
-  ) {
+  if (!renderer || !camera) {
     return;
   }
 
   try {
-    renderer.compile(sceneEl.object3D, camera);
+    if (typeof renderer.compile === 'function') {
+      renderer.compile(sceneEl.object3D, camera);
+    }
   } catch (error) {
     /* Pre-warm is a nice-to-have -- never block the game on it. */
+  }
+
+  if (!entity || !entity.object3D) {
+    return;
+  }
+
+  const root = entity.object3D;
+  const previousVisible = root.visible;
+  const previousCulling = [];
+
+  root.traverse((node) => {
+    if (node.isMesh) {
+      previousCulling.push({
+        node,
+        value: node.frustumCulled
+      });
+
+      node.frustumCulled = false;
+    }
+  });
+
+  root.visible = true;
+
+  let target = null;
+  let priorTarget = null;
+
+  try {
+    target = new THREE.WebGLRenderTarget(1, 1);
+    priorTarget = renderer.getRenderTarget();
+
+    renderer.setRenderTarget(target);
+    renderer.render(sceneEl.object3D, camera);
+    renderer.setRenderTarget(priorTarget);
+
+  } catch (error) {
+    /* Pre-warm is a nice-to-have -- never block the game on it. */
+
+  } finally {
+    if (target) {
+      target.dispose();
+    }
+
+    root.visible = previousVisible;
+
+    previousCulling.forEach(({ node, value }) => {
+      node.frustumCulled = value;
+    });
   }
 }
 
@@ -682,7 +743,8 @@ AFRAME.registerComponent(
 
 
         roomsPrewarmMonsterShaders(
-          this.el.sceneEl
+          this.el.sceneEl,
+          this.el
         );
 
 
@@ -1436,7 +1498,8 @@ AFRAME.registerComponent(
 
 
               roomsPrewarmMonsterShaders(
-                this.el.sceneEl
+                this.el.sceneEl,
+                standing
               );
 
 
