@@ -1970,10 +1970,17 @@ AFRAME.registerComponent(
 
         this.refreshFinalEntities();
 
-        roomsStorySetVisible(
-          this.placementPrompt,
-          true
-        );
+        /*
+          Don't show the separate #roomsFinalPlacementPrompt
+          banner here -- this now arms right at game start (see
+          the fix above), so showing it immediately would put a
+          second "PLACE ALL 3 ITEMS ON THE ALTAR" prompt on
+          screen before -- or alongside -- the incense objective,
+          which is not wanted. interaction-prompts.js's single
+          quest-text HUD already sequences "light the incense"
+          then "place on the altar (count/3)" correctly on its
+          own, so that's the only on-screen objective indicator.
+        */
 
         this.el.sceneEl.emit(
           'final-placement-ready',
