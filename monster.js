@@ -1293,28 +1293,40 @@ AFRAME.registerComponent(
             was (1.61, 0, 3.51), nowhere near anything else in
             the scene. This offset re-targets it.
 
-            NEW TARGET: beside truocbantho.glb (the low altar
-            table), on its LEFT side. "Left" here means: the
-            player spawns at #rig (7.2, 0.08, -1) facing -X
-            (rotation.y: 90), so -X is the direction of travel
-            toward the altar room -- facing that way, LEFT is
-            +Z. truocbantho.glb sits at world position (0,0,0)
-            with its own bounding-box center around
-            (0.58, 0.37, 1.62), so the target world spot used
-            here is roughly (0.58, 0, 2.6) -- the table's own
-            X, floor level, about 1m past its center on the +Z
-            (left) side.
+            NEW TARGET: the doorway on the far side of the altar
+            room, past the altar table. Inspected the live scene
+            directly (door.glb's actual door-knob meshes) instead
+            of guessing from bounding boxes this time:
 
-            This is a best-effort placement based on the
-            bounding box, not a live-tested one -- flip the Z
-            sign below (and/or nudge the numbers) if it lands
-            on the wrong side or too close/far once you see it
-            in the headset.
+              - door.glb contains a knob mesh named
+                'Sphere001_white_paint_0001' at world
+                (1.442, 0.849, -3.307) -- this is the OTHER,
+                already-known 'middle door' (ROOMS_MONSTER_CONFIG
+                .walkingTriggerDoorPosition), the one between
+                spawn and the altar room. Not this one.
+              - door.glb also contains a second knob mesh,
+                'Sphere001_white_paint_0003', at world
+                (-2.836, 1.029, -0.606) -- on the far side of
+                the altar/truocbantho area (which sits around
+                x: -1.4..2.2, z: -2.2..4.6), sitting almost
+                exactly between the two vases flanking the altar
+                (vase002 at z -1.78, vase001 at z 2.35). This is
+                the doorway with the checkered floor beyond it
+                that you pointed at in your screenshot.
+
+            Target used here: (-2.8, 0, -0.6) -- that door's own
+            X/Z, floor level, right at its threshold.
+
+            Still not live-tested from inside the headset -- the
+            game's own camera position could not be moved from
+            spawn to visually confirm this one either, so nudge
+            the numbers if it's sitting a little inside the door
+            frame vs. the room once you see it.
           */
 
           walking.setAttribute(
             'position',
-            '-1.03 0 -0.9'
+            '-2.8 0 -0.6'
           );
 
 
