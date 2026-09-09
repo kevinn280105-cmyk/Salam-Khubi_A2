@@ -167,21 +167,30 @@ const ROOMS_MONSTER_CONFIG = {
   /*
     Player must look fairly directly toward her.
 
-    18 degrees gives the player a chance to notice her
-    instead of triggering from the extreme edge of vision.
+    Widened from 18 to 45 degrees: on desktop, mouse-look
+    means camera-forward IS exactly where the player is
+    looking, but in a real headset players often track her
+    with their eyes while barely turning their head, so a
+    narrow cone based on raw head-forward direction can
+    never trigger even though the player is clearly looking
+    right at her. 45 degrees gives a much more forgiving
+    half-angle (a ~90 degree total cone) so a partial head
+    turn toward her is enough, closer to how gaze actually
+    works in VR.
   */
 
-  standingLookAngle: 18,
+  standingLookAngle: 45,
 
 
   /*
     Maximum distance at which looking toward her counts.
 
-    Large enough for the room, while helping avoid very
-    distant false positives.
+    Bumped from 18 to 22 to give a little extra buffer for
+    real-room movement, while still avoiding very distant
+    false positives.
   */
 
-  standingLookMaxDistance: 18,
+  standingLookMaxDistance: 22,
 
 
   /*
@@ -3822,6 +3831,15 @@ AFRAME.registerComponent(
             'rooms-standing-monster-visible',
             detail,
             false
+          );
+        }
+
+
+        if (
+          typeof roomsQueueDialogueLine === 'function'
+        ) {
+          roomsQueueDialogueLine(
+            'What the hell was that!!'
           );
         }
 

@@ -369,6 +369,16 @@ AFRAME.registerComponent(
         return;
       }
 
+      if (!window.roomsSafeFirstPressShown) {
+        window.roomsSafeFirstPressShown = true;
+
+        if (typeof roomsQueueDialogueLine === 'function') {
+          roomsQueueDialogueLine(
+            "It's locked. Need a password to unlock it."
+          );
+        }
+      }
+
       if (key === 'clr') {
         this.entered = [];
         this.refreshDisplay();
@@ -430,6 +440,12 @@ AFRAME.registerComponent(
 
       if (pictureEl) {
         pictureEl.setAttribute('visible', true);
+      }
+
+      if (typeof roomsQueueDialogueLine === 'function') {
+        roomsQueueDialogueLine(
+          'The sister: Thank you, big brother. Ever since that accident, I have been unable to move on and stayed with our family. Without knowing, I have brought misfortune upon us all and got sealed by Taoist as the result. I’m sorry for all the trouble I caused.'
+        );
       }
 
       console.log('Safe opened!');
