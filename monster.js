@@ -1429,25 +1429,21 @@ AFRAME.registerComponent(
 
 
           /*
-            POSITION CORRECTION
+            POSITION
 
             walking.glb was NOT actually exported at a spot
             near the house layout at all -- its baked position
             was (1.61, 0, 3.51), nowhere near anything else in
             the scene.
 
-            Originally re-targeted to the altar-room doorway at
-            (-2.8, 0, -0.6) based on door.glb's knob mesh
-            position, but that was never confirmed live in the
-            headset.
-
-            CONFIRMED: adjusted to (-4.41, 0, -4.11) after
-            checking it live -- this is the value to trust now.
+            Was re-targeted twice (altar-room doorway, then
+            confirmed live at -4.41, 0, -4.11), but is now set
+            to the model's own origin (0, 0, 0) instead.
           */
 
           walking.setAttribute(
             'position',
-            '-4.41 0 -4.11'
+            '0 0 0'
           );
 
 
