@@ -33,7 +33,11 @@ const ROOMS_DIALOGUE_CONFIG = {
   maxHoldMs: 9000,
   msPerWord: 340,
   baseMs: 900,
-  gapMs: 260
+  gapMs: 260,
+  basePanelWidth: 1.05,
+  basePanelHeight: 0.20,
+  panelVerticalPadding: 0.06,
+  panelPixelsPerUnit: 666.67
 };
 
 
@@ -182,6 +186,23 @@ AFRAME.registerComponent(
           this.queueLine(item.text, item.opts);
         });
       }
+
+      /*
+        BUG FIX: roomsDialogueSubtitleInstance is set in init(),
+        which runs almost immediately -- well before the scene has
+        actually loaded (real GLB assets can take way longer than
+        the short delay ui-scare.js waits before queuing the intro
+        lines). Any roomsQueueDialogueLine() call in that window
+        goes straight into this.queue via queueLine(), but pump()
+        silently no-ops while this.root doesn't exist yet -- so the
+        line was getting stuck in this.queue forever, with nothing
+        ever draining it once the UI was finally built. This is
+        what caused the intro lines (and potentially any other line
+        queued very early) to never appear. Draining the outer
+        roomsPendingDialogueLines above does not cover this case --
+        it only helps for calls made before init() itself has run.
+      */
+      this.pump();
     },
 
     buildUI: function () {
@@ -190,7 +211,7 @@ AFRAME.registerComponent(
       }
 
       const root = roomsCreateEntity('a-entity', {
-        position: '0 -0.34 -1.05',
+        position: '0 -0.36 -1.05',
         visible: false
       });
 
@@ -233,6 +254,7 @@ AFRAME.registerComponent(
       this.root = root;
       this.background = background;
       this.text = text;
+      this.currentPanelHeight = ROOMS_DIALOGUE_CONFIG.basePanelHeight;
     },
 
     queueLine: function (text, opts) {
@@ -259,7 +281,19 @@ AFRAME.registerComponent(
 
       this.text.setAttribute('value', text);
 
-      roomsSetVisible(this.root, true);
+      /*
+        The text component needs a frame (sometimes two) to actually lay
+        out the new value before its rendered bounding box is accurate --
+        measuring immediately after setAttribute can still report the
+        PREVIOUS line's size. Resize the panel to fit, THEN reveal it, so
+        the player never sees a wrong-sized panel snap to the right size.
+      */
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          this.resizePanelToFit();
+          roomsSetVisible(this.root, true);
+        });
+      });
 
       const holdMs =
         opts && opts.holdMs
@@ -283,6 +317,66 @@ AFRAME.registerComponent(
         }, ROOMS_DIALOGUE_CONFIG.gapMs);
 
       }, holdMs);
+    },
+
+    /*
+      Grows the panel upward (toward screen-center) to fit however many
+      lines the current text wrapped to, instead of a fixed size that
+      overflows on long lines or wastes space on short ones. The bottom
+      edge stays anchored in place as it grows, so it never creeps toward
+      the bottom edge of the screen/FOV.
+    */
+    resizePanelToFit: function () {
+      const textObj = this.text.getObject3D('text');
+
+      if (!textObj) {
+        return;
+      }
+
+      const box = new THREE.Box3().setFromObject(textObj);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+
+      const needed =
+        size.y + ROOMS_DIALOGUE_CONFIG.panelVerticalPadding;
+
+      const newHeight = Math.max(
+        ROOMS_DIALOGUE_CONFIG.basePanelHeight,
+        needed
+      );
+
+      if (Math.abs(newHeight - this.currentPanelHeight) < 0.002) {
+        return;
+      }
+
+      this.currentPanelHeight = newHeight;
+
+      const growth =
+        newHeight - ROOMS_DIALOGUE_CONFIG.basePanelHeight;
+
+      const yOffset = -(growth / 2);
+
+      this.background.setAttribute('height', String(newHeight));
+      this.background.setAttribute('position', `0 ${yOffset} 0.001`);
+      this.text.setAttribute('position', `0 ${yOffset} 0.002`);
+
+      const canvasHeight = Math.round(
+        newHeight * ROOMS_DIALOGUE_CONFIG.panelPixelsPerUnit
+      );
+
+      roomsApplyCanvasTexture(
+        this.background,
+        roomsCreateRoundedPanelTexture({
+          width: 700,
+          height: canvasHeight,
+          radius: 22,
+          fillColor: '#0b0b0e',
+          fillOpacity: 0.84,
+          strokeColor: '#caa46a',
+          strokeOpacity: 0.5,
+          strokeWidth: 3
+        })
+      );
     },
 
     /*

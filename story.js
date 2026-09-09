@@ -939,6 +939,12 @@ AFRAME.registerComponent(
               this
             );
 
+        this.onPlayerSatOppositeGhost =
+          this.onPlayerSatOppositeGhost
+            .bind(
+              this
+            );
+
         this.bindCurrentStory();
 
         this.buildFinalUI();
@@ -1075,6 +1081,12 @@ AFRAME.registerComponent(
           scene,
           'quest-items-complete',
           this.onQuestItemsComplete
+        );
+
+        this.listen(
+          scene,
+          'player-sat-opposite-ghost',
+          this.onPlayerSatOppositeGhost
         );
       },
 
@@ -2374,19 +2386,91 @@ AFRAME.registerComponent(
           false
         );
 
+        /*
+          NOTE: the actual GAME COMPLETE screen + input lock no
+          longer happen here. All 3 items placed only unlocks the
+          "Talk to the ghost" objective (see interaction-prompts.js
+          updateQuestUI()) -- the player still needs to walk to
+          #chair and sit down opposite #sittingFigure. The real
+          ending is handled by onPlayerSatOppositeGhost() below,
+          once that happens and the closing lines have played.
+        */
+      },
+
+
+    /* ========================================================
+       ENDING: SIT OPPOSITE THE GHOST
+
+       Fires once, from #chair's 'player-sat-opposite-ghost' scene
+       event (engine-interactions.js embedded-chair.sitDown()) --
+       only emitted when #sittingFigure is actually visible, i.e.
+       after all 3 altar items are placed. Queues the closing
+       dialogue lines, then waits for them to actually finish
+       being read before showing GAME COMPLETE and locking input --
+       previously this fired a fixed delay after item placement,
+       which could cut off before the player ever reached the
+       chair.
+    ======================================================== */
+
+    onPlayerSatOppositeGhost:
+      function () {
+        if (
+          window.roomsGameEnded
+        ) {
+          return;
+        }
+
         window.roomsGameEnded =
           true;
 
+        if (
+          typeof roomsQueueDialogueLine ===
+          'function'
+        ) {
+          roomsQueueDialogueLine(
+            'Nam: I missed you so much, sister. There is so much I want to do with you and so much I want to tell you. If there is next life, I still want you as my sister.'
+          );
+
+          roomsQueueDialogueLine(
+            'The sister: Thank you, now I can finally rest in peace.'
+          );
+        }
+
+        const dialogueComponent =
+          roomsDialogueSubtitleInstance;
+
+        const dialogueDelay =
+          dialogueComponent &&
+          typeof dialogueComponent
+            .estimateRemainingMs ===
+            'function'
+            ? dialogueComponent.estimateRemainingMs()
+            : 9000;
+
+        /*
+          NOTE: this used to schedule showEndScreen() +
+          lockFinishedGame() (the GAME COMPLETE screen). That is
+          replaced by the walk-out ending: the ghost fades away,
+          the previously-locked door opens on its own, and the
+          real ending happens once the player actually walks
+          through it -- see ending.js. Movement is deliberately
+          left unlocked so the player can still walk to the door;
+          window.roomsGameEnded is already true above, which is
+          enough to pause the monster/scare systems for the
+          remainder of the ending.
+        */
         this.endTimer =
           window.setTimeout(
             () => {
-              this.showEndScreen();
-
-              this.lockFinishedGame();
+              if (
+                typeof window.roomsStartEndingSequence ===
+                'function'
+              ) {
+                window.roomsStartEndingSequence();
+              }
             },
 
-            ROOMS_FINAL_PLACEMENT
-              .endScreenDelay
+            dialogueDelay
           );
       },
 

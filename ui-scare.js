@@ -1004,6 +1004,19 @@ function roomsRestartResetMonsters() {
       scareCharacter.setAttribute('position', '0 0 0');
       scareCharacter.setAttribute('visible', 'false');
     }
+
+    /*
+      #sittingFigure (the ghost) fades out via cloned, mutated
+      materials at the end of a playthrough (see ending.js) --
+      reinit gltf-model so a restart always comes back fully
+      opaque instead of picking up a stale faded-out material.
+    */
+    const sittingFigure = document.querySelector('#sittingFigure');
+
+    if (sittingFigure) {
+      sittingFigure.setAttribute('visible', 'false');
+      roomsReinitComponent(sittingFigure, 'gltf-model');
+    }
   } catch (error) {
     console.warn('Restart: could not reset monster state:', error);
   }
@@ -1036,6 +1049,7 @@ function roomsRestartResetQuestUI() {
     roomsPromptState.foundItems.clear();
     roomsPromptState.inspectedItems.clear();
     roomsPromptState.incenseLit = false;
+    roomsPromptState.seatedWithGhost = false;
     roomsPromptState.hoverVisible = false;
     roomsPromptState.hoverItem = null;
     roomsPromptState.hoverEntity = null;
@@ -1055,6 +1069,60 @@ function roomsRestartResetQuestUI() {
 function roomsRestartResetStory() {
   const storyEntity = document.querySelector('#story-manager');
   roomsReinitComponent(storyEntity, 'story-manager');
+}
+
+
+function roomsRestartResetDialogueState() {
+  try {
+    window.roomsGameEnded = false;
+    window.roomsSafeFirstPressShown = false;
+    window.roomsTvFirstOnShown = false;
+
+    roomsPendingDialogueLines = [];
+
+    if (roomsDialogueSubtitleInstance) {
+      const instance = roomsDialogueSubtitleInstance;
+
+      if (instance.hideTimer) {
+        window.clearTimeout(instance.hideTimer);
+      }
+
+      if (instance.advanceTimer) {
+        window.clearTimeout(instance.advanceTimer);
+      }
+
+      instance.queue = [];
+      instance.showing = false;
+
+      roomsSetVisible(instance.root, false);
+    }
+
+    /*
+      ending.js's roomsEndingStarted guard also has to be reset
+      here -- if the player pauses and restarts WHILE the ending
+      sequence is armed (ghost fading, door open, walking toward
+      it), that flag would otherwise stay true forever and block
+      the real ending from ever running again.
+    */
+    roomsEndingStarted = false;
+
+    const endingEntity = document.querySelector('[rooms-ending-sequence]');
+
+    const endingComponent =
+      endingEntity &&
+      endingEntity.components &&
+      endingEntity.components['rooms-ending-sequence'];
+
+    if (endingComponent) {
+      endingComponent.watchingDoor = false;
+
+      if (endingComponent.blackout) {
+        roomsSetVisible(endingComponent.blackout, false);
+      }
+    }
+  } catch (error) {
+    console.warn('Restart: could not reset dialogue state:', error);
+  }
 }
 
 
@@ -1096,6 +1164,7 @@ function softRestartRoomsWithin() {
   roomsRestartResetQuestUI();
   roomsRestartResetMonsters();
   roomsRestartResetSafeAndMirror();
+  roomsRestartResetDialogueState();
   roomsRestartResetPlayer();
 
   window.setTimeout(syncPauseUI, 50);
@@ -1270,6 +1339,23 @@ async function startRoomsFromMainMenu() {
       { once: true }
     );
   }
+
+  /*
+    Intro lines -- the player's very first moment in the game,
+    right after the main menu overlay is dismissed.
+  */
+  window.setTimeout(
+    () => {
+      if (typeof roomsQueueDialogueLine === 'function') {
+        roomsQueueDialogueLine('Where am I? What is this place?');
+
+        roomsQueueDialogueLine(
+          'There is something wrong with this place, better get the hell out of here quickly.'
+        );
+      }
+    },
+    400
+  );
 }
 
 
