@@ -98,7 +98,13 @@ const ROOMS_DESCRIPTION_UI = {
   hoverSideOffset: 0.34,
   hoverVerticalOffset: 0.08,
 
-  showQuestTrackerOnDesktop: true
+  /*
+    The objective card is hidden by default -- on screen or in a
+    headset -- and the player toggles it on/off with B (VR
+    controller) or the B key on desktop (see toggleQuestTracker()
+    / bbuttondown), same on/off pattern as the A-button pause
+    menu (toggleRoomsPauseMenu()).
+  */
 };
 
 const roomsPromptState = {
@@ -1351,6 +1357,9 @@ AFRAME.registerComponent(
 
         this.questRoot =
           null;
+
+        this.questTrackerRevealed =
+          false;
 
         this.questRows =
           new Map();
@@ -2999,15 +3008,14 @@ AFRAME.registerComponent(
           return;
         }
 
-        const immersive =
-          roomsPromptsImmersiveXR(
-            this.scene
-          );
-
+        /*
+          The objective card is off everywhere -- headset or
+          screen -- unless the player has toggled it on with B
+          (toggleQuestTracker()), same on/off pattern as the
+          A-button pause menu.
+        */
         const allowedMode =
-          immersive ||
-          ROOMS_DESCRIPTION_UI
-            .showQuestTrackerOnDesktop;
+          this.questTrackerRevealed;
 
         roomsSetVisible(
           this.questRoot,
@@ -3015,6 +3023,19 @@ AFRAME.registerComponent(
           allowedMode &&
           !window.roomsPaused
         );
+      },
+
+
+    /* ========================================================
+       TOGGLE OBJECTIVE ON/OFF (VR B BUTTON / DESKTOP B KEY)
+    ======================================================== */
+
+    toggleQuestTracker:
+      function () {
+        this.questTrackerRevealed =
+          !this.questTrackerRevealed;
+
+        this.syncQuestVisibility();
       },
 
 
@@ -3252,6 +3273,28 @@ window.getRoomsQuestState =
               .key
           : null
     };
+  };
+
+
+window.toggleRoomsQuestTracker =
+  function () {
+    const system =
+      roomsPromptState
+        .system;
+
+    if (
+      !system ||
+      typeof system
+        .toggleQuestTracker !==
+        'function'
+    ) {
+      return false;
+    }
+
+    system
+      .toggleQuestTracker();
+
+    return true;
   };
 
 

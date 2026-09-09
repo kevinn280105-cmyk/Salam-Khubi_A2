@@ -56,7 +56,13 @@ const ROOM_SOUND_DEFINITIONS = [
   {
     id: 'rainSound',
     src: 'sounds/bedroom-rain.wav',
-    position: new THREE.Vector3(-2.0, 1.6, -3.0),
+    /*
+      Was (-2.0, 1.6, -3.0) -- outside the bedroom's own
+      bounding box (X[-1.28, 3.94], Z[-5.95, -3.25]), left over
+      from before the room was repositioned. Moved inside, at
+      the far wall, ear height.
+    */
+    position: new THREE.Vector3(1.3, 1.6, -5.7),
     baseVolume: 0.20,
     fullVolumeDistance: 2.5,
     maxDistance: 12.0,
@@ -1904,6 +1910,48 @@ function primeRoomsFootstepAudio() {
       audio.muted = true;
       audio.volume = 0;
 
+      /*
+        If real gameplay has already taken this element over by
+        the time this silent priming play() resolves -- e.g. the
+        player was already walking the instant VR started, so
+        footstep-player's own tick() called play() on the same
+        element while this was still in flight -- restoring here
+        must NOT pause it or reset currentTime. Doing so used to
+        silently kill real footstep playback while leaving
+        footstep-player's own isPlaying flag stuck at true, so it
+        never noticed and never called play() again until the
+        player stopped and started walking a second time.
+      */
+      const restore = () => {
+        const rig =
+          document.querySelector('#rig');
+
+        const footstepComp =
+          rig &&
+          rig.components['footstep-player'];
+
+        const ownedByGameplay = Boolean(
+          footstepComp &&
+          footstepComp.audio === audio &&
+          footstepComp.isPlaying
+        );
+
+        audio.muted = oldMuted;
+        audio.volume = oldVolume;
+
+        if (ownedByGameplay) {
+          return;
+        }
+
+        audio.pause();
+
+        try {
+          audio.currentTime = 0;
+        } catch (error) {
+          /* ignore seek error */
+        }
+      };
+
       try {
         const promise = audio.play();
 
@@ -1912,26 +1960,9 @@ function primeRoomsFootstepAudio() {
           promise.then
         ) {
           promise
-            .then(
-              () => {
-                audio.pause();
+            .then(restore)
+            .catch(restore);
 
-                try {
-                  audio.currentTime = 0;
-                } catch (error) {
-                  /* ignore seek error */
-                }
-
-                audio.muted = oldMuted;
-                audio.volume = oldVolume;
-              }
-            )
-            .catch(
-              () => {
-                audio.muted = oldMuted;
-                audio.volume = oldVolume;
-              }
-            );
         }
       } catch (error) {
         audio.muted = oldMuted;

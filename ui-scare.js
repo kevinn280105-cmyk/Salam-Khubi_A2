@@ -979,7 +979,7 @@ function roomsRestartResetMonsters() {
 
     if (walking) {
       roomsReinitComponent(walking, 'rooms-walking-monster-player');
-      walking.setAttribute('position', '-4.41 0 -4.11');
+      walking.setAttribute('position', '0 0 0');
       walking.setAttribute('rotation', '0 0 0');
       walking.setAttribute('visible', 'false');
     }
@@ -1174,11 +1174,114 @@ async function exitRoomsWithin() {
 
 
 /* ============================================================
+   MAIN MENU (PRE-GAME TITLE SCREEN)
+
+   #mainMenuOverlay (index.html) sits on top of everything else,
+   showing a looping dms3.mp4 behind the title and START button.
+   Clicking START is the player's first real gesture, so it also
+   unlocks audio and requests VR/fullscreen in one go -- the same
+   single-button pattern the rest of this project already uses
+   for entering VR.
+============================================================ */
+
+let roomsMainMenuStarted = false;
+
+
+async function startRoomsFromMainMenu() {
+  if (roomsMainMenuStarted) {
+    return;
+  }
+
+  roomsMainMenuStarted = true;
+
+  const overlay =
+    document.querySelector('#mainMenuOverlay');
+
+  if (overlay) {
+    overlay.classList.add('is-hidden');
+
+    window.setTimeout(
+      () => {
+        overlay.style.display = 'none';
+      },
+      650
+    );
+  }
+
+  const video =
+    document.querySelector('#mainMenuVideo');
+
+  if (video) {
+    try {
+      video.pause();
+    } catch (error) {
+      /* ignore -- just a cosmetic cleanup */
+    }
+  }
+
+  if (
+    typeof window.ensureRoomsAudioUnlocked ===
+      'function'
+  ) {
+    try {
+      await window.ensureRoomsAudioUnlocked(
+        'main-menu-start'
+      );
+    } catch (error) {
+      console.error(
+        'Main menu: could not unlock audio:',
+        error
+      );
+    }
+  }
+
+  const scene =
+    document.querySelector('a-scene');
+
+  if (!scene) {
+    return;
+  }
+
+  const requestVR = async () => {
+    try {
+      const result = scene.enterVR();
+
+      if (
+        result &&
+        typeof result.then ===
+          'function'
+      ) {
+        await result;
+      }
+    } catch (error) {
+      console.error(
+        'Main menu: could not enter VR / fullscreen:',
+        error
+      );
+    }
+  };
+
+  if (scene.hasLoaded) {
+    await requestVR();
+  } else {
+    scene.addEventListener(
+      'loaded',
+      requestVR,
+      { once: true }
+    );
+  }
+}
+
+
+/* ============================================================
    GLOBAL EXPORTS
 ============================================================ */
 
 window.toggleRoomsPauseMenu =
   toggleRoomsPauseMenu;
+
+window.startRoomsFromMainMenu =
+  startRoomsFromMainMenu;
 
 window.restartRoomsWithin =
   restartRoomsWithin;
@@ -1690,6 +1793,65 @@ AFRAME.registerComponent(
   }
 );
 
+/* ============================================================
+   QUEST CONTROLLER B BUTTON -> TOGGLE OBJECTIVE ON/OFF
+
+   In real VR the objective/quest-tracker card is hidden until
+   the player toggles it on with B, and stays open until B is
+   pressed again (see interaction-prompts.js ->
+   syncQuestVisibility / toggleQuestTrackerInVR) -- same on/off
+   pattern as vr-menu-button's A-button pause menu above.
+============================================================ */
+
+AFRAME.registerComponent(
+  'vr-objective-button',
+  {
+    schema: {
+      event: {
+        default: 'bbuttondown'
+      }
+    },
+
+    init: function () {
+      this.onButtonDown =
+        this.onButtonDown.bind(this);
+
+      this.el.addEventListener(
+        this.data.event,
+        this.onButtonDown
+      );
+    },
+
+    onButtonDown: function () {
+      /*
+        Only in genuine immersive VR -- same guard as
+        vr-menu-button, so this never fires on desktop.
+      */
+      if (
+        !hasImmersiveXRSession(
+          this.el.sceneEl
+        )
+      ) {
+        return;
+      }
+
+      if (
+        typeof window.toggleRoomsQuestTracker ===
+          'function'
+      ) {
+        window.toggleRoomsQuestTracker();
+      }
+    },
+
+    remove: function () {
+      this.el.removeEventListener(
+        this.data.event,
+        this.onButtonDown
+      );
+    }
+  }
+);
+
 
 /* ============================================================
    UI FLOW MANAGER
@@ -1846,6 +2008,21 @@ AFRAME.registerComponent(
       ) {
         event.preventDefault();
         toggleRoomsPauseMenu();
+        return;
+      }
+
+      /*
+        B is the desktop equivalent of the VR controller B
+        button -- toggles the objective card on/off (see
+        interaction-prompts.js -> toggleQuestTracker()).
+      */
+      if (
+        key === 'b' &&
+        typeof window.toggleRoomsQuestTracker ===
+          'function'
+      ) {
+        event.preventDefault();
+        window.toggleRoomsQuestTracker();
       }
     },
 
