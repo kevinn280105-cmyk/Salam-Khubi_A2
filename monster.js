@@ -3839,7 +3839,8 @@ AFRAME.registerComponent(
           typeof roomsQueueDialogueLine === 'function'
         ) {
           roomsQueueDialogueLine(
-            'What the hell was that!!'
+            'What the hell was that!!',
+            { priority: true }
           );
         }
 

@@ -787,6 +787,45 @@ function roomsGetQuestItemForEntity(
 }
 
 
+function roomsIsEntityActuallyVisible(
+  el
+) {
+  if (!el) {
+    return false;
+  }
+
+  /*
+    #picture starts out with visible="false" (it does not exist in the
+    world until the safe is opened -- see safe.js openSafe()). Three.js
+    raycasting does NOT skip invisible objects on its own, so without
+    this check the central INSPECT PICTURE prompt (and the hover
+    description card) could appear while the picture is still supposed
+    to be hidden inside the safe. Walk the object3D chain rather than
+    just this entity's own attribute so a hidden ancestor also counts.
+  */
+  let object =
+    el.object3D;
+
+  if (!object) {
+    return el.getAttribute('visible') !== false;
+  }
+
+  while (object) {
+    if (
+      object.visible ===
+        false
+    ) {
+      return false;
+    }
+
+    object =
+      object.parent;
+  }
+
+  return true;
+}
+
+
 function roomsFindQuestAncestor(
   el
 ) {
@@ -802,6 +841,9 @@ function roomsFindQuestAncestor(
   ) {
     if (
       roomsGetQuestItemForEntity(
+        current
+      ) &&
+      roomsIsEntityActuallyVisible(
         current
       )
     ) {
@@ -2836,6 +2878,10 @@ AFRAME.registerComponent(
             false
           );
 
+          if (typeof roomsAnnounceSacrificeProgress === 'function') {
+            roomsAnnounceSacrificeProgress(detail.found, detail.total);
+          }
+
           if (
             roomsPromptState
               .foundItems
@@ -2983,6 +3029,10 @@ AFRAME.registerComponent(
           true
         );
 
+        if (typeof roomsAnnounceSacrificeProgress === 'function') {
+          roomsAnnounceSacrificeProgress(0, ROOMS_QUEST_ITEMS.length);
+        }
+
         window.setTimeout(
           () => {
             this.updateQuestUI();
@@ -3054,7 +3104,7 @@ AFRAME.registerComponent(
             */
             checked = false;
 
-            label = 'Sit opposite the ghost';
+            label = 'Talk to the ghost';
 
           } else {
             checked = true;

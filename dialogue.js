@@ -262,7 +262,38 @@ AFRAME.registerComponent(
         return;
       }
 
-      this.queue.push({ text, opts: opts || {} });
+      opts = opts || {};
+
+      if (opts.priority) {
+        /*
+          Priority lines (e.g. a scare reaction that must play the
+          instant it happens) cut to the front of the queue instead
+          of waiting behind whatever narrative lines already piled
+          up. If something is on screen right now, interrupt it so
+          the priority line can show immediately rather than only
+          appearing once the backlog drains -- which could be well
+          after the moment it was reacting to has already passed.
+        */
+        this.queue.unshift({ text, opts });
+
+        if (this.showing) {
+          if (this.hideTimer) {
+            window.clearTimeout(this.hideTimer);
+            this.hideTimer = null;
+          }
+
+          if (this.advanceTimer) {
+            window.clearTimeout(this.advanceTimer);
+            this.advanceTimer = null;
+          }
+
+          roomsSetVisible(this.root, false);
+          this.showing = false;
+        }
+      } else {
+        this.queue.push({ text, opts });
+      }
+
       this.pump();
     },
 
