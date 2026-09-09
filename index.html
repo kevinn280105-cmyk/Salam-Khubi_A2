@@ -427,6 +427,115 @@
 
     }
 
+
+    /* ======================================================
+       MAIN MENU (PRE-GAME TITLE SCREEN)
+    ======================================================= */
+
+    #mainMenuOverlay {
+
+      position: fixed;
+
+      inset: 0;
+
+      z-index: 999999999;
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: center;
+
+      overflow: hidden;
+
+      background: #000000;
+
+      transition: opacity 0.6s ease;
+
+    }
+
+
+    #mainMenuOverlay.is-hidden {
+
+      opacity: 0;
+
+      pointer-events: none;
+
+    }
+
+
+    #mainMenuVideo {
+
+      position: absolute;
+
+      inset: 0;
+
+      width: 100%;
+
+      height: 100%;
+
+      object-fit: cover;
+
+      filter: brightness(0.55);
+
+    }
+
+
+    #mainMenuScrim {
+
+      position: absolute;
+
+      inset: 0;
+
+      background:
+        linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.6) 0%,
+          rgba(0, 0, 0, 0.1) 32%,
+          rgba(0, 0, 0, 0.15) 62%,
+          rgba(0, 0, 0, 0.7) 100%
+        );
+
+    }
+
+
+    #mainMenuStartButton {
+
+      position: relative;
+
+      z-index: 1;
+
+      margin-top: 400px;
+
+      padding: 16px 58px;
+
+      border: 1px solid rgba(255, 255, 255, 0.35);
+
+      border-radius: 14px;
+
+      color: #ffffff;
+
+      background: rgba(120, 20, 20, 0.35);
+
+      font: 700 18px Arial, sans-serif;
+
+      letter-spacing: 3px;
+
+      cursor: pointer;
+
+      transition: background 0.15s ease, transform 0.15s ease;
+
+    }
+
+
+    #mainMenuStartButton:hover {
+
+      background: rgba(150, 28, 28, 0.5);
+
+      transform: translateY(-1px);
+
+    }
+
   </style>
 
 
@@ -457,6 +566,47 @@
 
 
 <body>
+
+
+  <!-- ======================================================
+       MAIN MENU (pre-game title screen)
+  ======================================================= -->
+
+  <div id="mainMenuOverlay">
+
+    <video
+
+      id="mainMenuVideo"
+
+      src="dms3.mp4"
+
+      autoplay
+
+      loop
+
+      muted
+
+      playsinline
+
+      preload="auto">
+
+    </video>
+
+    <div id="mainMenuScrim"></div>
+
+    <button
+
+      id="mainMenuStartButton"
+
+      type="button"
+
+      onclick="startRoomsFromMainMenu()">
+
+      START
+
+    </button>
+
+  </div>
 
 
   <!-- ======================================================
@@ -2109,7 +2259,9 @@
 
         vr-ui-interactor
 
-        vr-menu-button="event: abuttondown">
+        vr-menu-button="event: abuttondown"
+
+        vr-objective-button="event: bbuttondown">
 
       </a-entity>
 

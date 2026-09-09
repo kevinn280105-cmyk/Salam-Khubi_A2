@@ -18,7 +18,9 @@
      kitchenasset.glb) -- see isPlayerInsideKitchen().
    - standing.glb becomes visible the moment the player enters
      that zone.
-   - standing.glb stays completely still.
+   - standing.glb stays planted in place but continuously turns
+     to face the player as they move around (yaw only -- see
+     updateStandingLookAt()).
    - The player must actually LOOK toward her.
    - Once seen:
        1. screen quickly fades to black
@@ -191,6 +193,32 @@ const ROOMS_MONSTER_CONFIG = {
   */
 
   standingMinimumVisibleTime: 450,
+
+
+  /* ----------------------------------------------------------
+     STANDING MONSTER LOOK-AT (FACE THE PLAYER)
+  ---------------------------------------------------------- */
+
+  /*
+    How quickly she turns to face the player each tick.
+
+    This is a slerp fraction applied per tick (checkInterval),
+    not a real degrees/second value -- higher = snappier turn,
+    lower = slower/creepier turn. Range 0-1.
+  */
+  standingLookAtLerpFactor: 0.08,
+
+  /*
+    standing.glb is a single static mesh with no separate
+    head/skeleton, so "look at the player" can only turn her
+    whole body (yaw), not just her head.
+
+    Her front-facing local axis was inferred from her body
+    proportions, not confirmed visually -- if she ends up
+    turning to show the player her BACK instead of her face,
+    flip this to true.
+  */
+  standingFrontAxisFlipped: false,
 
 
   /* ----------------------------------------------------------
@@ -1189,6 +1217,23 @@ AFRAME.registerComponent(
 
       this.standingDirectionToMonster =
         new THREE.Vector3();
+
+
+      /*
+        LOOK-AT (FACE THE PLAYER)
+      */
+
+      this.standingMeshNode =
+        null;
+
+      this.standingBaseQuaternion =
+        null;
+
+      this.standingFrontBase =
+        null;
+
+      this.standingTargetQuaternion =
+        null;
 
 
       /*
@@ -3514,6 +3559,162 @@ AFRAME.registerComponent(
 
 
     /* ========================================================
+       LOOK-AT: TURN TO FACE THE PLAYER
+
+       standing.glb has no skeleton, so this rotates her whole
+       mesh (yaw only -- she never tilts up/down or leans).
+
+       The baked rotation that makes her stand upright is kept
+       fixed; only an additional spin around world Y is layered
+       on top each tick, recomputed fresh (never accumulated) so
+       there is no drift, and smoothed with a slerp so she turns
+       rather than snapping.
+    ======================================================== */
+
+    updateStandingLookAt:
+      function (
+        player
+      ) {
+        if (
+          !this.standingMonster
+        ) {
+          return;
+        }
+
+        if (
+          !this.standingMeshNode
+        ) {
+          const root =
+            this.standingMonster.getObject3D(
+              'mesh'
+            );
+
+          if (
+            !root
+          ) {
+            return;
+          }
+
+          let found =
+            null;
+
+          root.traverse(
+            (node) => {
+              if (
+                node.isMesh
+              ) {
+                found =
+                  node;
+              }
+            }
+          );
+
+          if (
+            !found
+          ) {
+            return;
+          }
+
+          this.standingMeshNode =
+            found;
+
+          this.standingBaseQuaternion =
+            found.quaternion.clone();
+
+          const frontLocal =
+            ROOMS_MONSTER_CONFIG
+              .standingFrontAxisFlipped
+              ? new THREE.Vector3(0, -1, 0)
+              : new THREE.Vector3(0, 1, 0);
+
+          this.standingFrontBase =
+            frontLocal
+              .applyQuaternion(
+                this.standingBaseQuaternion
+              )
+              .setY(0)
+              .normalize();
+
+          this.standingTargetQuaternion =
+            this.standingBaseQuaternion.clone();
+        }
+
+        if (
+          !player
+        ) {
+          return;
+        }
+
+        const meshNode =
+          this.standingMeshNode;
+
+        const worldPos =
+          new THREE.Vector3();
+
+        meshNode.getWorldPosition(
+          worldPos
+        );
+
+        const toPlayer =
+          new THREE.Vector3(
+            player.x -
+              worldPos.x,
+            0,
+            player.z -
+              worldPos.z
+          );
+
+        if (
+          toPlayer.lengthSq() <
+          0.0001
+        ) {
+          return;
+        }
+
+        toPlayer.normalize();
+
+        const cross =
+          this.standingFrontBase.z *
+            toPlayer.x -
+          this.standingFrontBase.x *
+            toPlayer.z;
+
+        const dot =
+          this.standingFrontBase.x *
+            toPlayer.x +
+          this.standingFrontBase.z *
+            toPlayer.z;
+
+        const theta =
+          Math.atan2(
+            cross,
+            dot
+          );
+
+        const yawQuat =
+          new THREE.Quaternion()
+            .setFromAxisAngle(
+              new THREE.Vector3(0, 1, 0),
+              theta
+            );
+
+        this.standingTargetQuaternion
+          .copy(
+            yawQuat
+          )
+          .multiply(
+            this.standingBaseQuaternion
+          );
+
+        meshNode.quaternion.slerp(
+          this.standingTargetQuaternion,
+          ROOMS_MONSTER_CONFIG
+            .standingLookAtLerpFactor
+        );
+      },
+
+
+    /* ========================================================
        PLAYER SAW STANDING.GLB
     ======================================================== */
 
@@ -3899,6 +4100,21 @@ AFRAME.registerComponent(
 
             this.showStandingMonster();
           }
+        }
+
+
+        /* ----------------------------------------------------
+           STANDING MONSTER LOOK-AT ROTATION
+        ---------------------------------------------------- */
+
+        if (
+          window
+            .roomsMonsterState
+            .standingVisible
+        ) {
+          this.updateStandingLookAt(
+            player
+          );
         }
 
 
