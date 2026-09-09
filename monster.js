@@ -3845,6 +3845,22 @@ AFRAME.registerComponent(
         }
 
 
+        /*
+          Auto-disappear 2 seconds after she appears, regardless of
+          whether the player ever actually looked at her. This is a
+          safety net on top of the look-based trigger above (VR
+          look-angle detection has been finicky before) -- whichever
+          happens first wins, since triggerStandingSeen() already
+          no-ops once standingSeen/standingFinished is set.
+        */
+        window.setTimeout(
+          () => {
+            this.triggerStandingSeen();
+          },
+          2000
+        );
+
+
         console.log(
           'MONSTER: standing.glb appeared after 2 altar items.'
         );

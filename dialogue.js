@@ -37,7 +37,22 @@ const ROOMS_DIALOGUE_CONFIG = {
   basePanelWidth: 1.05,
   basePanelHeight: 0.20,
   panelVerticalPadding: 0.06,
-  panelPixelsPerUnit: 666.67
+  panelPixelsPerUnit: 666.67,
+
+  /*
+    Desktop (magic window) and an actual VR headset use a different
+    effective field of view, so the same camera-local position does
+    NOT land in the same spot on screen in both -- being a child of
+    #cam only keeps it moving with your head, it does not fix this.
+    Same problem the quest tracker HUD solves in interaction-
+    prompts.js (questPositionDesktop/questPositionVR) -- mirror that
+    pattern here instead of assuming "attached to the camera" was
+    enough, which is what let this go untested in a real headset.
+  */
+  positionDesktop: '0 -0.36 -1.05',
+  positionVR: '0 -0.43 -0.62',
+  scaleDesktop: '1 1 1',
+  scaleVR: '1.2 1.2 1.2'
 };
 
 
@@ -152,8 +167,12 @@ AFRAME.registerComponent(
       this.advanceTimer = null;
 
       this.tryBuild = this.tryBuild.bind(this);
+      this.updatePlacement = this.updatePlacement.bind(this);
 
       roomsDialogueSubtitleInstance = this;
+
+      this.el.sceneEl.addEventListener('enter-vr', this.updatePlacement);
+      this.el.sceneEl.addEventListener('exit-vr', this.updatePlacement);
 
       if (this.el.sceneEl.hasLoaded) {
         this.tryBuild();
@@ -211,7 +230,8 @@ AFRAME.registerComponent(
       }
 
       const root = roomsCreateEntity('a-entity', {
-        position: '0 -0.36 -1.05',
+        position: ROOMS_DIALOGUE_CONFIG.positionDesktop,
+        scale: ROOMS_DIALOGUE_CONFIG.scaleDesktop,
         visible: false
       });
 
@@ -255,6 +275,31 @@ AFRAME.registerComponent(
       this.background = background;
       this.text = text;
       this.currentPanelHeight = ROOMS_DIALOGUE_CONFIG.basePanelHeight;
+
+      this.updatePlacement();
+    },
+
+    /*
+      Swap position/scale whenever the XR presenting state changes,
+      same trigger interaction-prompts.js uses for the quest tracker.
+    */
+    updatePlacement: function () {
+      if (!this.root) {
+        return;
+      }
+
+      const immersive = roomsPromptsImmersiveXR(this.el.sceneEl);
+
+      const position = immersive
+        ? ROOMS_DIALOGUE_CONFIG.positionVR
+        : ROOMS_DIALOGUE_CONFIG.positionDesktop;
+
+      const scale = immersive
+        ? ROOMS_DIALOGUE_CONFIG.scaleVR
+        : ROOMS_DIALOGUE_CONFIG.scaleDesktop;
+
+      this.root.setAttribute('position', position);
+      this.root.setAttribute('scale', scale);
     },
 
     queueLine: function (text, opts) {
@@ -351,11 +396,11 @@ AFRAME.registerComponent(
     },
 
     /*
-      Grows the panel upward (toward screen-center) to fit however many
-      lines the current text wrapped to, instead of a fixed size that
-      overflows on long lines or wastes space on short ones. The bottom
-      edge stays anchored in place as it grows, so it never creeps toward
-      the bottom edge of the screen/FOV.
+      Grows the panel downward (away from screen-center) to fit however
+      many lines the current text wrapped to, instead of a fixed size
+      that overflows on long lines or wastes space on short ones. The
+      TOP edge stays anchored in place as it grows, so a long line never
+      creeps upward into the quest tracker HUD sitting just above it.
     */
     resizePanelToFit: function () {
       const textObj = this.text.getObject3D('text');
@@ -368,8 +413,19 @@ AFRAME.registerComponent(
       const size = new THREE.Vector3();
       box.getSize(size);
 
+      /*
+        box.getSize() measures in WORLD units, which already include
+        this entity's own scale (1.2x in VR -- see ROOMS_DIALOGUE_CONFIG
+        scaleVR). The background's own "height" attribute is in this
+        entity's LOCAL space, so divide back out by that scale before
+        comparing/assigning, or the panel would over-grow by 1.2x
+        whenever a long line is shown in VR.
+      */
+      const rootScale =
+        (this.root.object3D && this.root.object3D.scale.y) || 1;
+
       const needed =
-        size.y + ROOMS_DIALOGUE_CONFIG.panelVerticalPadding;
+        size.y / rootScale + ROOMS_DIALOGUE_CONFIG.panelVerticalPadding;
 
       const newHeight = Math.max(
         ROOMS_DIALOGUE_CONFIG.basePanelHeight,
@@ -439,6 +495,9 @@ AFRAME.registerComponent(
       if (this.advanceTimer) {
         window.clearTimeout(this.advanceTimer);
       }
+
+      this.el.sceneEl.removeEventListener('enter-vr', this.updatePlacement);
+      this.el.sceneEl.removeEventListener('exit-vr', this.updatePlacement);
 
       if (roomsDialogueSubtitleInstance === this) {
         roomsDialogueSubtitleInstance = null;

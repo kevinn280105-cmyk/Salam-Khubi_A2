@@ -188,6 +188,7 @@ AFRAME.registerComponent(
       this.isOpen = false;
       this.busy = false;
 
+      this.modelRoot = null;
       this.doorMesh = null;
       this.keypadRoot = null;
       this.displayEntity = null;
@@ -200,9 +201,36 @@ AFRAME.registerComponent(
       this.onModelLoaded = this.onModelLoaded.bind(this);
       this.el.addEventListener('model-loaded', this.onModelLoaded);
 
+      /*
+        The keypad no longer builds itself the instant the model
+        loads -- it stays hidden/nonexistent until the player
+        actually clicks the safe (or pulls the VR trigger while
+        aiming at it), matching how the TV / altar require an
+        explicit interaction before anything appears.
+      */
+      this.activateSafe = this.activateSafe.bind(this);
+      this.el.addEventListener('click', this.activateSafe);
+
       if (this.el.getObject3D('mesh')) {
         this.onModelLoaded();
       }
+    },
+
+
+    activateSafe: function () {
+      if (
+        typeof roomsGameplayInputLocked === 'function' &&
+        roomsGameplayInputLocked()
+      ) {
+        return false;
+      }
+
+      if (!this.modelRoot) {
+        return false;
+      }
+
+      this.buildKeypad(this.modelRoot);
+      return true;
     },
 
 
@@ -228,9 +256,9 @@ AFRAME.registerComponent(
         }
       });
 
-      this.buildKeypad(root);
+      this.modelRoot = root;
 
-      console.log('Safe ready: safetybox.glb loaded, keypad built.');
+      console.log('Safe ready: safetybox.glb loaded, waiting for click to build keypad.');
     },
 
 
@@ -521,6 +549,7 @@ AFRAME.registerComponent(
 
     remove: function () {
       this.el.removeEventListener('model-loaded', this.onModelLoaded);
+      this.el.removeEventListener('click', this.activateSafe);
 
       if (this.keypadRoot && this.keypadRoot.parentNode) {
         this.keypadRoot.parentNode.removeChild(this.keypadRoot);
@@ -645,6 +674,16 @@ AFRAME.registerComponent(
           safeComponent.press(key);
           return true;
         }
+      }
+
+      /*
+        No keypad key was hit -- if the safe itself (rather than one
+        of its buttons) is what the controller is aiming at, treat
+        the trigger pull the same as a desktop click on it: reveal
+        the keypad. No-ops once the keypad already exists.
+      */
+      if (intersectedEls.indexOf(safetybox) !== -1) {
+        return safeComponent.activateSafe();
       }
 
       return false;

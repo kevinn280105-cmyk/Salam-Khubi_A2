@@ -725,6 +725,25 @@ AFRAME.registerComponent(
           part.name ===
           'Sketchfab_model'
         ) {
+          if (
+            !window.roomsGameEnded &&
+            typeof roomsQueueDialogueLine === 'function'
+          ) {
+            const nowMs = performance.now();
+
+            if (
+              nowMs -
+                (this.lastLockedDoorHintAt || 0) >=
+              5000
+            ) {
+              this.lastLockedDoorHintAt = nowMs;
+
+              roomsQueueDialogueLine(
+                "The door is sealed with some sort of Talismans, I can't leave yet"
+              );
+            }
+          }
+
           return false;
         }
 
@@ -2604,6 +2623,19 @@ AFRAME.registerComponent(
 
         this.isOn =
           Boolean(on);
+
+        if (
+          this.isOn &&
+          !window.roomsTvFirstOnShown
+        ) {
+          window.roomsTvFirstOnShown = true;
+
+          if (typeof roomsQueueDialogueLine === 'function') {
+            roomsQueueDialogueLine(
+              'What are these number, looks like some kind of code.'
+            );
+          }
+        }
 
         this.positionGlowLight();
 
