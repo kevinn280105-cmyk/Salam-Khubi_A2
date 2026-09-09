@@ -2343,6 +2343,25 @@ AFRAME.registerComponent(
           '#truocbantho. Story complete.'
         );
 
+        /*
+          REWARD: sitting.glb does not exist in the world
+          until all 3 items are placed -- see index.html,
+          where #sittingFigure starts with visible="false".
+        */
+        const sittingEl =
+          document.querySelector(
+            '#sittingFigure'
+          );
+
+        if (
+          sittingEl
+        ) {
+          sittingEl.setAttribute(
+            'visible',
+            true
+          );
+        }
+
         this.el.emit(
           'all-clues-collected',
           detail,
@@ -2557,7 +2576,7 @@ AFRAME.registerComponent(
 
         const title =
           roomsStoryCreateText(
-            'ROOMS WITHIN',
+            'Âm Trạch',
             '0 0.055 0.015',
             '0.66',
             'center',

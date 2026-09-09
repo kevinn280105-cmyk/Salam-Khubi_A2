@@ -142,6 +142,15 @@ const roomsPromptState = {
   */
   incenseLit: false,
 
+  /*
+    seatedWithGhost tracks the objective shown after all 3
+    items are placed: "Sit opposite the ghost" (set by
+    setSeatedWithGhost() when #chair's embedded-chair
+    component confirms the player sat down while
+    #sittingFigure is visible).
+  */
+  seatedWithGhost: false,
+
   pausedByInspection: false
 };
 
@@ -2847,6 +2856,29 @@ AFRAME.registerComponent(
               detail,
               false
             );
+
+            /*
+              Same 'show it done for a moment, then hand off'
+              pattern as setIncenseLit() -- the player sees
+              "All items placed" briefly before the card
+              switches to the next objective, "Sit opposite
+              the ghost".
+            */
+            if (this.questText) {
+              this.questText.setAttribute(
+                'value',
+                'All items placed'
+              );
+            }
+
+            this.setQuestChecked(true);
+
+            window.setTimeout(
+              () => {
+                this.updateQuestUI();
+              },
+              1100
+            );
           }
 
         } else {
@@ -2856,6 +2888,33 @@ AFRAME.registerComponent(
             false
           );
         }
+
+        return true;
+      },
+
+
+    setSeatedWithGhost:
+      function (
+        seated
+      ) {
+        const value =
+          Boolean(
+            seated
+          );
+
+        if (
+          roomsPromptState
+            .seatedWithGhost ===
+          value
+        ) {
+          return false;
+        }
+
+        roomsPromptState
+          .seatedWithGhost =
+          value;
+
+        this.updateQuestUI();
 
         return true;
       },
@@ -2976,13 +3035,32 @@ AFRAME.registerComponent(
                   item.title
               );
 
-          checked =
+          const allItemsPlaced =
             remainingTitles.length === 0;
 
-          label =
-            remainingTitles.length
-              ? `Place on the altar: ${remainingTitles.join(', ')} (${foundCount} / ${total})`
-              : `All items placed (${foundCount} / ${total})`;
+          if (!allItemsPlaced) {
+            checked = false;
+
+            label =
+              `Place on the altar: ${remainingTitles.join(', ')} (${foundCount} / ${total})`;
+
+          } else if (
+            !roomsPromptState.seatedWithGhost
+          ) {
+            /*
+              Objective 3: sit in #chair while #sittingFigure
+              is visible (see embedded-chair in
+              engine-interactions.js).
+            */
+            checked = false;
+
+            label = 'Sit opposite the ghost';
+
+          } else {
+            checked = true;
+
+            label = 'Sitting with the ghost';
+          }
         }
 
         this.questText.setAttribute(
@@ -3320,6 +3398,30 @@ window.setRoomsQuestItemChecked =
       .setQuestItemChecked(
         key,
         checked
+      );
+  };
+
+
+window.setRoomsSeatedWithGhost =
+  function (
+    seated = true
+  ) {
+    const system =
+      roomsPromptState
+        .system;
+
+    if (
+      !system ||
+      typeof system
+        .setSeatedWithGhost !==
+        'function'
+    ) {
+      return false;
+    }
+
+    return system
+      .setSeatedWithGhost(
+        seated
       );
   };
 

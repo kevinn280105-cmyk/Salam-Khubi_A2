@@ -421,6 +421,17 @@ AFRAME.registerComponent(
         this.el.sceneEl.emit('safe-opened', {}, false);
       }
 
+      /*
+        REWARD: the picture quest item does not exist in the
+        world until the safe is opened -- see index.html,
+        where #picture starts with visible="false".
+      */
+      const pictureEl = document.querySelector('#picture');
+
+      if (pictureEl) {
+        pictureEl.setAttribute('visible', true);
+      }
+
       console.log('Safe opened!');
 
       window.setTimeout(() => {

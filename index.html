@@ -842,6 +842,10 @@
 
     vr-refresh-rate-manager
 
+    rooms-walking-glitch-effect
+
+    rooms-standing-face-scare
+
     vr-mode-ui="
       enterVREnabled: false
     "
@@ -1196,6 +1200,50 @@
   position="0 0 0"
   model-status="
     name: Truoc ban tho
+  ">
+</a-entity>
+
+
+<!-- ====================================================
+     SITTING FIGURE
+
+     Hidden until all 3 quest items are placed on
+     #truocbantho -- see story.js completeStory(),
+     which reveals #sittingFigure.
+===================================================== -->
+
+<a-entity
+  id="sittingFigure"
+  class="roompart"
+  visible="false"
+  gltf-model="url(sitting.glb)"
+  position="0 0 0"
+  model-status="
+    name: Sitting Figure
+  ">
+</a-entity>
+
+
+<!-- ====================================================
+     CHAIR
+
+     chair.glb does not exist yet -- this entity is wired
+     up ahead of time (see embedded-chair /
+     vr-chair-interactor in engine-interactions.js) so it
+     works the moment the file is added. Position/rotation
+     will need a live check once it's in place and can be
+     seen relative to #sittingFigure.
+===================================================== -->
+
+<a-entity
+  id="chair"
+  class="roompart interactable"
+  visible="true"
+  gltf-model="url(chair.glb)"
+  position="0 0 0"
+  embedded-chair
+  model-status="
+    name: Chair
   ">
 </a-entity>
 
@@ -1763,6 +1811,9 @@
 
     <!-- ====================================================
          QUEST ITEM 3 — PICTURE
+
+         Hidden until the safe is opened -- see safe.js
+         openSafe(), which reveals #picture.
     ===================================================== -->
 
     <a-entity
@@ -1777,7 +1828,7 @@
 
       data-quest-item="picture"
 
-      visible="true"
+      visible="false"
 
       gltf-model="url(picture.glb)"
 
@@ -2256,6 +2307,8 @@
         vr-grab-interactor
 
         vr-tv-interactor
+
+        vr-chair-interactor
 
         vr-mirror-interactor
 

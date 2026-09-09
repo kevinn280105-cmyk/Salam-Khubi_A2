@@ -3070,6 +3070,280 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
+   CHAIR / SIT WITH THE GHOST
+
+   #chair (chair.glb) is a static, clickable prop -- same
+   desktop-click + VR-trigger-raycast pattern as #tv above
+   (embedded-tv / vr-tv-interactor).
+
+   Clicking/triggering it toggles sitting: the rig is snapped
+   onto the chair (facing whichever way chair.glb was baked to
+   face) and movement-controls is disabled while seated, same
+   'lock movement, don't touch roomsInputLocked' approach used
+   elsewhere for temporary, resumable states.
+
+   Sitting only counts toward the "Sit opposite the ghost"
+   objective (see interaction-prompts.js) once #sittingFigure
+   is actually visible -- i.e. after all 3 altar items have
+   been placed (see story.js completeStory()). Sitting down
+   before that just sits the player down with no ghost there.
+============================================================ */
+
+AFRAME.registerComponent(
+  'embedded-chair',
+  {
+    init: function () {
+      this.seated = false;
+
+      this.onDesktopClick = this.onDesktopClick.bind(this);
+
+      this.el.addEventListener('click', this.onDesktopClick);
+    },
+
+    onDesktopClick: function () {
+      if (isImmersiveXRScene(this.el.sceneEl)) {
+        return;
+      }
+
+      this.toggleSit();
+    },
+
+    toggleFromIntersection: function () {
+      return this.toggleSit();
+    },
+
+    toggleSit: function () {
+      if (roomsGameplayInputLocked()) {
+        return false;
+      }
+
+      return this.seated ? this.standUp() : this.sitDown();
+    },
+
+    sitDown: function () {
+      if (this.seated) {
+        return false;
+      }
+
+      const rig = document.querySelector('#rig');
+
+      if (!rig) {
+        return false;
+      }
+
+      this.seated = true;
+
+      rig.setAttribute('movement-controls', 'enabled', false);
+
+      /*
+        Snap onto the chair, facing whichever way chair.glb
+        was baked to face -- same 'trust the baked transform'
+        convention used for every other model in this scene.
+        NEEDS LIVE CONFIRMATION once chair.glb actually exists
+        and is positioned opposite #sittingFigure.
+      */
+      const chairPos = new THREE.Vector3();
+      this.el.object3D.getWorldPosition(chairPos);
+
+      const chairQuat = new THREE.Quaternion();
+      this.el.object3D.getWorldQuaternion(chairQuat);
+
+      const chairEuler = new THREE.Euler().setFromQuaternion(
+        chairQuat,
+        'YXZ'
+      );
+
+      rig.object3D.position.x = chairPos.x;
+      rig.object3D.position.z = chairPos.z;
+      rig.object3D.rotation.y = chairEuler.y;
+
+      const ghost = document.querySelector('#sittingFigure');
+
+      const ghostPresent = Boolean(
+        ghost && ghost.getAttribute('visible')
+      );
+
+      this.el.sceneEl.emit(
+        'player-sat-in-chair',
+        { ghostPresent },
+        false
+      );
+
+      if (ghostPresent) {
+        this.el.sceneEl.emit(
+          'player-sat-opposite-ghost',
+          {},
+          false
+        );
+
+        if (
+          typeof window.setRoomsSeatedWithGhost === 'function'
+        ) {
+          window.setRoomsSeatedWithGhost(true);
+        }
+      }
+
+      console.log(
+        'Player sat in the chair.' +
+        (ghostPresent
+          ? ' Ghost is present.'
+          : ' Ghost has not appeared yet.')
+      );
+
+      return true;
+    },
+
+    standUp: function () {
+      if (!this.seated) {
+        return false;
+      }
+
+      this.seated = false;
+
+      const rig = document.querySelector('#rig');
+
+      if (rig) {
+        rig.setAttribute('movement-controls', 'enabled', true);
+      }
+
+      this.el.sceneEl.emit('player-stood-from-chair', {}, false);
+
+      return true;
+    },
+
+    remove: function () {
+      this.el.removeEventListener('click', this.onDesktopClick);
+    }
+  }
+);
+
+
+AFRAME.registerComponent(
+  'vr-chair-interactor',
+  {
+    schema: {
+      pressThreshold: {
+        default: 0.65
+      },
+
+      releaseThreshold: {
+        default: 0.2
+      }
+    },
+
+    init: function () {
+      this.triggerHeld = false;
+
+      this.pressTrigger = this.pressTrigger.bind(this);
+      this.releaseTrigger = this.releaseTrigger.bind(this);
+      this.onTriggerChanged = this.onTriggerChanged.bind(this);
+
+      this.el.addEventListener('triggerdown', this.pressTrigger);
+      this.el.addEventListener('triggerup', this.releaseTrigger);
+
+      this.el.addEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+      this.el.addEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    },
+
+    pressTrigger: function () {
+      if (this.triggerHeld || roomsGameplayInputLocked()) {
+        return;
+      }
+
+      this.triggerHeld = true;
+
+      this.useChair();
+    },
+
+    releaseTrigger: function () {
+      this.triggerHeld = false;
+    },
+
+    onTriggerChanged: function (event) {
+      const value =
+        event &&
+        event.detail &&
+        typeof event.detail.value === 'number'
+          ? event.detail.value
+          : null;
+
+      if (value === null) {
+        return;
+      }
+
+      if (
+        value >= this.data.pressThreshold &&
+        !this.triggerHeld
+      ) {
+        this.pressTrigger();
+
+      } else if (value <= this.data.releaseThreshold) {
+        this.releaseTrigger();
+      }
+    },
+
+    useChair: function () {
+      if (roomsGameplayInputLocked()) {
+        return false;
+      }
+
+      const chair = document.querySelector('#chair');
+      const raycaster = this.el.components.raycaster;
+
+      if (!chair || !raycaster) {
+        return false;
+      }
+
+      const component = chair.components['embedded-chair'];
+
+      if (!component) {
+        return false;
+      }
+
+      if (raycaster.refreshObjects) {
+        raycaster.refreshObjects();
+      }
+
+      const hit = raycaster.getIntersection
+        ? raycaster.getIntersection(chair)
+        : getClosestRayIntersection(raycaster);
+
+      if (
+        !hit ||
+        !objectBelongsToEntity(hit.object, chair)
+      ) {
+        return false;
+      }
+
+      return component.toggleFromIntersection(hit);
+    },
+
+    remove: function () {
+      this.el.removeEventListener('triggerdown', this.pressTrigger);
+      this.el.removeEventListener('triggerup', this.releaseTrigger);
+
+      this.el.removeEventListener(
+        'triggerchanged',
+        this.onTriggerChanged
+      );
+
+      this.el.removeEventListener(
+        'controllerdisconnected',
+        this.releaseTrigger
+      );
+    }
+  }
+);
+
+
+/* ============================================================
    NATURAL GRABBABLE
 ============================================================ */
 

@@ -1086,6 +1086,454 @@ AFRAME.registerComponent(
 
 
 /* ============================================================
+   WALKING.GLB SCREEN GLITCH
+
+   Whole-view glitch burst on both appear AND disappear, so
+   she never just pops in/out cleanly. Reuses the same trick
+   as the standing-monster blackout plane -- a small plane
+   attached right in front of the camera covers the view in
+   both desktop and immersive VR -- but here it holds a
+   handful of flickering bars instead of a solid fade.
+============================================================ */
+
+AFRAME.registerComponent(
+  'rooms-walking-glitch-effect',
+  {
+    init: function () {
+      this.bars = [];
+      this.rig = null;
+      this.rafId = null;
+      this.startedAt = 0;
+      this.duration = 260;
+
+      this.onVisible = this.onVisible.bind(this);
+      this.onHidden = this.onHidden.bind(this);
+
+      this.el.addEventListener(
+        'rooms-walking-monster-visible',
+        this.onVisible
+      );
+
+      this.el.addEventListener(
+        'rooms-walking-monster-hidden',
+        this.onHidden
+      );
+    },
+
+    /* ------------------------------------------------------
+       CAMERA-ATTACHED GLITCH RIG
+
+       Same 0 0 -0.12 trick as the standing blackout plane --
+       close enough to the camera that it fills the view.
+    ------------------------------------------------------ */
+
+    createRig: function () {
+      if (this.rig) {
+        return true;
+      }
+
+      const camera =
+        document.querySelector('#cam') ||
+        document.querySelector('[camera]');
+
+      if (!camera) {
+        return false;
+      }
+
+      const rig = document.createElement('a-entity');
+
+      rig.setAttribute('id', 'roomsWalkingGlitchRig');
+      rig.setAttribute('position', '0 0 -0.12');
+      rig.setAttribute('visible', false);
+
+      camera.appendChild(rig);
+
+      const colors = [
+        '#f2f2f2',
+        '#101010',
+        '#7c1f1f',
+        '#1f3a3f',
+        '#c9c9c9',
+        '#050505'
+      ];
+
+      for (let i = 0; i < colors.length; i++) {
+        const bar = document.createElement('a-plane');
+
+        bar.classList.add('rooms-walking-glitch-bar');
+
+        bar.setAttribute('width', 4.4);
+        bar.setAttribute('height', 0.08);
+        bar.setAttribute('position', `0 0 ${0.0005 * i}`);
+        bar.setAttribute('visible', false);
+
+        bar.setAttribute(
+          'material',
+          `shader: flat; color: ${colors[i]}; opacity: 0; ` +
+          'transparent: true; depthWrite: false; ' +
+          'depthTest: false; side: double'
+        );
+
+        rig.appendChild(bar);
+
+        this.bars.push(bar);
+      }
+
+      this.rig = rig;
+
+      return true;
+    },
+
+    onVisible: function () {
+      this.runGlitch();
+    },
+
+    onHidden: function () {
+      this.runGlitch();
+    },
+
+    /* ------------------------------------------------------
+       BRIEF RANDOMIZED FLICKER
+
+       Re-rolls each bar's visibility, position and opacity
+       every frame for ~260ms, then hides everything again.
+    ------------------------------------------------------ */
+
+    runGlitch: function () {
+      if (!this.createRig()) {
+        return;
+      }
+
+      if (this.rafId !== null) {
+        window.cancelAnimationFrame(this.rafId);
+        this.rafId = null;
+      }
+
+      this.rig.setAttribute('visible', true);
+      this.startedAt = performance.now();
+
+      const step = (now) => {
+        const elapsed = now - this.startedAt;
+
+        if (elapsed >= this.duration) {
+          this.bars.forEach((bar) => {
+            bar.setAttribute('visible', false);
+            bar.setAttribute('material', 'opacity', 0);
+          });
+
+          this.rig.setAttribute('visible', false);
+          this.rafId = null;
+
+          return;
+        }
+
+        this.bars.forEach((bar) => {
+          const show = Math.random() > 0.35;
+
+          bar.setAttribute('visible', show);
+
+          if (!show) {
+            return;
+          }
+
+          const y = (Math.random() - 0.5) * 3.6;
+          const x = (Math.random() - 0.5) * 0.4;
+
+          bar.object3D.position.x = x;
+          bar.object3D.position.y = y;
+
+          bar.setAttribute(
+            'material',
+            'opacity',
+            0.16 + Math.random() * 0.4
+          );
+        });
+
+        this.rafId = window.requestAnimationFrame(step);
+      };
+
+      this.rafId = window.requestAnimationFrame(step);
+    },
+
+    remove: function () {
+      this.el.removeEventListener(
+        'rooms-walking-monster-visible',
+        this.onVisible
+      );
+
+      this.el.removeEventListener(
+        'rooms-walking-monster-hidden',
+        this.onHidden
+      );
+
+      if (this.rafId !== null) {
+        window.cancelAnimationFrame(this.rafId);
+      }
+
+      if (this.rig && this.rig.parentNode) {
+        this.rig.parentNode.removeChild(this.rig);
+      }
+    }
+  }
+);
+
+
+/* ============================================================
+   STANDING.GLB RANDOM FACE SCARE
+
+   Fully independent from the altar-triggered standing.glb
+   scare above (that one still appears once after 2 altar
+   items and vanishes when looked at -- untouched).
+
+   This is a second, separate clone of standing.glb, parented
+   directly to the camera so it always appears right in front
+   of the player's face regardless of where they're looking.
+   It only starts once the incense has been lit (objective 1
+   -- see onIncenseLit()), then pops in at a random interval,
+   stays for exactly 1 second, then hides again -- and keeps
+   repeating for the rest of the playthrough.
+
+   standing.glb's mesh has a large baked offset from its own
+   entity origin (it was exported sitting at its real house
+   position, around x=-6.94). ROOMS_FACE_SCARE_CENTERING
+   below cancels that out so the clone's position attribute
+   can be used normally (0,0,0 = centered on its own two
+   feet) once parented to the camera.
+============================================================ */
+
+const ROOMS_FACE_SCARE_CONFIG = {
+  /*
+    Cancels out standing.glb's baked world offset (measured
+    live from #standingMonster's mesh bounding box) so the
+    clone sits centered on its own feet once parented to the
+    camera. Only touch this if the model is ever re-exported.
+  */
+  centering: {
+    x: 6.94196,
+    z: 0.00465
+  },
+
+  /*
+    Offset from the camera, applied on top of the centering
+    above. z is negative (in front of the camera). y is
+    negative to bring her face up near eye level, since her
+    feet are at her own local y=0 and she's about 1.8m tall.
+  */
+  offsetX: 0,
+  offsetY: -1.62,
+  offsetZ: -0.5,
+
+  /*
+    How long she stays visible each time.
+  */
+  visibleDuration: 1000,
+
+  /*
+    Random gap between scares, re-rolled every time.
+  */
+  minDelay: 60000,
+  maxDelay: 180000,
+
+  /*
+    If gameplay is paused/blocked right when a scare is due,
+    keep re-checking on this short cadence instead of losing
+    the scare entirely or firing mid-pause.
+  */
+  retryDelay: 4000
+};
+
+AFRAME.registerComponent(
+  'rooms-standing-face-scare',
+  {
+    init: function () {
+      this.clone = null;
+      this.timerId = null;
+      this.started = false;
+
+      this.onIncenseLit = this.onIncenseLit.bind(this);
+
+      /*
+        Only starts after the incense is lit (objective 1) --
+        see interaction-prompts.js, which hooks the same two
+        events for the same reason: 'temporary-offering-smoke'
+        on the scene is the real, current lighting action
+        (clicking bantho.glb); 'incense-lit' on #incenseStick
+        is the older stick ritual, kept as a fallback.
+      */
+      this.el.addEventListener(
+        'temporary-offering-smoke',
+        this.onIncenseLit
+      );
+
+      const incenseStick =
+        document.querySelector(
+          '#incenseStick'
+        );
+
+      if (incenseStick) {
+        incenseStick.addEventListener(
+          'incense-lit',
+          this.onIncenseLit
+        );
+      }
+    },
+
+    onIncenseLit: function () {
+      if (this.started) {
+        return;
+      }
+
+      this.started = true;
+
+      this.scheduleNext();
+    },
+
+    /* ------------------------------------------------------
+       CLONE, CENTERED ON THE CAMERA
+    ------------------------------------------------------ */
+
+    createClone: function () {
+      if (this.clone) {
+        return true;
+      }
+
+      const camera =
+        document.querySelector('#cam') ||
+        document.querySelector('[camera]');
+
+      if (!camera) {
+        return false;
+      }
+
+      const clone = document.createElement('a-entity');
+
+      clone.setAttribute('id', 'roomsStandingFaceScare');
+      clone.setAttribute('class', 'rooms-monster');
+
+      clone.setAttribute(
+        'gltf-model',
+        `url(${ROOMS_MONSTER_CONFIG.standingModel})`
+      );
+
+      clone.setAttribute(
+        'position',
+        {
+          x:
+            ROOMS_FACE_SCARE_CONFIG.centering.x +
+            ROOMS_FACE_SCARE_CONFIG.offsetX,
+          y: ROOMS_FACE_SCARE_CONFIG.offsetY,
+          z:
+            ROOMS_FACE_SCARE_CONFIG.centering.z +
+            ROOMS_FACE_SCARE_CONFIG.offsetZ
+        }
+      );
+
+      clone.setAttribute('visible', false);
+
+      camera.appendChild(clone);
+
+      this.clone = clone;
+
+      return true;
+    },
+
+    /* ------------------------------------------------------
+       SCHEDULING
+    ------------------------------------------------------ */
+
+    scheduleNext: function () {
+      if (this.timerId !== null) {
+        window.clearTimeout(this.timerId);
+      }
+
+      const delay =
+        ROOMS_FACE_SCARE_CONFIG.minDelay +
+        Math.random() *
+          (ROOMS_FACE_SCARE_CONFIG.maxDelay -
+            ROOMS_FACE_SCARE_CONFIG.minDelay);
+
+      this.timerId = window.setTimeout(
+        () => {
+          this.attemptScare();
+        },
+        delay
+      );
+    },
+
+    attemptScare: function () {
+      if (
+        roomsMonsterPaused() ||
+        window.roomsInspectionOpen ||
+        (window.roomsMonsterState &&
+          window.roomsMonsterState.standingBlackoutRunning)
+      ) {
+        this.timerId = window.setTimeout(
+          () => {
+            this.attemptScare();
+          },
+          ROOMS_FACE_SCARE_CONFIG.retryDelay
+        );
+
+        return;
+      }
+
+      this.runScare();
+    },
+
+    runScare: function () {
+      if (!this.createClone()) {
+        this.scheduleNext();
+
+        return;
+      }
+
+      this.clone.setAttribute('visible', true);
+
+      console.log('MONSTER: standing.glb face scare.');
+
+      window.setTimeout(
+        () => {
+          if (this.clone) {
+            this.clone.setAttribute('visible', false);
+          }
+
+          this.scheduleNext();
+        },
+        ROOMS_FACE_SCARE_CONFIG.visibleDuration
+      );
+    },
+
+    remove: function () {
+      this.el.removeEventListener(
+        'temporary-offering-smoke',
+        this.onIncenseLit
+      );
+
+      const incenseStick =
+        document.querySelector(
+          '#incenseStick'
+        );
+
+      if (incenseStick) {
+        incenseStick.removeEventListener(
+          'incense-lit',
+          this.onIncenseLit
+        );
+      }
+
+      if (this.timerId !== null) {
+        window.clearTimeout(this.timerId);
+      }
+
+      if (this.clone && this.clone.parentNode) {
+        this.clone.parentNode.removeChild(this.clone);
+      }
+    }
+  }
+);
+
+
+/* ============================================================
    MAIN MONSTER EVENT
 ============================================================ */
 
