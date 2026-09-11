@@ -2,10 +2,12 @@
    SAFE / KEYPAD PUZZLE
 
    #safetybox (safetybox.glb) is a small standalone safe sitting
-   near the TV. A floating numeric keypad spawns just above it.
-   Punch in the 4-digit code shown on the TV screen while it's
-   powered on (see the code-display panel added to embedded-tv
-   in engine-interactions.js) and the safe door swings open.
+   near the TV. Click it (or VR-trigger while aiming at it) and a
+   big camera-attached keypad overlay appears, movement locked
+   while it's up. Click the safe again to back out, or punch in
+   the 4-digit code shown on the TV screen while it's powered on
+   (see the code-display panel added to embedded-tv in engine-
+   interactions.js) and the safe door swings open.
 
    The code is generated once per page load; both the TV and the
    safe read the same value from window.getRoomsSafeCode() so
@@ -20,6 +22,19 @@ const ROOMS_SAFE_KEY_LAYOUT = [
   ['7', '8', '9'],
   ['clr', '0', null]
 ];
+
+/*
+  Camera-local placement/size for the keypad overlay. Everything in
+  buildKeypad() below is laid out at its original small scale (a
+  0.40 x 0.46 panel) -- this just blows the whole group up close to
+  the camera so it reads as a big, legible overlay instead of a
+  tiny floating panel, without having to re-tune every button's own
+  position/size individually.
+*/
+const ROOMS_SAFE_KEYPAD_UI = {
+  position: '0 0 -0.55',
+  scale: '2.4 2.4 2.4'
+};
 
 function getRoomsSafeCode() {
   if (!window.roomsSafeCode) {
@@ -225,12 +240,41 @@ AFRAME.registerComponent(
         return false;
       }
 
+      /*
+        Clicking the safe again while the keypad overlay is already
+        up closes it, same toggle convention as #chair's
+        sitDown()/standUp() -- otherwise there would be no way to
+        back out of a big screen-filling panel without walking into
+        it (movement is locked while it's open).
+      */
+      if (this.keypadRoot) {
+        this.closeKeypad();
+        return true;
+      }
+
       if (!this.modelRoot) {
         return false;
       }
 
       this.buildKeypad(this.modelRoot);
       return true;
+    },
+
+    closeKeypad: function () {
+      if (this.keypadRoot && this.keypadRoot.parentNode) {
+        this.keypadRoot.parentNode.removeChild(this.keypadRoot);
+      }
+
+      this.keypadRoot = null;
+      this.setMovementLocked(false);
+    },
+
+    setMovementLocked: function (locked) {
+      const rig = document.querySelector('#rig');
+
+      if (rig) {
+        rig.setAttribute('movement-controls', 'enabled', !locked);
+      }
     },
 
 
@@ -267,38 +311,33 @@ AFRAME.registerComponent(
         return;
       }
 
-      const box = new THREE.Box3().setFromObject(root);
-      const size = new THREE.Vector3();
-      box.getSize(size);
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-
       /*
-        Anchor the keypad just above the box. safetybox.glb's
-        footprint is small (roughly half a meter on a side) so
-        this keeps the pad right next to it no matter which way
-        the box ends up facing in the room -- not live-tested,
-        nudge the offsets below if it overlaps the model.
+        The keypad used to float in WORLD space just above the safe
+        (a small 0.40 x 0.46 panel), which was hard to read up close
+        in VR. It is now a camera-attached overlay instead -- same
+        "child of #cam" pattern as the quest tracker / dialogue
+        subtitles -- sized and placed close enough that it fills
+        most of the view, so the numbers are actually legible.
       */
-      const worldPos = new THREE.Vector3(
-        center.x,
-        box.max.y + 0.24,
-        center.z
-      );
-
-      const sceneObject = this.el.sceneEl.object3D;
-      sceneObject.updateMatrixWorld(true);
-      const localPos = sceneObject.worldToLocal(worldPos.clone());
+      const camera =
+        document.querySelector('#cam') ||
+        document.querySelector('[camera]');
 
       const wrapper = document.createElement('a-entity');
       wrapper.setAttribute('id', 'safetyKeypad');
-      wrapper.setAttribute(
-        'position',
-        `${localPos.x} ${localPos.y} ${localPos.z}`
-      );
+      wrapper.setAttribute('position', ROOMS_SAFE_KEYPAD_UI.position);
+      wrapper.setAttribute('scale', ROOMS_SAFE_KEYPAD_UI.scale);
 
-      this.el.sceneEl.appendChild(wrapper);
+      (camera || this.el.sceneEl).appendChild(wrapper);
       this.keypadRoot = wrapper;
+
+      /*
+        A big overlay parked right in front of the camera makes it
+        impossible to see where you're walking, so lock movement
+        the same way sitting in #chair does -- released again in
+        closeKeypad() / after the safe opens.
+      */
+      this.setMovementLocked(true);
 
       const panel = document.createElement('a-plane');
       panel.setAttribute('width', '0.40');
@@ -479,9 +518,7 @@ AFRAME.registerComponent(
       console.log('Safe opened!');
 
       window.setTimeout(() => {
-        if (this.keypadRoot && this.keypadRoot.parentNode) {
-          this.keypadRoot.parentNode.removeChild(this.keypadRoot);
-        }
+        this.closeKeypad();
       }, 1400);
     },
 
@@ -551,8 +588,8 @@ AFRAME.registerComponent(
       this.el.removeEventListener('model-loaded', this.onModelLoaded);
       this.el.removeEventListener('click', this.activateSafe);
 
-      if (this.keypadRoot && this.keypadRoot.parentNode) {
-        this.keypadRoot.parentNode.removeChild(this.keypadRoot);
+      if (this.keypadRoot) {
+        this.closeKeypad();
       }
     }
   }

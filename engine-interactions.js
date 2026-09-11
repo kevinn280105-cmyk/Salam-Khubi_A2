@@ -21,6 +21,44 @@ function roomsGameplayInputLocked() {
   return Boolean(window.roomsInputLocked || window.roomsPaused);
 }
 
+/*
+  Several room props (bantho, truocbantho, the door, chair, the
+  sitting figure) bake their real position directly into the
+  loaded mesh's own vertex data instead of carrying it on the
+  entity's transform -- the wrapping <a-entity> stays at
+  "position: 0 0 0" while the model visually sits elsewhere.
+  entity.object3D.getWorldPosition() reads back as the origin for
+  those regardless of where they actually are. A bounding-box
+  center is correct either way (baked-vertex or a normal
+  transform), so use this instead of getWorldPosition() for any
+  prop that might be one of these baked assets.
+*/
+function roomsWorldCenter(entity) {
+  if (!entity) {
+    return null;
+  }
+
+  const mesh = entity.getObject3D('mesh') || entity.object3D;
+
+  if (!mesh) {
+    return null;
+  }
+
+  mesh.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(mesh);
+
+  if (box.isEmpty()) {
+    const pos = new THREE.Vector3();
+    entity.object3D.getWorldPosition(pos);
+    return pos;
+  }
+
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  return center;
+}
+
 function isImmersiveXRScene(scene) {
   return Boolean(
     scene &&
@@ -3168,28 +3206,46 @@ AFRAME.registerComponent(
       rig.setAttribute('movement-controls', 'enabled', false);
 
       /*
-        Snap onto the chair, facing whichever way chair.glb
-        was baked to face -- same 'trust the baked transform'
-        convention used for every other model in this scene.
-        NEEDS LIVE CONFIRMATION once chair.glb actually exists
-        and is positioned opposite #sittingFigure.
+        Snap onto the chair -- see roomsWorldCenter() above for why
+        this reads the box center instead of the entity's own
+        getWorldPosition(). Facing: point the rig directly at
+        #sittingFigure's real position instead of trying to recover
+        "which way chair.glb was baked to face" (not actually
+        possible once the offset is baked into vertex data rather
+        than a transform) -- this guarantees the player ends up
+        looking at the ghost, which is the actual point of sitting
+        down, regardless of which way the chair prop itself faces.
       */
-      const chairPos = new THREE.Vector3();
-      this.el.object3D.getWorldPosition(chairPos);
+      const chairCenter = roomsWorldCenter(this.el) || new THREE.Vector3();
 
-      const chairQuat = new THREE.Quaternion();
-      this.el.object3D.getWorldQuaternion(chairQuat);
+      /*
+        Confirmed live: quest-room-collider runs every tick and, since
+        sitting the player down at the chair's own center overlaps the
+        chair's solid collision geometry, it was immediately shoving
+        the rig back out -- all the way back to the spawn point, since
+        the seated spot reads as fully stuck. Pause the collider while
+        seated (movement-controls is already disabled the same way)
+        and resume it in standUp().
+      */
+      const collider = rig.components['quest-room-collider'];
 
-      const chairEuler = new THREE.Euler().setFromQuaternion(
-        chairQuat,
-        'YXZ'
-      );
+      if (collider && typeof collider.pause === 'function') {
+        collider.pause();
+      }
 
-      rig.object3D.position.x = chairPos.x;
-      rig.object3D.position.z = chairPos.z;
-      rig.object3D.rotation.y = chairEuler.y;
+      rig.object3D.position.x = chairCenter.x;
+      rig.object3D.position.z = chairCenter.z;
 
       const ghost = document.querySelector('#sittingFigure');
+
+      const ghostCenter = roomsWorldCenter(ghost);
+
+      if (ghostCenter) {
+        const dx = ghostCenter.x - chairCenter.x;
+        const dz = ghostCenter.z - chairCenter.z;
+
+        rig.object3D.rotation.y = Math.atan2(-dx, -dz);
+      }
 
       const ghostPresent = Boolean(
         ghost && ghost.getAttribute('visible')
@@ -3236,6 +3292,12 @@ AFRAME.registerComponent(
 
       if (rig) {
         rig.setAttribute('movement-controls', 'enabled', true);
+
+        const collider = rig.components['quest-room-collider'];
+
+        if (collider && typeof collider.play === 'function') {
+          collider.play();
+        }
       }
 
       this.el.sceneEl.emit('player-stood-from-chair', {}, false);
@@ -3373,6 +3435,60 @@ AFRAME.registerComponent(
     }
   }
 );
+
+
+/* ============================================================
+   CHAIR SETUP
+
+   embedded-chair / vr-chair-interactor above were both wired up
+   but never actually connected to anything: #chair was missing
+   from every raycaster's "objects" selector (desktop cursor AND
+   #rightHand), so neither a mouse click nor a VR trigger pull
+   could ever register as hitting it, and vr-chair-interactor was
+   never attached to #rightHand in the first place. Same fix as
+   setupSafetyBoxInteractions() in safe.js.
+============================================================ */
+
+function setupChairInteractions() {
+  const rightHand = document.querySelector('#rightHand');
+  const cursor = document.querySelector('a-cursor');
+
+  if (typeof appendRaycasterObjectSelector === 'function') {
+    appendRaycasterObjectSelector(rightHand, '#chair');
+    appendRaycasterObjectSelector(cursor, '#chair');
+  }
+
+  if (
+    rightHand &&
+    !rightHand.hasAttribute('vr-chair-interactor')
+  ) {
+    rightHand.setAttribute('vr-chair-interactor', '');
+  }
+
+  console.log(
+    'Chair interactions ready: chair.glb click/trigger wired up.'
+  );
+}
+
+
+window.addEventListener('DOMContentLoaded', () => {
+  const scene = document.querySelector('a-scene');
+
+  if (!scene) {
+    return;
+  }
+
+  if (scene.hasLoaded) {
+    setupChairInteractions();
+
+  } else {
+    scene.addEventListener(
+      'loaded',
+      setupChairInteractions,
+      { once: true }
+    );
+  }
+});
 
 
 /* ============================================================

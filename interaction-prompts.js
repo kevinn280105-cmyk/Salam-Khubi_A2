@@ -14,6 +14,7 @@
    - Picture = INSPECT PICTURE.
    - TV = TURN ON TV / TURN OFF TV.
    - Altar = LIGHT THE INCENSE.
+   - Chair = SIT ON CHAIR / STAND UP.
 
    Quest-item description behavior:
    - DO NOT click or press Trigger to open a description.
@@ -1083,6 +1084,13 @@ function roomsActionTypeForElement(
       return 'incense';
     }
 
+    if (
+      current.id ===
+        'chair'
+    ) {
+      return 'chair';
+    }
+
     current =
       current.parentElement;
   }
@@ -1261,6 +1269,28 @@ function roomsGetTVComponent() {
 }
 
 
+function roomsGetChairComponent() {
+  const chair =
+    document.querySelector(
+      '#chair'
+    );
+
+  if (
+    chair &&
+    chair.components &&
+    chair.components[
+      'embedded-chair'
+    ]
+  ) {
+    return chair.components[
+      'embedded-chair'
+    ];
+  }
+
+  return null;
+}
+
+
 function roomsGetIncenseComponent() {
   const altar =
     document.querySelector(
@@ -1364,6 +1394,21 @@ function roomsGetActionPromptText(
     }
 
     return 'LIGHT THE INCENSE';
+  }
+
+  if (
+    target.type ===
+    'chair'
+  ) {
+    const chair =
+      roomsGetChairComponent();
+
+    return (
+      chair &&
+      chair.seated
+    )
+      ? 'STAND UP'
+      : 'SIT ON CHAIR';
   }
 
   return '';

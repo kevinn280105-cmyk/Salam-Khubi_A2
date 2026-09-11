@@ -168,10 +168,11 @@ AFRAME.registerComponent(
 
       this.tryBuild = this.tryBuild.bind(this);
       this.updatePlacement = this.updatePlacement.bind(this);
+      this.onEnterVR = this.onEnterVR.bind(this);
 
       roomsDialogueSubtitleInstance = this;
 
-      this.el.sceneEl.addEventListener('enter-vr', this.updatePlacement);
+      this.el.sceneEl.addEventListener('enter-vr', this.onEnterVR);
       this.el.sceneEl.addEventListener('exit-vr', this.updatePlacement);
 
       if (this.el.sceneEl.hasLoaded) {
@@ -280,6 +281,25 @@ AFRAME.registerComponent(
     },
 
     /*
+      A single updatePlacement() call exactly when 'enter-vr' fires
+      was not reliable in practice -- the very first time entering a
+      real headset session, the text could stay invisible until the
+      player exited and re-entered VR (by which point a second
+      enter-vr already happened to line up correctly). Retrying at
+      several delays is the same fix interaction-prompts.js already
+      uses for the quest tracker's own onEnterVR, for what is likely
+      the same underlying flakiness (matrices / renderer.xr state not
+      fully settled the instant the event fires).
+    */
+    onEnterVR: function () {
+      [0, 50, 250, 600].forEach((delay) => {
+        window.setTimeout(() => {
+          this.updatePlacement();
+        }, delay);
+      });
+    },
+
+    /*
       Swap position/scale whenever the XR presenting state changes,
       same trigger interaction-prompts.js uses for the quest tracker.
     */
@@ -354,6 +374,16 @@ AFRAME.registerComponent(
 
     showLine: function (text, opts) {
       this.showing = true;
+
+      /*
+        Defensive re-sync: re-check desktop-vs-VR placement every time a
+        line is about to show, not just on the enter-vr/exit-vr events.
+        If the XR session state ever changes without that event firing
+        cleanly (or fires before this component exists yet), this still
+        catches it before the next line goes up instead of leaving the
+        panel stuck in the wrong spot for the rest of the game.
+      */
+      this.updatePlacement();
 
       this.text.setAttribute('value', text);
 
@@ -496,7 +526,7 @@ AFRAME.registerComponent(
         window.clearTimeout(this.advanceTimer);
       }
 
-      this.el.sceneEl.removeEventListener('enter-vr', this.updatePlacement);
+      this.el.sceneEl.removeEventListener('enter-vr', this.onEnterVR);
       this.el.sceneEl.removeEventListener('exit-vr', this.updatePlacement);
 
       if (roomsDialogueSubtitleInstance === this) {
