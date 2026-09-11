@@ -1243,6 +1243,192 @@ async function exitRoomsWithin() {
 
 
 /* ============================================================
+   MAIN MENU LOADING PROGRESS
+
+   The START button used to be clickable the instant the page
+   rendered, even though the room is built from a dozen-plus
+   .glb models (tens of megabytes total) that keep streaming in
+   for a while after that -- so a player could hit START and
+   land in a half-built / black room with no way to tell whether
+   the game was still loading or just broken.
+
+   This tracks every [gltf-model] entity in the scene (the ones
+   already in index.html, plus a short window for the handful
+   monster.js creates dynamically right at startup) and keeps
+   START hidden behind a "LOADING... N%" bar until they have all
+   settled -- loaded OR errored, so one bad asset cannot soft-
+   lock the menu forever.
+============================================================ */
+
+let roomsAssetsReady = false;
+
+
+function roomsSetupMainMenuLoading() {
+  const loadingWrap =
+    document.querySelector('#mainMenuLoadingWrap');
+
+  const loadingLabel =
+    document.querySelector('#mainMenuLoadingLabel');
+
+  const loadingBarFill =
+    document.querySelector('#mainMenuLoadingBarFill');
+
+  const startButton =
+    document.querySelector('#mainMenuStartButton');
+
+  const tracked = new Set();
+
+  let settledCount = 0;
+
+  let totalCount = 0;
+
+  let finalized = false;
+
+
+  const updateUI = () => {
+    const percent =
+      totalCount > 0 ?
+        Math.min(
+          100,
+          Math.round((settledCount / totalCount) * 100)
+        ) :
+        100;
+
+    if (loadingLabel) {
+      loadingLabel.textContent =
+        'LOADING... ' + percent + '%';
+    }
+
+    if (loadingBarFill) {
+      loadingBarFill.style.width = percent + '%';
+    }
+
+    if (
+      finalized &&
+      percent >= 100 &&
+      !roomsAssetsReady
+    ) {
+      roomsAssetsReady = true;
+
+      if (loadingWrap) {
+        loadingWrap.classList.add('mm-hidden');
+      }
+
+      if (startButton) {
+        startButton.classList.remove('mm-hidden');
+      }
+    }
+  };
+
+
+  const trackEntity = (entity) => {
+    if (
+      !entity ||
+      tracked.has(entity)
+    ) {
+      return;
+    }
+
+    tracked.add(entity);
+
+    totalCount += 1;
+
+    const alreadyLoaded =
+      entity.getObject3D &&
+      entity.getObject3D('mesh');
+
+    if (alreadyLoaded) {
+      settledCount += 1;
+
+      updateUI();
+
+      return;
+    }
+
+    const onSettled = () => {
+      settledCount += 1;
+
+      entity.removeEventListener('model-loaded', onSettled);
+
+      entity.removeEventListener('model-error', onSettled);
+
+      updateUI();
+    };
+
+    entity.addEventListener('model-loaded', onSettled);
+
+    entity.addEventListener('model-error', onSettled);
+  };
+
+
+  document
+    .querySelectorAll('[gltf-model]')
+    .forEach(trackEntity);
+
+
+  const observer =
+    new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (!node.querySelectorAll) {
+            return;
+          }
+
+          if (
+            node.hasAttribute &&
+            node.hasAttribute('gltf-model')
+          ) {
+            trackEntity(node);
+          }
+
+          node
+            .querySelectorAll('[gltf-model]')
+            .forEach(trackEntity);
+        });
+      });
+    });
+
+  observer.observe(
+    document.body,
+    {
+      childList: true,
+      subtree: true
+    }
+  );
+
+
+  /*
+    monster.js re-runs its own setup at 100/400/1000/2000ms after
+    startup, so give it that same window before locking the total
+    in -- after that, whatever is tracked is what the bar counts
+    toward.
+  */
+  window.setTimeout(
+    () => {
+      observer.disconnect();
+
+      finalized = true;
+
+      updateUI();
+    },
+    2200
+  );
+
+  updateUI();
+}
+
+
+if (document.readyState === 'loading') {
+  document.addEventListener(
+    'DOMContentLoaded',
+    roomsSetupMainMenuLoading
+  );
+} else {
+  roomsSetupMainMenuLoading();
+}
+
+
+/* ============================================================
    MAIN MENU (PRE-GAME TITLE SCREEN)
 
    #mainMenuOverlay (index.html) sits on top of everything else,
@@ -1257,7 +1443,10 @@ let roomsMainMenuStarted = false;
 
 
 async function startRoomsFromMainMenu() {
-  if (roomsMainMenuStarted) {
+  if (
+    roomsMainMenuStarted ||
+    !roomsAssetsReady
+  ) {
     return;
   }
 

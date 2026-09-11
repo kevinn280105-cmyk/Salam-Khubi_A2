@@ -536,6 +536,75 @@
 
     }
 
+
+    .mm-hidden {
+
+      display: none !important;
+
+    }
+
+
+    #mainMenuLoadingWrap {
+
+      position: relative;
+
+      z-index: 1;
+
+      margin-top: 400px;
+
+      display: flex;
+
+      flex-direction: column;
+
+      align-items: center;
+
+      gap: 14px;
+
+    }
+
+
+    #mainMenuLoadingLabel {
+
+      color: #ffffff;
+
+      font: 700 15px Arial, sans-serif;
+
+      letter-spacing: 3px;
+
+      opacity: 0.85;
+
+    }
+
+
+    #mainMenuLoadingBarOuter {
+
+      width: 220px;
+
+      height: 4px;
+
+      background: rgba(255, 255, 255, 0.15);
+
+      border-radius: 2px;
+
+      overflow: hidden;
+
+    }
+
+
+    #mainMenuLoadingBarFill {
+
+      display: block;
+
+      height: 100%;
+
+      width: 0%;
+
+      background: rgba(200, 40, 40, 0.9);
+
+      transition: width 0.2s ease;
+
+    }
+
   </style>
 
 
@@ -602,6 +671,8 @@
 
       id="mainMenuStartButton"
 
+      class="mm-hidden"
+
       type="button"
 
       onclick="startRoomsFromMainMenu()">
@@ -609,6 +680,18 @@
       START
 
     </button>
+
+    <div id="mainMenuLoadingWrap">
+
+      <div id="mainMenuLoadingLabel">LOADING... 0%</div>
+
+      <div id="mainMenuLoadingBarOuter">
+
+        <div id="mainMenuLoadingBarFill"></div>
+
+      </div>
+
+    </div>
 
   </div>
 

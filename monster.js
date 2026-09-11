@@ -1316,11 +1316,33 @@ const ROOMS_FACE_SCARE_CONFIG = {
     live from #standingMonster's mesh bounding box) so the
     clone sits centered on its own feet once parented to the
     camera. Only touch this if the model is ever re-exported.
+
+    This lives on an INNER entity (see createClone()), not the
+    outer camera-facing one -- rotating the outer entity directly
+    with this offset baked into its own position would swing the
+    mesh way out to the side (rotation pivots around the entity's
+    own origin, and this offset is ~7m). Splitting it into an
+    outer pivot (camera offset + facing rotation) and an inner
+    entity (this centering offset + the model, no rotation) keeps
+    the mesh visually pinned in place while the outer pivot spins
+    it to face the camera.
   */
   centering: {
     x: 6.94196,
     z: 0.00465
   },
+
+  /*
+    standing.glb's front is baked facing away from the camera by
+    default (same root cause as the centering offset above), so
+    without this she shows up back-of-head-first. This is the
+    yaw (degrees, applied to the outer pivot) that turns her to
+    face the camera instead -- measured live the same way
+    updateStandingLookAt() computes her "front" direction
+    elsewhere in this file. Only touch this if standing.glb is
+    ever re-exported.
+  */
+  facingYaw: -64.266,
 
   /*
     Offset from the camera, applied on top of the centering
@@ -1414,30 +1436,60 @@ AFRAME.registerComponent(
         return false;
       }
 
+      /*
+        OUTER PIVOT -- lives at the camera offset and owns the
+        facing rotation. Its own local origin is exactly where
+        the model should visually appear, so rotating it spins
+        the model in place instead of swinging it off to the
+        side (see the comment on ROOMS_FACE_SCARE_CONFIG.centering).
+      */
       const clone = document.createElement('a-entity');
 
       clone.setAttribute('id', 'roomsStandingFaceScare');
       clone.setAttribute('class', 'rooms-monster');
 
       clone.setAttribute(
-        'gltf-model',
-        `url(${ROOMS_MONSTER_CONFIG.standingModel})`
+        'position',
+        {
+          x: ROOMS_FACE_SCARE_CONFIG.offsetX,
+          y: ROOMS_FACE_SCARE_CONFIG.offsetY,
+          z: ROOMS_FACE_SCARE_CONFIG.offsetZ
+        }
       );
 
       clone.setAttribute(
-        'position',
+        'rotation',
         {
-          x:
-            ROOMS_FACE_SCARE_CONFIG.centering.x +
-            ROOMS_FACE_SCARE_CONFIG.offsetX,
-          y: ROOMS_FACE_SCARE_CONFIG.offsetY,
-          z:
-            ROOMS_FACE_SCARE_CONFIG.centering.z +
-            ROOMS_FACE_SCARE_CONFIG.offsetZ
+          x: 0,
+          y: ROOMS_FACE_SCARE_CONFIG.facingYaw,
+          z: 0
         }
       );
 
       clone.setAttribute('visible', false);
+
+      /*
+        INNER ENTITY -- cancels standing.glb's baked offset and
+        holds the actual model. No rotation of its own, so the
+        outer pivot above is free to spin without moving it.
+      */
+      const model = document.createElement('a-entity');
+
+      model.setAttribute(
+        'position',
+        {
+          x: ROOMS_FACE_SCARE_CONFIG.centering.x,
+          y: 0,
+          z: ROOMS_FACE_SCARE_CONFIG.centering.z
+        }
+      );
+
+      model.setAttribute(
+        'gltf-model',
+        `url(${ROOMS_MONSTER_CONFIG.standingModel})`
+      );
+
+      clone.appendChild(model);
 
       camera.appendChild(clone);
 
