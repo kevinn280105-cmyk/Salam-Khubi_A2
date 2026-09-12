@@ -109,8 +109,30 @@ function objectBelongsToEntitySubtree(hitObject, entity) {
   return false;
 }
 
-function appendRaycasterObjectSelector(entity, selector) {
+function appendRaycasterObjectSelector(entity, selector, attempt) {
   if (!entity || !selector) return;
+
+  const raycaster =
+    entity.components &&
+    entity.components.raycaster;
+
+  /*
+    Same fix as roomsStoryAppendRaySelector (story.js): reading
+    getAttribute('raycaster') before this component has finished
+    initializing returns schema defaults, not the objects list
+    actually declared in index.html -- appending onto that and
+    writing it back wipes out every selector already there. Wait
+    for component.data (real init done) before touching it.
+  */
+  if (!raycaster || !raycaster.data) {
+    if ((attempt || 0) < 20) {
+      window.setTimeout(() => {
+        appendRaycasterObjectSelector(entity, selector, (attempt || 0) + 1);
+      }, 100);
+    }
+
+    return;
+  }
 
   const data =
     entity.getAttribute('raycaster') || {};
@@ -131,13 +153,7 @@ function appendRaycasterObjectSelector(entity, selector) {
     selectors.join(', ')
   );
 
-  const raycaster =
-    entity.components.raycaster;
-
-  if (
-    raycaster &&
-    raycaster.refreshObjects
-  ) {
+  if (raycaster.refreshObjects) {
     raycaster.refreshObjects();
   }
 }

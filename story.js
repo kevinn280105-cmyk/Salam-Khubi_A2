@@ -709,12 +709,65 @@ function roomsStoryIntersectionBelongsToEntity(
 
 function roomsStoryAppendRaySelector(
   rayEntity,
-  selector
+  selector,
+  attempt
 ) {
   if (
     !rayEntity ||
     !selector
   ) {
+    return;
+  }
+
+  const component =
+    rayEntity.components &&
+    rayEntity.components
+      .raycaster;
+
+  /*
+    FIX: this can run very early (story-manager's own init(),
+    which can fire before #rightHand's raycaster component has
+    finished ITS init -- the component object already exists in
+    rayEntity.components at that point, but component.data isn't
+    populated yet).
+
+    That used to matter only for the refreshObjects() crash
+    below, but it turns out to be much worse than that:
+    rayEntity.getAttribute('raycaster') on a component that
+    hasn't finished initializing returns SCHEMA DEFAULTS, not
+    the objects list actually declared in index.html. Reading
+    that empty default, appending one selector, and writing it
+    back was silently wiping out every selector already on
+    #rightHand/#cursor -- #door, [natural-grabbable],
+    .mirror-interactable, .vr-control -- on every single load,
+    which is why the door, natural grabbing, the mirror and
+    every VR 3D button (pause menu, controls panel) could go
+    dead in a real headset despite looking fine on desktop.
+
+    Fix: wait for component.data to exist (component actually
+    finished initializing) before touching the attribute AT ALL,
+    same retry cadence as the staggered setTimeout schedules
+    used all over this codebase for exactly this kind of race.
+  */
+  if (
+    !component ||
+    !component.data
+  ) {
+    if (
+      (attempt || 0) < 20
+    ) {
+      window.setTimeout(
+        () => {
+          roomsStoryAppendRaySelector(
+            rayEntity,
+            selector,
+            (attempt || 0) + 1
+          );
+        },
+        100
+      );
+    }
+
     return;
   }
 
@@ -754,30 +807,7 @@ function roomsStoryAppendRaySelector(
     )
   );
 
-  const component =
-    rayEntity.components &&
-    rayEntity.components
-      .raycaster;
-
-  /*
-    FIX: this can run very early (story-manager's own init(),
-    which can fire before #rightHand's raycaster component has
-    finished ITS init -- the component object already exists in
-    rayEntity.components at that point, but component.data isn't
-    populated yet). Calling refreshObjects() on it then throws
-    "Cannot read properties of undefined (reading 'objects')"
-    inside A-Frame's raycaster code -- this was an UNCAUGHT
-    exception that killed the rest of story-manager's init() on
-    every load, silently disabling item placement entirely (this
-    is the same error that's been showing up in the console this
-    whole time). setAttribute() above already queues the real
-    update for whenever the component actually finishes
-    initializing, so it's safe to just skip the immediate
-    refresh when the component isn't ready for it yet.
-  */
   if (
-    component &&
-    component.data &&
     component.refreshObjects
   ) {
     component.refreshObjects();

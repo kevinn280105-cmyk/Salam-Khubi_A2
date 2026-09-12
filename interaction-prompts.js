@@ -969,12 +969,50 @@ function roomsGetRayTarget(
 
 function roomsAppendRaySelector(
   rayEntity,
-  selector
+  selector,
+  attempt
 ) {
   if (
     !rayEntity ||
     !selector
   ) {
+    return;
+  }
+
+  const component =
+    rayEntity.components &&
+    rayEntity.components
+      .raycaster;
+
+  /*
+    Same fix as roomsStoryAppendRaySelector (story.js) and
+    appendRaycasterObjectSelector (engine-interactions.js):
+    reading getAttribute('raycaster') before this component has
+    finished initializing returns schema defaults, not the
+    objects list actually declared in index.html -- appending
+    onto that and writing it back wipes out every selector
+    already there. Wait for component.data (real init done)
+    before touching it at all.
+  */
+  if (
+    !component ||
+    !component.data
+  ) {
+    if (
+      (attempt || 0) < 20
+    ) {
+      window.setTimeout(
+        () => {
+          roomsAppendRaySelector(
+            rayEntity,
+            selector,
+            (attempt || 0) + 1
+          );
+        },
+        100
+      );
+    }
+
     return;
   }
 
@@ -1016,13 +1054,7 @@ function roomsAppendRaySelector(
     )
   );
 
-  const component =
-    rayEntity.components &&
-    rayEntity.components
-      .raycaster;
-
   if (
-    component &&
     component.refreshObjects
   ) {
     component
