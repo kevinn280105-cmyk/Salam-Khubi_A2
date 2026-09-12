@@ -1530,21 +1530,98 @@ async function startRoomsFromMainMenu() {
   }
 
   /*
-    Intro lines -- the player's very first moment in the game,
-    right after the main menu overlay is dismissed.
+    VR controller instructions -- shown first, in a real headset
+    only (#vrControlsPanel, index.html), using the player's own
+    controller diagram. The intro story lines are queued once
+    the player closes it (closeRoomsControlsPanel() below) so
+    they never overlap on screen. Desktop skips straight to the
+    story lines -- it already explains itself via mouse + click
+    and the on-screen action prompts.
   */
   window.setTimeout(
     () => {
-      if (typeof roomsQueueDialogueLine === 'function') {
-        roomsQueueDialogueLine('Where am I? What is this place?');
-
-        roomsQueueDialogueLine(
-          'There is something wrong with this place, better get the hell out of here quickly.'
-        );
+      if (hasImmersiveXRSession(scene)) {
+        showRoomsControlsPanel();
+      } else {
+        roomsQueueIntroLines();
       }
     },
     400
   );
+}
+
+
+let roomsIntroLinesQueued = false;
+
+
+function roomsQueueIntroLines() {
+  if (
+    roomsIntroLinesQueued ||
+    typeof roomsQueueDialogueLine !== 'function'
+  ) {
+    return;
+  }
+
+  roomsIntroLinesQueued = true;
+
+  roomsQueueDialogueLine('Where am I? What is this place?');
+
+  roomsQueueDialogueLine(
+    'There is something wrong with this place, better get the hell out of here quickly.'
+  );
+}
+
+
+/* ============================================================
+   VR CONTROLLER INSTRUCTIONS PANEL
+
+   #vrControlsPanel (index.html) shows the controller diagram
+   image the player supplied, camera-attached like #vrPausePanel
+   right next to it. Movement is locked while it is up (same
+   setAttribute('movement-controls', 'enabled', ...) toggle safe.js
+   uses for the keypad) so the player is not wandering blind while
+   reading it. CLOSE works on desktop through the normal cursor +
+   onclick, and in VR through the vr-ui-interactor hit-check added
+   alongside its pause-menu buttons further down this file.
+============================================================ */
+
+function showRoomsControlsPanel() {
+  const panel =
+    document.querySelector('#vrControlsPanel');
+
+  if (!panel) {
+    roomsQueueIntroLines();
+
+    return;
+  }
+
+  panel.setAttribute('visible', true);
+
+  const rig =
+    document.querySelector('#rig');
+
+  if (rig) {
+    rig.setAttribute('movement-controls', 'enabled', false);
+  }
+}
+
+
+function closeRoomsControlsPanel() {
+  const panel =
+    document.querySelector('#vrControlsPanel');
+
+  if (panel) {
+    panel.setAttribute('visible', false);
+  }
+
+  const rig =
+    document.querySelector('#rig');
+
+  if (rig) {
+    rig.setAttribute('movement-controls', 'enabled', true);
+  }
+
+  roomsQueueIntroLines();
 }
 
 
@@ -1572,6 +1649,9 @@ window.setRoomsPaused =
 
 window.syncRoomsPauseUI =
   syncPauseUI;
+
+window.closeRoomsControlsPanel =
+  closeRoomsControlsPanel;
 
 
 /* ============================================================
@@ -1949,6 +2029,30 @@ AFRAME.registerComponent(
 
       if (hit(pauseButton)) {
         toggleRoomsPauseMenu();
+        return;
+      }
+
+      /*
+        Controller instructions panel -- independent of the
+        pause menu, so check it before the pausePanel-visible
+        gate below shuts everything else out.
+      */
+      const controlsPanel =
+        document.querySelector(
+          '#vrControlsPanel'
+        );
+
+      const controlsCloseButton =
+        document.querySelector(
+          '#vrControlsCloseButton'
+        );
+
+      if (
+        controlsPanel &&
+        controlsPanel.getAttribute('visible') &&
+        hit(controlsCloseButton)
+      ) {
+        closeRoomsControlsPanel();
         return;
       }
 

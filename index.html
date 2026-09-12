@@ -2258,6 +2258,103 @@
 
 
         <!-- ==================================================
+             VR CONTROLLER INSTRUCTIONS PANEL
+
+             User-supplied controller diagram, shown once right
+             after the player hits START in a real headset (see
+             startRoomsFromMainMenu() / showRoomsControlsPanel()
+             in ui-scare.js). Same camera-attached pattern as
+             #vrPausePanel above -- CLOSE works on desktop via
+             the normal cursor + onclick, and in VR via the
+             vr-ui-interactor hit-check added alongside its
+             pause-menu buttons.
+        =================================================== -->
+
+        <a-entity
+
+          id="vrControlsPanel"
+
+          visible="false"
+
+          position="0 0 -1.5">
+
+
+          <a-plane
+
+            width="1.8"
+
+            height="1.4"
+
+            material="
+              color: #111318;
+              opacity: 0.95;
+              transparent: true;
+              shader: flat;
+              side: double
+            ">
+
+          </a-plane>
+
+
+          <a-image
+
+            src="Instrcution.jpg"
+
+            width="1.6"
+
+            height="1.048"
+
+            position="0 0.096 0.01">
+
+          </a-image>
+
+
+          <!-- CLOSE -->
+
+          <a-plane
+
+            id="vrControlsCloseButton"
+
+            class="vr-control"
+
+            onclick="
+              closeRoomsControlsPanel()
+            "
+
+            width="0.36"
+
+            height="0.11"
+
+            position="0 -0.563 0.01"
+
+            material="
+              color: #6c2424;
+              shader: flat;
+              side: double
+            ">
+
+          </a-plane>
+
+
+          <a-text
+
+            value="CLOSE"
+
+            align="center"
+
+            width="1.6"
+
+            position="0 -0.563 0.02"
+
+            color="#ffffff">
+
+          </a-text>
+
+
+        </a-entity>
+
+
+        <!-- ==================================================
              DESKTOP HOLD
         =================================================== -->
 
