@@ -408,13 +408,29 @@ AFRAME.registerComponent(
         measuring immediately after setAttribute can still report the
         PREVIOUS line's size. Resize the panel to fit, THEN reveal it, so
         the player never sees a wrong-sized panel snap to the right size.
+
+        Uses window.roomsFrameSetTimeout instead of raw
+        requestAnimationFrame/setTimeout throughout this method --
+        window.requestAnimationFrame and window.setTimeout are both
+        throttled or fully paused by the browser whenever the desktop
+        window loses OS focus, even mid-VR-session. Confirmed live: with
+        the desktop window unfocused in VR, dialogue lines would set
+        their text value but then sit invisible forever (the two
+        requestAnimationFrame calls below never fired to reveal the
+        panel), and the queue would never advance to the next line
+        either (hideTimer/advanceTimer never fired) -- until the player
+        clicked back into the browser tab, at which point everything
+        that had been silently queuing up all fired at once.
+        window.roomsFrameSetTimeout (ui-scare.js) rides A-Frame's own
+        tick loop instead, which keeps running at full rate in VR
+        regardless of desktop focus.
       */
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
+      window.roomsFrameSetTimeout(() => {
+        window.roomsFrameSetTimeout(() => {
           this.resizePanelToFit();
           roomsSetVisible(this.root, true);
-        });
-      });
+        }, 0);
+      }, 0);
 
       const holdMs =
         opts && opts.holdMs
@@ -422,17 +438,17 @@ AFRAME.registerComponent(
           : roomsDialogueHoldMs(text);
 
       if (this.hideTimer) {
-        window.clearTimeout(this.hideTimer);
+        window.roomsFrameClearTimeout(this.hideTimer);
       }
 
       if (this.advanceTimer) {
-        window.clearTimeout(this.advanceTimer);
+        window.roomsFrameClearTimeout(this.advanceTimer);
       }
 
-      this.hideTimer = window.setTimeout(() => {
+      this.hideTimer = window.roomsFrameSetTimeout(() => {
         roomsSetVisible(this.root, false);
 
-        this.advanceTimer = window.setTimeout(() => {
+        this.advanceTimer = window.roomsFrameSetTimeout(() => {
           this.showing = false;
           this.pump();
         }, ROOMS_DIALOGUE_CONFIG.gapMs);

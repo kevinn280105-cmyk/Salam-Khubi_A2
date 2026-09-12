@@ -125,52 +125,173 @@ function getPauseUIMode(scene) {
 
 
 /* ============================================================
+   FOCUS-PROOF FRAME CLOCK
+
+   window.requestAnimationFrame (what waitRoomsMilliseconds used to
+   run on below, and what several ad-hoc fade loops elsewhere still
+   use directly) is throttled or fully paused by the browser the
+   moment the desktop window loses OS-level focus -- confirmed live:
+   in VR, if the desktop browser window isn't the focused app (the
+   player only has the headset on and never clicked back into the
+   tab), every one of those callbacks stalls until the player clicks
+   back into the browser. That explains dialogue lines never
+   advancing, the standing.glb kitchen blackout sequence never
+   finishing, and sitting.glb never appearing (its reveal waits on
+   the standing sequence's blackout finishing first).
+
+   A-Frame's own per-entity tick(time, deltaTime) does not have this
+   problem: while a WebXR session is presenting, three.js drives the
+   render loop via XRSession.requestAnimationFrame, which the
+   headset's compositor keeps running at full rate regardless of the
+   desktop window's OS focus (it has to -- that is what keeps the
+   picture in the headset itself alive). rooms-frame-clock (attached
+   directly on <a-scene> in index.html, so it is always running) is
+   a tiny component that rides that frame loop and exposes a
+   focus-proof millisecond clock the rest of the game can wait on
+   instead of window.requestAnimationFrame / window.setTimeout.
+============================================================ */
+
+const roomsFramePendingWaits = [];
+
+let roomsFrameClockPrevMs = null;
+
+/*
+  requestAnimationFrame-style registry -- one-shot per registration,
+  callback receives the frame time and re-registers itself if it
+  wants to keep animating next frame, exactly like the native API.
+  Used by continuous per-frame animations (opacity fades, etc.) that
+  need to keep running every frame rather than resolve once after a
+  fixed delay.
+*/
+const roomsFrameAnimationCallbacks = new Map();
+
+let roomsFrameAnimationNextId = 1;
+
+function roomsFrameRequestAnimationFrame(callback) {
+  const id = roomsFrameAnimationNextId++;
+
+  roomsFrameAnimationCallbacks.set(id, callback);
+
+  return id;
+}
+
+function roomsFrameCancelAnimationFrame(id) {
+  roomsFrameAnimationCallbacks.delete(id);
+}
+
+window.roomsFrameRequestAnimationFrame = roomsFrameRequestAnimationFrame;
+window.roomsFrameCancelAnimationFrame = roomsFrameCancelAnimationFrame;
+
+AFRAME.registerComponent('rooms-frame-clock', {
+  tick: function (time) {
+    if (roomsFrameClockPrevMs === null) {
+      roomsFrameClockPrevMs = time;
+    }
+
+    const elapsed = Math.max(0, time - roomsFrameClockPrevMs);
+
+    roomsFrameClockPrevMs = time;
+
+    if (roomsFrameAnimationCallbacks.size) {
+      const dueCallbacks = Array.from(roomsFrameAnimationCallbacks.entries());
+
+      dueCallbacks.forEach((entry) => {
+        const id = entry[0];
+        const callback = entry[1];
+
+        roomsFrameAnimationCallbacks.delete(id);
+        callback(time);
+      });
+    }
+
+    if (!roomsFramePendingWaits.length) {
+      return;
+    }
+
+    const paused = Boolean(
+      window.roomsPaused || window.roomsInputLocked
+    );
+
+    for (let i = roomsFramePendingWaits.length - 1; i >= 0; i--) {
+      const entry = roomsFramePendingWaits[i];
+
+      if (!paused) {
+        entry.remaining -= elapsed;
+      }
+
+      if (entry.remaining <= 0) {
+        roomsFramePendingWaits.splice(i, 1);
+        entry.resolve();
+      }
+    }
+  }
+});
+
+/* ============================================================
    PAUSE-AWARE TIMER
+
+   Same public API/behavior as before (resolves after `milliseconds`
+   of real time, frozen while roomsPaused/roomsInputLocked is true) --
+   just driven by rooms-frame-clock's tick loop above instead of
+   window.requestAnimationFrame, so it keeps working in VR even when
+   the desktop window is unfocused.
 ============================================================ */
 
 function waitRoomsMilliseconds(milliseconds) {
   return new Promise((resolve) => {
-    let remaining = Math.max(
-      0,
-      Number(milliseconds) || 0
-    );
-
-    let previous =
-      performance.now();
-
-    function step(now) {
-      const elapsed = Math.max(
-        0,
-        now - previous
-      );
-
-      previous = now;
-
-      if (
-        !window.roomsPaused &&
-        !window.roomsInputLocked
-      ) {
-        remaining -= elapsed;
-      }
-
-      if (remaining <= 0) {
-        resolve();
-        return;
-      }
-
-      window.requestAnimationFrame(
-        step
-      );
-    }
-
-    window.requestAnimationFrame(
-      step
-    );
+    roomsFramePendingWaits.push({
+      remaining: Math.max(0, Number(milliseconds) || 0),
+      resolve: resolve
+    });
   });
 }
 
 window.waitRoomsMilliseconds =
   waitRoomsMilliseconds;
+
+/* ============================================================
+   FOCUS-PROOF setTimeout/clearTimeout REPLACEMENTS
+
+   A cancelable, fire-and-forget counterpart to waitRoomsMilliseconds
+   above, for the many call sites that need window.setTimeout's
+   'schedule a callback, and be able to cancel it before it fires'
+   behavior (dialogue advancing, scare scheduling, etc.) rather than
+   a plain awaited delay. Same rooms-frame-clock tick loop, so it
+   keeps firing in VR even while the desktop window is unfocused.
+============================================================ */
+
+let roomsFrameTimeoutNextId = 1;
+
+function roomsFrameSetTimeout(callback, delayMs) {
+  const id = roomsFrameTimeoutNextId++;
+
+  roomsFramePendingWaits.push({
+    id: id,
+    remaining: Math.max(0, Number(delayMs) || 0),
+    resolve: function () {
+      if (typeof callback === 'function') {
+        callback();
+      }
+    }
+  });
+
+  return id;
+}
+
+function roomsFrameClearTimeout(id) {
+  if (id === null || id === undefined) {
+    return;
+  }
+
+  for (let i = roomsFramePendingWaits.length - 1; i >= 0; i--) {
+    if (roomsFramePendingWaits[i].id === id) {
+      roomsFramePendingWaits.splice(i, 1);
+    }
+  }
+}
+
+window.roomsFrameSetTimeout = roomsFrameSetTimeout;
+window.roomsFrameClearTimeout = roomsFrameClearTimeout;
 
 
 /* ============================================================

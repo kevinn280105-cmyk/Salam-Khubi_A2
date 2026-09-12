@@ -2304,8 +2304,23 @@ AFRAME.registerComponent(
               this.blackoutAnimationFrame !==
               null
             ) {
+              /*
+                window.cancelAnimationFrame/requestAnimationFrame (both in
+                this function) are throttled or fully paused by the
+                browser whenever the desktop window loses OS focus, even
+                mid-VR-session -- confirmed live: this is what left the
+                standing.glb kitchen scare's blackout stuck (screen would
+                stay black, or she'd never actually disappear) until the
+                player clicked back into the browser tab, which in turn
+                blocked story.js's checkFinalPlacement() from ever seeing
+                standingFinished become true, so sitting.glb's reveal
+                never happened either. window.roomsFrameRequestAnimationFrame/
+                roomsFrameCancelAnimationFrame (ui-scare.js) ride A-Frame's
+                own tick loop instead, which keeps running at full rate in
+                VR regardless of desktop focus.
+              */
               window
-                .cancelAnimationFrame(
+                .roomsFrameCancelAnimationFrame(
                   this
                     .blackoutAnimationFrame
                 );
@@ -2388,7 +2403,7 @@ AFRAME.registerComponent(
                 ) {
                   this.blackoutAnimationFrame =
                     window
-                      .requestAnimationFrame(
+                      .roomsFrameRequestAnimationFrame(
                         step
                       );
 
@@ -2412,7 +2427,7 @@ AFRAME.registerComponent(
 
             this.blackoutAnimationFrame =
               window
-                .requestAnimationFrame(
+                .roomsFrameRequestAnimationFrame(
                   step
                 );
           }

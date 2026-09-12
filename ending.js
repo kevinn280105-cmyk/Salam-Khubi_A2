@@ -94,6 +94,16 @@ function roomsFadeOutModelEntity(entity, durationMs) {
     const started = performance.now();
     const length = Math.max(1, Number(durationMs) || 1);
 
+    /*
+      window.requestAnimationFrame is throttled or fully paused by the
+      browser whenever the desktop window loses OS focus, even
+      mid-VR-session -- window.roomsFrameRequestAnimationFrame
+      (ui-scare.js) rides A-Frame's own tick loop instead, which keeps
+      running at full rate in VR regardless of desktop focus, so the
+      ghost fade (and therefore the rest of the ending, which awaits
+      this promise before opening the door) can't get stuck waiting on
+      the player to click back into the browser tab.
+    */
     const step = (now) => {
       const progress = THREE.MathUtils.clamp(
         (now - started) / length,
@@ -108,14 +118,14 @@ function roomsFadeOutModelEntity(entity, durationMs) {
       });
 
       if (progress < 1) {
-        window.requestAnimationFrame(step);
+        window.roomsFrameRequestAnimationFrame(step);
       } else {
         entity.setAttribute('visible', false);
         resolve();
       }
     };
 
-    window.requestAnimationFrame(step);
+    window.roomsFrameRequestAnimationFrame(step);
   });
 }
 
@@ -151,6 +161,21 @@ AFRAME.registerComponent(
 
       console.log('ENDING: sequence started -- ghost fading out.');
 
+      /*
+        The player is still "seated" at this point -- sitDown()
+        (engine-interactions.js embedded-chair) disabled
+        movement-controls and paused quest-room-collider when they
+        sat down to trigger this ending, and nothing else ever
+        reversed that (standUp() only runs if the player manually
+        toggles the chair again, which they have no reason to do
+        here). Left alone, the player is frozen in place for the
+        rest of the ending -- unable to walk to the door at all,
+        which reads as "the door won't open" even once it visually
+        does. Stand them up now so movement is restored before the
+        door starts opening.
+      */
+      this.standUpFromChair();
+
       const ghost = document.querySelector('#sittingFigure');
 
       await roomsFadeOutModelEntity(
@@ -167,6 +192,43 @@ AFRAME.registerComponent(
 
       this.openExitDoor();
       this.armDoorWatch();
+    },
+
+    /* ========================================================
+       STAND THE PLAYER UP FROM THE CHAIR
+
+       Restores movement-controls and resumes quest-room-collider
+       (both paused by embedded-chair.sitDown() in
+       engine-interactions.js) without relying on the player
+       toggling the chair themselves -- see the comment in start()
+       above for why this is necessary.
+    ======================================================== */
+
+    standUpFromChair: function () {
+      const chair = document.querySelector('#chair');
+      const chairComponent = chair && chair.components['embedded-chair'];
+
+      if (chairComponent && typeof chairComponent.standUp === 'function') {
+        chairComponent.standUp();
+        return;
+      }
+
+      /*
+        Fallback in case the chair component isn't found for some
+        reason -- directly undo what sitDown() did so the player
+        is never left stuck.
+      */
+      const rig = document.querySelector('#rig');
+
+      if (rig) {
+        rig.setAttribute('movement-controls', 'enabled', true);
+
+        const collider = rig.components['quest-room-collider'];
+
+        if (collider && typeof collider.play === 'function') {
+          collider.play();
+        }
+      }
     },
 
     /* ========================================================
@@ -449,8 +511,18 @@ AFRAME.registerComponent(
 
         roomsSetVisible(this.blackout, true);
 
+        /*
+          window.requestAnimationFrame/cancelAnimationFrame are throttled
+          or fully paused by the browser whenever the desktop window
+          loses OS focus, even mid-VR-session -- swapped for
+          window.roomsFrameRequestAnimationFrame/roomsFrameCancelAnimationFrame
+          (ui-scare.js), which ride A-Frame's own tick loop instead and
+          keep running at full rate in VR regardless of desktop focus,
+          so the ending's final fade-to-black/return-to-menu can't get
+          stuck waiting on the player to click back into the browser tab.
+        */
         if (this.blackoutAnimationFrame !== null) {
-          window.cancelAnimationFrame(this.blackoutAnimationFrame);
+          window.roomsFrameCancelAnimationFrame(this.blackoutAnimationFrame);
           this.blackoutAnimationFrame = null;
         }
 
@@ -468,14 +540,14 @@ AFRAME.registerComponent(
           this.blackout.setAttribute('material', 'opacity', value);
 
           if (progress < 1) {
-            this.blackoutAnimationFrame = window.requestAnimationFrame(step);
+            this.blackoutAnimationFrame = window.roomsFrameRequestAnimationFrame(step);
           } else {
             this.blackoutAnimationFrame = null;
             resolve();
           }
         };
 
-        this.blackoutAnimationFrame = window.requestAnimationFrame(step);
+        this.blackoutAnimationFrame = window.roomsFrameRequestAnimationFrame(step);
       });
     }
   }
