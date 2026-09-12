@@ -33,7 +33,7 @@ const ROOMS_SAFE_KEY_LAYOUT = [
 */
 const ROOMS_SAFE_KEYPAD_UI = {
   position: '0 0 -0.55',
-  scale: '2.4 2.4 2.4'
+  scale: '1.0 1.0 1.0'
 };
 
 function getRoomsSafeCode() {

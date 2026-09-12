@@ -34,7 +34,7 @@ const ROOMS_DIALOGUE_CONFIG = {
   msPerWord: 340,
   baseMs: 900,
   gapMs: 260,
-  basePanelWidth: 1.05,
+  basePanelWidth: 0.85,
   basePanelHeight: 0.20,
   panelVerticalPadding: 0.06,
   panelPixelsPerUnit: 666.67,
@@ -48,8 +48,16 @@ const ROOMS_DIALOGUE_CONFIG = {
     prompts.js (questPositionDesktop/questPositionVR) -- mirror that
     pattern here instead of assuming "attached to the camera" was
     enough, which is what let this go untested in a real headset.
+
+    Pulled closer and higher to read as clearly as the objective
+    card does (interaction-prompts.js's questPositionDesktop/VR) --
+    it used to sit noticeably lower and farther from camera than
+    that card for no real reason. Not set to the exact same spot,
+    though: the two can be on screen at once (an objective toggled
+    on while a line plays), so this sits just below it with a gap
+    instead of dead on top of it.
   */
-  positionDesktop: '0 -0.36 -1.05',
+  positionDesktop: '0 -0.30 -0.85',
   positionVR: '0 -0.43 -0.62',
   scaleDesktop: '1 1 1',
   scaleVR: '1.2 1.2 1.2'
@@ -237,7 +245,7 @@ AFRAME.registerComponent(
       });
 
       const background = roomsCreateEntity('a-plane', {
-        width: '1.05',
+        width: '0.85',
         height: '0.20',
         material:
           'shader: flat; transparent: true; side: double; depthTest: false; depthWrite: false'
@@ -248,7 +256,7 @@ AFRAME.registerComponent(
       roomsApplyCanvasTexture(
         background,
         roomsCreateRoundedPanelTexture({
-          width: 700,
+          width: 567,
           height: 132,
           radius: 22,
           fillColor: '#0b0b0e',
@@ -259,13 +267,20 @@ AFRAME.registerComponent(
         })
       );
 
+      /*
+        Color and wrap-count matched to the objective card's own
+        text (roomsCreateText calls in interaction-prompts.js) --
+        pure white instead of the warmer cream, and a lower wrap-
+        count so each character renders bigger, same reasoning as
+        the position match above.
+      */
       const text = roomsCreateText(
         '',
         '0 0 0.002',
-        '0.95',
+        '0.77',
         'center',
-        '#f2ead9',
-        44
+        '#ffffff',
+        34
       );
 
       root.appendChild(text);

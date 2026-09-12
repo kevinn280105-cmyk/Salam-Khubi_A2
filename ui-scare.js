@@ -1583,7 +1583,21 @@ function roomsQueueIntroLines() {
    reading it. CLOSE works on desktop through the normal cursor +
    onclick, and in VR through the vr-ui-interactor hit-check added
    alongside its pause-menu buttons further down this file.
+
+   FAILSAFE: reports from a real headset were that this could get
+   stuck open -- CLOSE not registering for whatever reason (aim,
+   a missed trigger event, anything) -- which is far worse than a
+   cosmetic annoyance here: movement stays locked AND the intro
+   lines (roomsQueueIntroLines(), only ever called from
+   closeRoomsControlsPanel()) never fire, so the player is stuck
+   standing still with no dialogue ever appearing and no way out
+   except reloading the whole page. This panel must never be able
+   to hard-block the game like that, so it auto-closes itself on a
+   timer no matter what happens with the button.
 ============================================================ */
+
+let roomsControlsPanelFailsafeTimer = null;
+
 
 function showRoomsControlsPanel() {
   const panel =
@@ -1603,10 +1617,21 @@ function showRoomsControlsPanel() {
   if (rig) {
     rig.setAttribute('movement-controls', 'enabled', false);
   }
+
+  window.clearTimeout(roomsControlsPanelFailsafeTimer);
+
+  roomsControlsPanelFailsafeTimer = window.setTimeout(
+    () => {
+      closeRoomsControlsPanel();
+    },
+    12000
+  );
 }
 
 
 function closeRoomsControlsPanel() {
+  window.clearTimeout(roomsControlsPanelFailsafeTimer);
+
   const panel =
     document.querySelector('#vrControlsPanel');
 
